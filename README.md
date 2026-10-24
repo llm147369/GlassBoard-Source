@@ -23,6 +23,7 @@
 - 目标框架：.NET Framework 4.8（SDK 风格 csproj，WPF + WinForms，LangVersion 14）
 - 依赖：`src\lib\Interop.UIAutomationClient.dll`（已随仓库提供）
 - 嵌入资源：`GlassBoard.Assets.c1.dat`、`c2.dat`、`GlassBoard.MediaBridge.ps1`、`GlassBoard.NativeMediaBridge.ps1`、`GlassBoard\ControlCenter.ps1` 及 `Assets\` 下图片资源
+- 发布目录需包含：`lib\NPSMLib.dll`（音乐兼容通道：进度条/拖动/封面补充，缺失时仅系统媒体会话可用）、`data\AppGroups.tsv`（应用自动分组规则）——两者均已随仓库提供，发布时一并复制到程序根目录
 
 ```powershell
 dotnet build src\GlassBoard.csproj -c Release

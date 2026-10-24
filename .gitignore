@@ -8,7 +8,8 @@ obj/
 
 # Runtime / installer artifacts (this folder doubles as an installed app dir)
 dist/
-data/
+data/*
+!data/AppGroups.tsv
 *.exe
 *.pdb
 *.zip
@@ -16,6 +17,7 @@ data/
 *.log
 *.dll
 !src/lib/*.dll
+!lib/*.dll
 *.done
 unins000.*
 GlassBoard.exe.config

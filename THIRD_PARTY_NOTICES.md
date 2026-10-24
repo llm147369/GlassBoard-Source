@@ -6,15 +6,15 @@ open-source desktop launcher. Original author: 森霖sama (Douyin / 抖音).
 NPSMLib by ADeltaX, MIT License, copyright 2021 ADeltaX.
 Source: https://github.com/ADeltaX/NPSMLib
 Pinned commit: 22616b82f9b6ffd43ecf863f89455766edf63c76
-Included: lib/NPSMLib.dll, complete library source under vendor/NPSMLib,
-and the original full license at vendor/NPSMLib/LICENSE.
-The upstream source is unmodified. Built against .NET Framework 4.8
+Included: lib/NPSMLib.dll and the full license at licenses/NPSMLib_LICENSE.txt.
+The upstream source is not vendored into this repository; use the pinned
+commit above. The upstream source is unmodified. Built against .NET Framework 4.8
 reference assemblies with Roslyn (.NET SDK 8.0.408), AnyCPU.
 One upstream warning: unused NPSMEventRegistrationToken.value (CS0169).
-To rebuild with an installed .NET SDK: dotnet build
-vendor/NPSMLib/NPSMLib.csproj -f net45 -c Release; copy the resulting
-NPSMLib.dll into lib/. The regular Build.ps1 rebuilds the main app and
-uses the bundled library at runtime; no additional runtime installation.
+To rebuild with an installed .NET SDK: clone the upstream repo at the pinned
+commit and run dotnet build NPSMLib.csproj -f net45 -c Release; copy the
+resulting NPSMLib.dll into lib/. The bundled library is loaded at runtime;
+no additional runtime installation.
 
 Integration: src/MediaBridge.ps1 loads this library in its isolated helper
 process. GSMTC remains the primary API. NPSM supplies matching-session

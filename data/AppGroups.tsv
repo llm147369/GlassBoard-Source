@@ -1,0 +1,186 @@
+# 分组	匹配方式(word/exact)	别名（用 | 分隔）
+# UTF-8 离线表；# 为注释。长别名优先；exact 用于短缩写，避免误判。
+Mod工具	word	mod organizer|modorganizer2|mo2|vortex|nexus mod manager|nexusmods|wemod|wrye bash|smapi|stardewmoddingapi|skse64_loader|skse_loader|f4se_loader|modengine2_launcher|mod engine|fluffy mod manager|fluffymanager|hedgemodmanager|r2modman|thunderstore mod manager|curseforge|bakkesmod|reshade|openiv|lml|mod管理器|模组管理器|修改器
+游戏	word	黑神话|black myth|wukong|b1-win64-shipping
+游戏	word	艾尔登法环|elden ring
+游戏	word	赛博朋克2077|cyberpunk
+游戏	word	荒野大镖客|red dead redemption|rdr2
+游戏	word	侠盗猎车手|grand theft auto|gta5|gtaiv|gta6
+游戏	word	上古卷轴|elder scrolls|skyrim|oblivion
+游戏	word	辐射4|辐射76|fallout
+游戏	word	星空|starfield
+游戏	word	巫师3|witcher
+游戏	word	博德之门|baldur|bg3
+游戏	word	神界原罪|divinity original sin
+游戏	word	霍格沃茨|hogwarts legacy
+游戏	word	怪物猎人|monster hunter
+游戏	word	只狼|sekiro
+游戏	word	黑暗之魂|dark souls
+游戏	word	仁王|nioh
+游戏	word	死亡搁浅|death stranding
+游戏	word	最终幻想|final fantasy|ffxiv
+游戏	word	尼尔|nier
+游戏	word	生化危机|resident evil
+游戏	word	寂静岭|silent hill
+游戏	word	古墓丽影|tomb raider
+游戏	word	刺客信条|assassin
+游戏	word	孤岛惊魂|far cry
+游戏	word	看门狗|watch dogs
+游戏	word	地平线|horizon zero dawn|horizon forbidden west
+游戏	word	战神|god of war
+游戏	word	对马岛|ghost of tsushima
+游戏	word	最后生还者|the last of us
+游戏	word	匹诺曹|lies of p
+游戏	word	剑星|stellar blade
+游戏	word	天国拯救|kingdom come
+游戏	word	潜行者|stalker
+游戏	word	地铁离去|metro exodus
+游戏	word	消逝的光芒|dying light
+游戏	word	无主之地|borderlands
+游戏	word	质量效应|mass effect
+游戏	word	龙腾世纪|dragon age
+游戏	word	龙之信条|dragon dogma
+游戏	word	原神|genshin|yuanshen
+游戏	word	崩坏星穹铁道|star rail
+游戏	word	绝区零|zenless zone zero
+游戏	word	鸣潮|wuthering waves
+游戏	word	明日方舟|arknights
+游戏	word	英雄联盟|league of legends|leagueclient
+游戏	word	无畏契约|valorant
+游戏	word	反恐精英|counter strike|cs2
+游戏	word	刀塔|dota
+游戏	word	绝地求生|pubg|tslgame
+游戏	word	永劫无间|naraka
+游戏	word	三角洲行动|delta force
+游戏	word	使命召唤|call of duty
+游戏	word	战地|battlefield
+游戏	word	守望先锋|overwatch
+游戏	word	彩虹六号|rainbow six
+游戏	word	逃离塔科夫|escape from tarkov
+游戏	word	堡垒之夜|fortnite
+游戏	word	apex legends|r5apex
+游戏	word	命运2|destiny 2
+游戏	word	星际战甲|warframe
+游戏	word	战争雷霆|war thunder|aces
+游戏	word	坦克世界|world of tanks
+游戏	word	战舰世界|world of warships
+游戏	word	魔兽世界|world of warcraft
+游戏	word	炉石传说|hearthstone
+游戏	word	暗黑破坏神|diablo
+游戏	word	流放之路|path of exile
+游戏	word	激战2|guild wars
+游戏	word	最终幻想14|ff14
+游戏	word	剑网3|jx3
+游戏	word	逆水寒|justice online
+游戏	word	诛仙|梦幻西游|天涯明月刀
+游戏	word	我的世界|minecraft|hmcl|pcl2|prism launcher
+游戏	word	泰拉瑞亚|terraria
+游戏	word	星露谷|stardew valley
+游戏	word	饥荒|dont starve
+游戏	word	幻兽帕鲁|palworld
+游戏	word	森林之子|sons of the forest
+游戏	word	英灵神殿|valheim
+游戏	word	方舟生存|ark survival
+游戏	word	七日杀|7 days to die
+游戏	word	僵尸毁灭工程|project zomboid
+游戏	word	潜水员戴夫|dave the diver
+游戏	word	空洞骑士|hollow knight
+游戏	word	哈迪斯|hades
+游戏	word	蔚蓝|celeste
+游戏	word	奥日|ori and
+游戏	word	死亡细胞|dead cells
+游戏	word	茶杯头|cuphead
+游戏	word	双人成行|it takes two
+游戏	word	双影奇境|split fiction
+游戏	word	胡闹厨房|overcooked
+游戏	word	人类一败涂地|human fall flat
+游戏	word	动物派对|party animals
+游戏	word	糖豆人|fall guys
+游戏	word	恐鬼症|phasmophobia
+游戏	word	致命公司|lethal company
+游戏	word	传送门|portal 2
+游戏	word	半条命|half life
+游戏	word	求生之路|left 4 dead|left4dead2
+游戏	word	深岩银河|deep rock galactic
+游戏	word	异星工厂|factorio
+游戏	word	幸福工厂|satisfactory
+游戏	word	戴森球|dyson sphere program
+游戏	word	缺氧|oxygen not included
+游戏	word	环世界|rimworld
+游戏	word	城市天际线|cities skylines
+游戏	word	文明6|文明7|civilization
+游戏	word	全面战争|total war
+游戏	word	群星|stellaris
+游戏	word	十字军之王|crusader kings
+游戏	word	钢铁雄心|hearts of iron
+游戏	word	欧陆风云|europa universalis
+游戏	word	帝国时代|age of empires
+游戏	word	帝国神话|age of mythology
+游戏	word	红色警戒|red alert
+游戏	word	星际争霸|starcraft
+游戏	word	魔兽争霸|warcraft iii
+游戏	word	模拟人生|the sims
+游戏	word	模拟城市|simcity
+游戏	word	过山车之星|planet coaster
+游戏	word	动物园之星|planet zoo
+游戏	word	极限竞速|forza
+游戏	word	极品飞车|need for speed
+游戏	word	神力科莎|assetto corsa
+游戏	word	欧洲卡车|euro truck
+游戏	word	美国卡车|american truck
+游戏	word	微软飞行模拟|microsoft flight simulator
+游戏	word	ea sports fc|efootball|nba 2k
+游戏	word	火箭联盟|rocket league
+游戏	word	osu!|musedash|djmax
+游戏	word	麻雀一番街|雀魂|mahjong soul
+游戏	word	balatro|小丑牌|杀戮尖塔|slay the spire
+游戏	word	波西亚时光|my time at portia|沙石镇时光
+游戏	word	中国式家长|中国式相亲|太吾绘卷|鬼谷八荒|觅长生|暖雪|九日
+游戏	exact	gta|wow|lol|csgo|cs2|dota2|bf1|bf4|bfv
+创作	word	adobe photoshop|photoshop|adobe after effects|after effects|afterfx|premiere pro|premiere|illustrator|lightroom|indesign
+创作	word	autodesk maya|maya|3ds max|3dmax|cinema 4d|c4d|blender|houdini|zbrush|zbrush64|rhino|rhinoceros|sketchup|keyshot|marvelous designer|clo3d|marmoset|toolbag
+创作	word	substance painter|substance designer|substance 3d|substance|quixel mixer|quixel bridge|daz studio
+创作	word	davinci resolve|resolve|剪映|capcut|jianying|vegas pro|vegas|edius|avid media composer|fusion studio|nuke
+创作	word	clip studio|clipstudiopaint|krita|painttool sai|sai2|medibang|affinity photo|affinity designer|affinity publisher|coreldraw|procreate|绘画
+创作	word	figma|pixso|mastergo|即时设计|axure|adobe xd|canva|稿定设计|创客贴
+创作	word	obs studio|obs64|obs32|bandicam|camtasia|screen studio
+办公	word	microsoft word|winword|excel|powerpoint|powerpnt|onenote|outlook|wps|wpsoffice|et|wpp
+办公	word	adobe acrobat|acrobat|foxit|福昕|pdf xchange|sumatrapdf|readiris|abbyy
+办公	word	notion|obsidian|typora|marktext|joplin|logseq
+办公	word	飞书|feishu|lark|钉钉|dingtalk|企业微信|wecom|腾讯会议|voov|zoom|microsoft teams|teams
+办公	word	draw.io|xmind|mindmanager|visio|project|to do|todoist|滴答清单
+音乐	word	网易云音乐|cloudmusic|qq音乐|qqmusic|酷狗|kugou|酷我|kuwo|spotify|foobar2000|foobar|musicbee|aimp|apple music|itunes
+音乐	word	pro tools|ableton live|ableton|fl studio|fl64|reaper|cubase|nuendo|studio one|logic pro|audition|audacity|cakewalk|bitwig|reason|lmms|asio4all
+开发	word	visual studio code|vscode|code|visual studio|devenv|vscodium|cursor|windsurf|trae|codex
+开发	word	jetbrains|pycharm|idea64|intellij|webstorm|rider|clion|goland|datagrip|phpstorm|rubymine
+开发	word	android studio|eclipse|netbeans|sublime text|notepad++|notepadplusplus|vim|neovim
+开发	word	unity hub|unity|unreal editor|ue4editor|godot|gamemaker|cocos creator|construct 3
+开发	word	git bash|git gui|git|github desktop|sourcetree|fork|gitkraken|tortoisegit|tortoisesvn
+开发	word	python|anaconda|jupyter|matlab|rstudio|docker desktop|docker|postman|insomnia|dbeaver|navicat|heidisql|mysql workbench|mongodb compass|redis insight|wireshark|fiddler
+浏览器	word	google chrome|chrome|msedge|microsoft edge|firefox|brave|opera|vivaldi|waterfox|floorp|librewolf|chromium|360极速浏览器|360安全浏览器|百分浏览器|centbrowser|浏览器
+社交	word	qq|微信|wechat|weixin|tim|discord|telegram|signal|kook|开黑啦|yy语音|yy|tt语音|skype|slack|whatsapp|line|腾讯qq
+视频	word	potplayer|potplayermini64|potplayermini|vlc|mpv|mpc-hc|mpc-be|mpc-hc64|mpc-be64|kmplayer|完美解码|恒星播放器|stellarplayer|bilibili|哔哩哔哩|腾讯视频|爱奇艺|优酷|iqiyi|youku|qqlive
+系统工具	word	7-zip|winrar|bandizip|peazip|everything|listary|powertoys|utools|quicker|ditto|sharex|snipaste|picpick|faststone capture
+系统工具	word	todesk|向日葵|sunlogin|anydesk|teamviewer|rustdesk|parsec|moonlight|mstsc
+系统工具	word	clash|v2ray|sing-box|nekoray|hiddify|tailscale|zerotier|wireguard|openvpn
+系统工具	word	rufus|ventoy|balenaetcher|crystaldiskinfo|crystaldiskmark|hwinfo|hwmonitor|cpuz|gpu-z|aida64|msi afterburner|afterburner
+系统工具	word	powershell|windows terminal|wt|cmd|taskmgr|regedit|control|explorer|文件资源管理器|任务管理器|控制面板|设置|资源监视器
+系统工具	word	idm|idman|internet download manager|fdm|free download manager|qbittorrent|transmission|aria2|pikpak
+游戏	word	steam|epic games launcher|wegame|battlenet|ubisoft connect|uplay|ea app|eadesktop|origin|rockstar games launcher|rockstar|playnite|gog galaxy|galaxyclient|5eplay|5eclient|perfect world arena|完美世界竞技平台
+创作	exact	ps|ae|pr|ai|lr|id|xd
+办公	exact	et|wpp
+系统工具	exact	wt|cmd|idm
+
+# v0.8.1 国内常用软件扩充：中文名、品牌全称和明确的主程序别名。
+办公	word	腾讯文档|tencent docs|wemeet|wxwork|金山文档|wpscloud|wpspdf|金山PDF|福昕阅读器|福昕PDF编辑器|极速PDF阅读器|迅捷PDF|smallpdf|永中Office|中望CAD|浩辰CAD|浩辰看图王|迅捷CAD|CAJViewer|知网阅读器|百度翻译|有道词典|youdaodict|有道翻译|金山词霸|iciba|欧路词典|eudic|网易邮箱大师|mailmaster|Foxmail|139邮箱|企业邮箱|石墨文档|腾讯电子签|亿图图示|亿图脑图|edrawmax|edrawmind|迅捷思维导图|ticktick|番茄ToDo|小智待办
+社交	word	QQNT|QQ轻聊版|腾讯TIM|阿里旺旺|aliwangwang|千牛|qianniu|千牛工作台|旺信|百度Hi|百度如流|如流|Infoflow|网易灵犀|网易POPO|米聊|陌陌|Soul|多闪|YY开播|腾讯频道|斗鱼直播伴侣|虎牙直播伴侣
+音乐	word	汽水音乐|qishui music|千千音乐|千千静听|百度音乐|QianQian|咪咕音乐|migu music|音悦台|落雪音乐|lx music|listen1|洛雪音乐|酷狗音乐|酷我音乐
+视频	word	芒果TV|mgtv|咪咕视频|migu video|搜狐视频|sohuvideo|央视频|CCTV影音|央视影音|暴风影音|baofeng|风行视频|funshion|PPTV|PP视频|PPS影音|迅雷影音|xmp|豆包视频播放器|爱奇艺万能播放器|iqiyiplayer|抖音|douyin|快手|kuaishou|小红书
+创作	word	美图秀秀|meituxiuxiu|美图设计室|美图云修|醒图|万兴喵影|万兴优转|万兴录演|万兴PDF|喵影工厂|filmora|迅捷视频剪辑|快剪辑|快影|爱剪辑|蜜蜂剪辑|格式工厂|formatfactory|小丸工具箱|小丸压制|哔哩哔哩直播姬|B站直播姬|bilibili直播姬|抖音直播伴侣|快手直播伴侣|腾讯智影|必剪|bcut|EV录屏|evcapture|迅捷屏幕录像|录屏大师|万彩动画大师|万彩骨骼大师|万彩影像大师|万彩微影|优动漫PAINT|优动漫|SAI绘图|画世界|来画|鹿班|酷家乐|kujiale|三维家|D5渲染器|d5render
+网盘下载	word	百度网盘|baidunetdisk|百度云管家|阿里云盘|aliyundrive|阿里云盘小白羊|小白羊网盘|夸克网盘|quarkcloud|腾讯微云|weiyun|天翼云盘|ecloud|189cloud|和彩云|移动云盘|139cloud|联通云盘|wo cloud|115网盘|115浏览器|115browser|123云盘|123网盘|蓝奏云|蓝奏网盘|lanzou|城通网盘|坚果云|nutstore|够快云库|亿方云|盛天云盘|迅雷|thunder|xunlei|比特彗星|bitcomet|闪电下载|Motrix|文件蜈蚣|file centipede
+浏览器	word	QQ浏览器|qqbrowser|搜狗浏览器|sogouexplorer|搜狗高速浏览器|2345浏览器|2345explorer|2345王牌浏览器|360chrome|360chromeX|360se|夸克浏览器|quark|百度浏览器|baidubrowser|猎豹浏览器|liebao|猎豹安全浏览器|遨游浏览器|maxthon|傲游浏览器|星愿浏览器|twinkstar|UC浏览器|ucbrowser|联想浏览器|华为浏览器|华为电脑浏览器
+安全维护	word	火绒安全|huorong|HipsMain|火绒剑|360安全卫士|360safe|360杀毒|360sd|腾讯电脑管家|QQ电脑管家|QQPCMgr|金山毒霸|kxescore|duba|金山卫士|瑞星杀毒|rising|江民杀毒|卡巴斯基|kaspersky|联想电脑管家|LenovoPcManager|华为电脑管家|HuaweiPCManager|鲁大师|ludashi|驱动精灵|drivergenius|驱动人生|drivethelife|驱动总裁|驱动大师|360驱动大师|Dism++|Dismplusplus|微PE工具箱|WePE|傲梅分区助手|傲梅轻松备份|diskgenius|分区助手|硬盘哨兵
+系统工具	word	搜狗输入法|QQ输入法|百度输入法|讯飞输入法|手心输入法|微软拼音|小狼毫|weasel|Rime|搜狗拼音|搜狗五笔|百度五笔|搜狗截图|腾讯桌面整理|小智桌面|酷呆桌面|Coodesker|小鸟壁纸|飞火动态壁纸|元气桌面|UPUPOO|火萤视频桌面|360壁纸|360压缩|360zip|2345好压|haozip|好压|快压|kuaizip|压缩宝|WGestures|MouseInc|TrafficMonitor|图吧工具箱|图拉丁工具箱|沙盘Sandboxie|LocalSend|局域网快传|AnLink|爱思助手|i4tools|华为分享|小米妙享|小米电脑管家|联想乐云|向日葵远程控制|sunloginclient|贝锐向日葵|远程看看|AnyViewer
+学习阅读	word	有道云笔记|youdaonote|印象笔记|evernote|蚂蚁笔记|为知笔记|wiznote|语雀|yuque|幕布|mubu|思源笔记|siyuan|腾讯课堂|网易云课堂|学习通|chaoxing|智慧树|知到|希沃白板|seewo|希沃授课助手|希沃易课堂|101教育PPT|猿辅导|作业帮|作业帮直播课|学而思网校|高途课堂|粉笔|新东方云教室|云班课|中国大学MOOC|超星阅读器|超星浏览器|读秀|微信读书|京东读书|Kindle|掌阅|ireader|稻壳阅读器|轻快PDF阅读器
+金融财务	word	同花顺|hexin|东方财富|eastmoney|通达信|tdxw|大智慧|dzh|雪球|xueqiu|富途牛牛|futunn|富途|老虎证券|tigertrade|招商证券|中信证券|国泰君安|华泰证券|涨乐财富通|海通证券|广发证券|国信证券|平安证券|中信建投|华西证券|用友|yonyou|畅捷通|金蝶|kingdee|柠檬云|管家婆|航天信息|诺诺发票|百旺开票|电子税务局|自然人电子税务局|个人所得税
+游戏	word	腾讯游戏平台|网易游戏平台|暴雪战网|网易UU|UU加速器|迅游加速器|xunyou|雷神加速器|leigod|奇游加速器|qiyou|海豚加速器|野豹加速器|biubiu加速器|迅游手游加速器|游侠对战平台|游聚游戏平台|浩方对战平台|11对战平台|起凡游戏平台|腾讯START|网易云游戏|咪咕快游|蘑菇云游|腾讯手游助手|GameLoop|MuMu模拟器|mumuplayer|雷电模拟器|ldplayer|dnplayer|夜神模拟器|nox|逍遥模拟器|memu|蓝叠模拟器|bluestacks|剑侠情缘网络版叁|剑网三|燕云十六声|大话西游|问道|洛奇英雄传|地下城与勇士|地下城与勇士创新世纪|DNF|穿越火线|王者荣耀|和平精英|QQ飞车|QQ炫舞|QQ三国|跑跑卡丁车|卡丁车漂移|冒险岛|泡泡堂|奥比岛|赛尔号|洛克王国|三国杀|阴阳师|第五人格|尘白禁区|战双帕弥什|幻塔|无限暖暖|恋与深空|崩坏3
