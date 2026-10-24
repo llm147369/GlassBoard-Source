@@ -30,7 +30,7 @@ public static class UsageGuide
 		List<Section> sections = new List<Section>();
 		ScrollViewer scroll = new ScrollViewer
 		{
-			VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+			VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
 			HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
 		};
 		StackPanel content = new StackPanel
