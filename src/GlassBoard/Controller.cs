@@ -1246,6 +1246,7 @@ public class Controller
 					creatorLoaded = true;
 				}
 			};
+			UsageGuide.Build(tabs);
 			tabs.SelectionChanged += (object ss, SelectionChangedEventArgs ee) =>
 			{
 				if (tabs.SelectedIndex == 6)
