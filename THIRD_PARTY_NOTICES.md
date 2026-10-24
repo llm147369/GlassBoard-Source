@@ -1,5 +1,8 @@
 # Third-party component
 
+Upstream base project: GlassBoard is a heavily modified fork of an
+open-source desktop launcher. Original author: 森霖sama (Douyin / 抖音).
+
 NPSMLib by ADeltaX, MIT License, copyright 2021 ADeltaX.
 Source: https://github.com/ADeltaX/NPSMLib
 Pinned commit: 22616b82f9b6ffd43ecf863f89455766edf63c76

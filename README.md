@@ -31,6 +31,10 @@ dotnet build src\GlassBoard.csproj -c Release
 - `GlassBoard-Setup-0.9.18.exe`：安装包（含推荐配置导入）
 - `GlassBoard-0.9.18-portable.zip`：便携版
 
+## 原作者
+
+GlassBoard 在开源桌面启动台的基础上深度改造而来。原作者：**森霖sama**（抖音）。
+
 ## 许可
 
 本项目为免费公益项目，第三方组件许可见 `THIRD_PARTY_NOTICES.md` 与 `licenses\` 目录。
