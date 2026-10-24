@@ -16,6 +16,7 @@ data/
 *.log
 *.dll
 !src/lib/*.dll
+*.done
 unins000.*
 GlassBoard.exe.config
 SHA256SUMS.txt
