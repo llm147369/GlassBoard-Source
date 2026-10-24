@@ -1,0 +1,23 @@
+# Build outputs
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.cache
+
+# Runtime / installer artifacts (this folder doubles as an installed app dir)
+dist/
+data/
+*.exe
+*.pdb
+*.zip
+*.bak
+*.log
+*.dll
+!src/lib/*.dll
+unins000.*
+GlassBoard.exe.config
+SHA256SUMS.txt
+*.cmd
+*.bat

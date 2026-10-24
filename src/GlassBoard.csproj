@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>GlassBoard</AssemblyName>
+    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>True</UseWPF>
+    <UseWindowsForms>True</UseWindowsForms>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <CheckForOverflowUnderflow>False</CheckForOverflowUnderflow>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace />
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="_coretest\**\*.cs" />
+    <EmbeddedResource Remove="_coretest\**" />
+    <None Remove="_coretest\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="GlassBoard.Assets.c1.dat" LogicalName="GlassBoard.Assets.c1.dat" />
+    <EmbeddedResource Include="GlassBoard.Assets.c2.dat" LogicalName="GlassBoard.Assets.c2.dat" />
+    <EmbeddedResource Include="GlassBoard.MediaBridge.ps1" LogicalName="GlassBoard.MediaBridge.ps1" />
+    <EmbeddedResource Include="GlassBoard.NativeMediaBridge.ps1" LogicalName="GlassBoard.NativeMediaBridge.ps1" />
+    <EmbeddedResource Include="GlassBoard\ControlCenter.ps1" LogicalName="GlassBoard.ControlCenter.ps1" />
+    <EmbeddedResource Include="GlassBoard\Assets\launchpad.png" LogicalName="GlassBoard.Assets.launchpad.png" />
+    <EmbeddedResource Include="GlassBoard\Assets\settings.svg" LogicalName="GlassBoard.Assets.settings.svg" />
+    <EmbeddedResource Include="GlassBoard\Assets\running.png" LogicalName="GlassBoard.Assets.running.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Interop.UIAutomationClient">
+      <HintPath>lib\Interop.UIAutomationClient.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Core" />
+    <Reference Include="System.Management" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.IO.Compression" />
+  </ItemGroup>
+</Project>

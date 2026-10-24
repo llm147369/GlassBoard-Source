@@ -1,0 +1,2182 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Threading;
+
+namespace GlassBoard;
+
+public class BoardWindow : GlassWindow
+{
+	public bool ModalBusy;
+
+	private Controller C;
+
+	private TextBox Search;
+	private Popup searchPopup;
+	private ListBox searchList;
+	private CancellationTokenSource searchCts;
+	private int searchSerial;
+	private List<SystemSearchResult> searchItems = new List<SystemSearchResult>();
+
+	private UniformGrid Tiles;
+
+	private TextBlock Pager;
+	private StackPanel PageNav;
+
+	private TextBlock Status;
+
+	private TextBlock Empty;
+
+	private Grid layout;
+
+	private int page;
+
+	private int capacity = 35;
+
+	private int columns = 7;
+
+	private Point dragStart;
+
+	private Entry dragEntry;
+
+	private bool editing;
+
+	private readonly HashSet<string> selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+	private WrapPanel bulkBar;
+
+	private RowDefinition bulkRow;
+
+	private TextBlock selectionCount;
+
+	private Button selectAll;
+
+	private Button clearSelection;
+
+	private Button deleteSelected;
+
+	private Button undoRemoval;
+
+	private Button editSelection;
+
+	private Button moveSelected;
+
+	private ContextMenu iconMenu;
+
+	private ComboBox groups;
+
+	private ComboBox moveGroup;
+
+	private string currentGroup = "全部";
+
+	private bool syncingGroups;
+
+	private bool iconSizeSync;
+
+	private Slider boardIconSlider;
+
+	private TextBlock iconSizeText;
+
+	private Button addExisting;
+
+	private Thumb moveGrip;
+
+	private Thumb resizeGrip;
+
+	private int visibilitySerial;
+
+	private WrapPanel folderBar;
+
+	private readonly DispatcherTimer idleRelease = new DispatcherTimer
+	{
+		Interval = TimeSpan.FromSeconds(2.0)
+	};
+
+	private bool preparingView;
+
+	private string pendingStatus;
+
+	private Border dragPreview;
+
+	private Image dragPreviewIcon;
+
+	private TextBlock dragPreviewText;
+
+	private bool activeDrag;
+
+	private string hoverGroup;
+
+	private string folderSignature = "";
+
+	private readonly DispatcherTimer hoverTimer = new DispatcherTimer
+	{
+		Interval = TimeSpan.FromMilliseconds(700.0)
+	};
+
+	private readonly DispatcherTimer sizeRefresh = new DispatcherTimer(DispatcherPriority.Background)
+	{
+		Interval = TimeSpan.FromMilliseconds(100.0)
+	};
+
+	private bool resizingPanel;
+
+	private bool refreshingSize;
+
+	private bool iconsDirty = true;
+
+	private bool foldersVisible
+	{
+		get
+		{
+			if (!C.Prefs.BoardHideGroups)
+			{
+				return !C.Prefs.BoardHideFolders;
+			}
+			return false;
+		}
+	}
+
+	public string CurrentGroup => currentGroup;
+
+	internal bool HasView => layout != null;
+
+	public void ClearSearch()
+	{
+		if (Search != null)
+		{
+			Search.Clear();
+		}
+	}
+
+	public BoardWindow(Controller c)
+		: base(42.0)
+	{
+		C = c;
+		Title = "GlassBoard 应用启动台";
+		AllowDrop = true;
+		// 点击搜索框以外的区域时收起键盘焦点，输入光标不再一直闪烁
+		Root.PreviewMouseDown += delegate
+		{
+			if (Search != null && Search.IsKeyboardFocusWithin && !Search.IsMouseOver)
+			{
+				Keyboard.ClearFocus();
+			}
+		};
+		InitDragExperience();
+		IsVisibleChanged += (object s, DependencyPropertyChangedEventArgs e) =>
+		{
+			if (IsVisible)
+			{
+				idleRelease.Stop();
+			}
+			else if (layout != null)
+			{
+				idleRelease.Start();
+			}
+		};
+		idleRelease.Tick += (object s, EventArgs e) =>
+		{
+			if (IsVisible)
+			{
+				idleRelease.Stop();
+			}
+			else if (ReleaseHiddenView())
+			{
+				idleRelease.Stop();
+			}
+		};
+		Closed += (object s, EventArgs e) =>
+		{
+			idleRelease.Stop();
+			sizeRefresh.Stop();
+		};
+		PreviewKeyDown += (object s, KeyEventArgs e) =>
+		{
+			if (Search != null)
+			{
+				if (e.Key == Key.Escape)
+				{
+					CollapseSmooth();
+					e.Handled = true;
+				}
+				else if (!Search.IsKeyboardFocusWithin && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && (e.Key == Key.Z || e.Key == Key.Y))
+				{
+					if (e.Key == Key.Y || (Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+					{
+						C.RedoBoard();
+					}
+					else
+					{
+						C.UndoBoard();
+					}
+					e.Handled = true;
+				}
+				else if (editing && !Search.IsKeyboardFocusWithin && e.Key == Key.A && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+				{
+					SelectFiltered();
+					e.Handled = true;
+				}
+				else if (editing && !Search.IsKeyboardFocusWithin && e.Key == Key.Delete)
+				{
+					C.RemoveMany(selected.ToArray());
+					e.Handled = true;
+				}
+				else if (e.Key == Key.Next)
+				{
+					ChangePage(1);
+					e.Handled = true;
+				}
+				else if (e.Key == Key.Prior)
+				{
+					ChangePage(-1);
+					e.Handled = true;
+				}
+				else if (e.Key == Key.Return && Search.IsKeyboardFocusWithin && !editing)
+				{
+					if (searchItems.Count > 0)
+					{
+						OpenSearchResult(searchItems[0]);
+						e.Handled = true;
+					}
+				}
+			}
+		};
+		Drop += ExternalDrop;
+		Deactivated += (object s, EventArgs e) =>
+		{
+			Dispatcher.BeginInvoke((Action)(() =>
+			{
+				if (C.Prefs.BoardDismissOnDeactivate && IsVisible && !IsActive && !ModalBusy && !activeDrag && !IsContextMenuOpen() && !ShellContextMenu.Active && Mouse.LeftButton != MouseButtonState.Pressed)
+				{
+					CollapseSmooth();
+				}
+			}));
+		};
+		moveGrip = new Thumb
+		{
+			Width = 60.0,
+			Height = 8.0,
+			HorizontalAlignment = HorizontalAlignment.Center,
+			VerticalAlignment = VerticalAlignment.Top,
+			Margin = new Thickness(0.0, 8.0, 0.0, 0.0),
+			Cursor = Cursors.SizeAll,
+			ToolTip = "拖动面板位置"
+		};
+		Root.Children.Add(moveGrip);
+		resizeGrip = new Thumb
+		{
+			Width = 20.0,
+			Height = 20.0,
+			HorizontalAlignment = HorizontalAlignment.Right,
+			VerticalAlignment = VerticalAlignment.Bottom,
+			Margin = new Thickness(0.0, 0.0, 5.0, 5.0),
+			Cursor = Cursors.SizeNWSE,
+			ToolTip = "拖动调整面板大小"
+		};
+		Root.Children.Add(resizeGrip);
+		moveGrip.Template = GlassWindow.GripTemplate();
+		resizeGrip.Template = GlassWindow.GripTemplate(corner: true);
+		Closing += (object s, CancelEventArgs e) =>
+		{
+			if (!C.ShuttingDown)
+			{
+				e.Cancel = true;
+				CollapseSmooth();
+			}
+		};
+		moveGrip.DragStarted += (object s, DragStartedEventArgs e) =>
+		{
+			ModalBusy = true;
+		};
+		moveGrip.DragDelta += (object s, DragDeltaEventArgs e) =>
+		{
+			if (!C.Prefs.Placement.PanelLocked)
+			{
+				Rect workArea = SystemParameters.WorkArea;
+				Left = FeatureRules.Position(Left + e.HorizontalChange, workArea.Left, workArea.Width, Width);
+				Top = FeatureRules.Position(Top + e.VerticalChange, workArea.Top, workArea.Height, Height);
+			}
+		};
+		InitResizeRefresh();
+		resizeGrip.DragStarted += (object s, DragStartedEventArgs e) =>
+		{
+			ModalBusy = true;
+			resizingPanel = true;
+			sizeRefresh.Stop();
+		};
+		resizeGrip.DragDelta += (object s, DragDeltaEventArgs e) =>
+		{
+			if (!C.Prefs.Placement.PanelLocked)
+			{
+				Rect workArea = SystemParameters.WorkArea;
+				Width = Math.Max(Math.Min(860.0, workArea.Width - 32.0), Math.Min(workArea.Width - 32.0, Width + e.HorizontalChange));
+				Height = Math.Max(Math.Min(560.0, workArea.Height - 32.0), Math.Min(workArea.Height - 32.0, Height + e.VerticalChange));
+				Left = FeatureRules.Position(Left, workArea.Left, workArea.Width, Width);
+				Top = FeatureRules.Position(Top, workArea.Top, workArea.Height, Height);
+			}
+		};
+		moveGrip.DragCompleted += (object s, DragCompletedEventArgs e) =>
+		{
+			try
+			{
+				SavePlacement();
+				Backdrop(C.Prefs.Light);
+			}
+			finally
+			{
+				ModalBusy = false;
+			}
+		};
+		resizeGrip.DragCompleted += (object s, DragCompletedEventArgs e) =>
+		{
+			try
+			{
+				resizingPanel = false;
+				SavePlacement();
+				QueueSizeRefresh();
+				Backdrop(C.Prefs.Light);
+			}
+			finally
+			{
+				ModalBusy = false;
+			}
+		};
+	}
+
+	private void SavePlacement()
+	{
+		PlacementOptions placement = C.Prefs.Placement;
+		placement.PanelLeft = Left;
+		placement.PanelTop = Top;
+		placement.PanelWidth = Width;
+		placement.PanelHeight = Height;
+		C.Save();
+	}
+
+	private void BuildForSize()
+	{
+		string text = ((C.Prefs.BoardHideSearch || Search == null) ? "" : Search.Text);
+		if (C.Prefs.BoardHideGroups)
+		{
+			currentGroup = "全部";
+		}
+		columns = BoardIconRules.Columns(Width - 104.0, C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
+		int num = BoardIconRules.Rows(Height - (double)(C.Prefs.BoardHideGroups ? 180 : 258), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
+		capacity = columns * num;
+		Build(num);
+		Search.Text = text;
+	}
+
+	public void RefreshIcons()
+	{
+		if (boardIconSlider != null)
+		{
+			iconSizeSync = true;
+			try
+			{
+				boardIconSlider.Value = C.Prefs.BoardIconSize;
+				iconSizeText.Text = "图标 " + Math.Round(C.Prefs.BoardIconSize) + " px";
+			}
+			finally
+			{
+				iconSizeSync = false;
+			}
+		}
+		iconsDirty = true;
+		QueueSizeRefresh();
+	}
+
+	private void IconSettings()
+	{
+		ContextMenu menu = MenuTheme.Create(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
+		iconMenu = menu;
+		menu.Closed += (object s, RoutedEventArgs e) =>
+		{
+			if (iconMenu == menu)
+			{
+				iconMenu = null;
+			}
+		};
+		Action<string, double, double, double, Action<double>> action = (string name, double min, double max, double value, Action<double> change) =>
+		{
+			StackPanel stackPanel = new StackPanel
+			{
+				Width = 230.0
+			};
+			TextBlock label = new TextBlock
+			{
+				Text = name + "：" + Math.Round(value) + " px",
+				Foreground = TextBrush,
+				Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
+			};
+			stackPanel.Children.Add(label);
+			Slider slider = new Slider
+			{
+				Minimum = min,
+				Maximum = max,
+				Value = value,
+				TickFrequency = 1.0,
+				IsSnapToTickEnabled = true,
+				Style = (Resources[typeof(Slider)] as Style)
+			};
+			stackPanel.Children.Add(slider);
+			slider.ValueChanged += (object s, RoutedPropertyChangedEventArgs<double> e) =>
+			{
+				label.Text = name + "：" + Math.Round(slider.Value) + " px";
+				change(slider.Value);
+				RefreshIcons();
+				C.Save();
+			};
+			menu.Items.Add(new MenuItem
+			{
+				Header = stackPanel,
+				StaysOpenOnClick = true
+			});
+		};
+		action("图标大小", 28.0, 80.0, C.Prefs.BoardIconSize, (double v) =>
+		{
+			C.Prefs.BoardIconSize = v;
+		});
+		action("图标间距", 0.0, 20.0, C.Prefs.BoardIconGap, (double v) =>
+		{
+			C.Prefs.BoardIconGap = v;
+		});
+		MenuItem menuItem = new MenuItem
+		{
+			Header = "恢复默认"
+		};
+		menuItem.Click += (object s, RoutedEventArgs e) =>
+		{
+			C.Prefs.BoardIconSize = 48.0;
+			C.Prefs.BoardIconGap = 5.0;
+			RefreshIcons();
+			C.Save();
+		};
+		menu.Items.Add(menuItem);
+		menu.PlacementTarget = this;
+		menu.IsOpen = true;
+	}
+
+	public void CollapseSmooth()
+	{
+		if (!IsVisible)
+		{
+			return;
+		}
+		int serial = ++visibilitySerial;
+		Action trimMemory = delegate
+		{
+			Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)(() =>
+			{
+				try
+				{
+					GC.Collect(2, GCCollectionMode.Optimized, false);
+					Native.TrimWorkingSet();
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
+			}));
+		};
+		if (!MotionEnabled)
+		{
+			Hide();
+			trimMemory();
+			return;
+		}
+		DoubleAnimation fade = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(110.0))
+		{
+			EasingFunction = new CubicEase
+			{
+				EasingMode = EasingMode.EaseIn
+			}
+		};
+		fade.Completed += (object s, EventArgs e) =>
+		{
+			if (serial == visibilitySerial)
+			{
+				Hide();
+				trimMemory();
+			}
+		};
+		BeginAnimation(UIElement.OpacityProperty, fade);
+	}
+
+	internal bool ReleaseHiddenView()
+	{
+		if (IsVisible || preparingView || ModalBusy || activeDrag || IsMouseCaptureWithin)
+		{
+			return false;
+		}
+		sizeRefresh.Stop();
+		if (iconMenu != null)
+		{
+			iconMenu.IsOpen = false;
+		}
+		iconMenu = null;
+		EndDragPreview();
+		ContentGrid.Children.Clear();
+		ReleaseBackdrop();
+		Search = null;
+		Tiles = null;
+		PageNav = null;
+		Pager = (Status = (Empty = null));
+		layout = null;
+		bulkBar = (folderBar = null);
+		bulkRow = null;
+		selectionCount = (iconSizeText = null);
+		selectAll = (clearSelection = (deleteSelected = (undoRemoval = (editSelection = (moveSelected = (addExisting = null))))));
+		groups = (moveGroup = null);
+		boardIconSlider = null;
+		dragEntry = null;
+		return true;
+	}
+
+	private bool IsContextMenuOpen()
+	{
+		if (iconMenu == null || !iconMenu.IsOpen)
+		{
+			if (Tiles != null)
+			{
+				return Tiles.Children.OfType<FrameworkElement>().Any((FrameworkElement x) => x.ContextMenu != null && x.ContextMenu.IsOpen);
+			}
+			return false;
+		}
+		return true;
+	}
+
+	public void Open()
+	{
+		idleRelease.Stop();
+		preparingView = true;
+		try
+		{
+			visibilitySerial++;
+			Rect workArea = SystemParameters.WorkArea;
+			double num = ((C.Prefs.PanelSize == 0) ? 980 : 1280);
+			double num2 = ((C.Prefs.PanelSize == 0) ? 620 : 730);
+			if (C.Prefs.PanelSize == 2)
+			{
+				num = workArea.Width - 32.0;
+				num2 = workArea.Height - C.Dock.Height - 40.0;
+			}
+			PlacementOptions placement = C.Prefs.Placement;
+			Width = Math.Min(placement.PanelWidth ?? num, workArea.Width - 32.0);
+			Height = Math.Min(placement.PanelHeight ?? num2, workArea.Height - 32.0);
+			Height = Math.Max(Math.Min(400.0, workArea.Height - 130.0), Height);
+			Width = Math.Max(Math.Min(860.0, workArea.Width - 32.0), Width);
+			Height = Math.Max(Math.Min(560.0, workArea.Height - 32.0), Height);
+			Left = FeatureRules.Position(placement.PanelLeft ?? (workArea.Left + (workArea.Width - Width) / 2.0), workArea.Left, workArea.Width, Width);
+			Top = FeatureRules.Position(placement.PanelTop ?? (workArea.Top + (workArea.Height - C.Dock.Height - Height) / 2.0), workArea.Top, workArea.Height, Height);
+			Thumb thumb = moveGrip;
+			Visibility visibility = (resizeGrip.Visibility = (placement.PanelLocked ? Visibility.Collapsed : Visibility.Visible));
+			thumb.Visibility = visibility;
+			editing = false;
+			selected.Clear();
+			LightTheme = C.Prefs.Light;
+			MotionEnabled = C.Prefs.Dock.MotionEnabled;
+			MotionLevel = C.Prefs.Dock.MotionLevel;
+			ConfigureGlass(C.Prefs.Dock, C.Prefs.BoardMaterial);
+			GlassPercent = C.Prefs.OpacityPercent ?? 72.0;
+			Polish.Apply(this, LightTheme);
+			BuildForSize();
+			Backdrop(C.Prefs.Light);
+			Show();
+			Activate();
+			Native.SetForegroundWindow(new WindowInteropHelper(this).Handle);
+			AnimateOpen();
+			Keyboard.ClearFocus();
+		}
+		finally
+		{
+			preparingView = false;
+		}
+	}
+
+	private void Build(int rows)
+	{
+		ContentGrid.Children.Clear();
+		layout = new Grid
+		{
+			Margin = new Thickness(38.0, 22.0, 38.0, 20.0)
+		};
+		layout.RowDefinitions.Add(new RowDefinition
+		{
+			Height = new GridLength(55.0)
+		});
+		layout.RowDefinitions.Add(new RowDefinition
+		{
+			Height = GridLength.Auto
+		});
+		bulkRow = new RowDefinition
+		{
+			Height = new GridLength(0.0)
+		};
+		layout.RowDefinitions.Add(bulkRow);
+		layout.RowDefinitions.Add(new RowDefinition
+		{
+			Height = new GridLength(1.0, GridUnitType.Star)
+		});
+		layout.RowDefinitions.Add(new RowDefinition
+		{
+			Height = new GridLength(45.0)
+		});
+		layout.RowDefinitions.Add(new RowDefinition
+		{
+			Height = new GridLength(32.0)
+		});
+		ContentGrid.Children.Add(layout);
+		Grid grid = new Grid();
+		grid.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = new GridLength(320.0)
+		});
+		grid.ColumnDefinitions.Add(new ColumnDefinition());
+		grid.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = new GridLength(116.0)
+		});
+		grid.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = new GridLength(80.0)
+		});
+		grid.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = new GridLength(40.0)
+		});
+		grid.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = new GridLength(40.0)
+		});
+		grid.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = new GridLength(44.0)
+		});
+		layout.Children.Add(grid);
+		Border border = new Border
+		{
+			CornerRadius = new CornerRadius(16.0),
+			BorderThickness = new Thickness(1.0),
+			BorderBrush = new SolidColorBrush(Color.FromArgb(90, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
+			Background = new SolidColorBrush(Color.FromArgb(25, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
+			HorizontalAlignment = HorizontalAlignment.Center,
+			MinWidth = 280.0,
+			MaxWidth = 440.0,
+			Margin = new Thickness(10.0, 0.0, 10.0, 9.0)
+		};
+		Grid grid2 = (Grid)(border.Child = new Grid());
+		// 放大镜与提示文字放在同一个水平 StackPanel 里，紧贴输入框左侧：
+		// 图标在前、文字在后，两者高度一致，彻底避免对齐歧义。
+		StackPanel searchHint = new StackPanel
+		{
+			Orientation = System.Windows.Controls.Orientation.Horizontal,
+			HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(15.0, 0.0, 0.0, 0.0),
+			IsHitTestVisible = false
+		};
+		Viewbox magnifierBox = new Viewbox
+		{
+			Width = 14.0,
+			Height = 14.0,
+			Stretch = Stretch.Uniform,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		magnifierBox.Child = new System.Windows.Shapes.Path
+		{
+			Data = Geometry.Parse("M 2.9,2.9 m -4.3,0 a 4.3,4.3 0 1 0 8.6,0 a 4.3,4.3 0 1 0 -8.6,0 M 8.0,8.0 L 13.4,13.4"),
+			Stroke = MutedBrush,
+			StrokeThickness = 1.9,
+			StrokeStartLineCap = PenLineCap.Round,
+			StrokeEndLineCap = PenLineCap.Round,
+			Width = 16.0,
+			Height = 16.0,
+			Stretch = Stretch.Uniform
+		};
+		TextBlock hint = new TextBlock
+		{
+			Text = "搜索系统应用、文件、文件夹…",
+			FontSize = 15.0,
+			Foreground = MutedBrush,
+			Margin = new Thickness(6.0, 0.0, 0.0, 0.0),
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		searchHint.Children.Add(magnifierBox);
+		searchHint.Children.Add(hint);
+		grid2.Children.Add(searchHint);
+		Search = new TextBox
+		{
+			FontSize = 15.0,
+			Foreground = TextBrush,
+			Background = Brushes.Transparent,
+			BorderThickness = new Thickness(0.0),
+			CaretBrush = TextBrush,
+			VerticalContentAlignment = VerticalAlignment.Center,
+			Padding = new Thickness(36.0, 0.0, 18.0, 0.0)
+		};
+		System.Windows.Media.Color idleBorder = Color.FromArgb(90, byte.MaxValue, byte.MaxValue, byte.MaxValue);
+		System.Windows.Media.Color accentColor = IconPacks.AccentColor(C.Prefs.Dock.Accent);
+		System.Windows.Media.Color focusBorder = Color.FromArgb(60, accentColor.R, accentColor.G, accentColor.B);
+		Search.GotKeyboardFocus += delegate
+		{
+			border.BorderBrush = new SolidColorBrush(focusBorder);
+		};
+		Search.LostKeyboardFocus += delegate
+		{
+			border.BorderBrush = new SolidColorBrush(idleBorder);
+		};
+		Search.TextChanged += (object s, TextChangedEventArgs e) =>
+		{
+			hint.Visibility = ((Search.Text.Length != 0) ? Visibility.Hidden : Visibility.Visible);
+			RunSearch();
+		};
+		grid2.Children.Add(Search);
+		Grid.SetColumn(border, 1);
+		grid.Children.Add(border);
+		BuildSearchPopup(border);
+		Button element = Button("+ 批量添加", (object s, RoutedEventArgs e) =>
+		{
+			C.Choose();
+		}, 106.0);
+		Grid.SetColumn(element, 2);
+		grid.Children.Add(element);
+		editSelection = Button(editing ? "完成" : "多选", null, 68.0);
+		editSelection.ToolTip = "跨页勾选，一次移除多个入口";
+		editSelection.Click += (object s, RoutedEventArgs e) =>
+		{
+			SetSelectionMode(!editing);
+			Search.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
+			Render();
+		};
+		Grid.SetColumn(editSelection, 3);
+		grid.Children.Add(editSelection);
+		Button button = Button("⚙", (object s, RoutedEventArgs e) =>
+		{
+			C.Settings();
+		}, 30.0);
+		button.Content = CustomIcons.Settings(18.0, TextBrush);
+		button.ToolTip = "外观、组件与快捷键";
+		Grid.SetColumn(button, 4);
+		grid.Children.Add(button);
+		Button button2 = Button("···", (object s, RoutedEventArgs e) =>
+		{
+			MoreMenu();
+		}, 32.0);
+		button2.ToolTip = "更多与显示选项";
+		Grid.SetColumn(button2, 5);
+		grid.Children.Add(button2);
+		Button element2 = Button("×", (object s, RoutedEventArgs e) =>
+		{
+			CollapseSmooth();
+		}, 32.0);
+		Grid.SetColumn(element2, 6);
+		grid.Children.Add(element2);
+		WrapPanel wrapPanel = new WrapPanel
+		{
+			VerticalAlignment = VerticalAlignment.Center,
+			Visibility = (C.Prefs.BoardHideGroups ? Visibility.Collapsed : Visibility.Visible)
+		};
+		Grid.SetRow(wrapPanel, 1);
+		layout.Children.Add(wrapPanel);
+		groups = new ComboBox
+		{
+			Width = 145.0,
+			Height = 30.0,
+			Margin = new Thickness(8.0, 0.0, 10.0, 0.0)
+		};
+		wrapPanel.Children.Add(groups);
+		groups.SelectionChanged += (object s, SelectionChangedEventArgs e) =>
+		{
+			if (!syncingGroups)
+			{
+				string text = (groups.SelectedItem as string) ?? "全部";
+				if (text != currentGroup)
+				{
+					selected.Clear();
+				}
+				currentGroup = text;
+				if (addExisting != null)
+				{
+					addExisting.IsEnabled = currentGroup != "全部";
+				}
+				page = 0;
+				Render(animate: true);
+			}
+		};
+		StackPanel stackPanel = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(6.0, 0.0, 8.0, 0.0)
+		};
+		iconSizeText = new TextBlock
+		{
+			Text = "图标 " + Math.Round(C.Prefs.BoardIconSize) + " px",
+			Foreground = TextBrush,
+			VerticalAlignment = VerticalAlignment.Center,
+			Width = 75.0
+		};
+		stackPanel.Children.Add(iconSizeText);
+		boardIconSlider = new Slider
+		{
+			Minimum = 28.0,
+			Maximum = 80.0,
+			Value = C.Prefs.BoardIconSize,
+			Width = 110.0,
+			TickFrequency = 2.0,
+			IsSnapToTickEnabled = true,
+			ToolTip = "缩小图标，让每页容纳更多入口"
+		};
+		boardIconSlider.ValueChanged += (object s, RoutedPropertyChangedEventArgs<double> e) =>
+		{
+			if (!iconSizeSync)
+			{
+				C.Prefs.BoardIconSize = boardIconSlider.Value;
+				iconSizeText.Text = "图标 " + Math.Round(boardIconSlider.Value) + " px";
+				RefreshIcons();
+				C.Save();
+			}
+		};
+		stackPanel.Children.Add(boardIconSlider);
+		wrapPanel.Children.Add(stackPanel);
+		addExisting = Button("添加已有图标", (object s, RoutedEventArgs e) =>
+		{
+			C.AddExistingToGroup(currentGroup);
+		}, 112.0);
+		wrapPanel.Children.Add(addExisting);
+		wrapPanel.Children.Add(Button("添加文件夹", (object s, RoutedEventArgs e) =>
+		{
+			C.AddFolder();
+		}, 100.0));
+		wrapPanel.Children.Add(Button("更多", (object s, RoutedEventArgs e) =>
+		{
+			MoreMenu();
+		}, 68.0));
+		bulkBar = new WrapPanel
+		{
+			VerticalAlignment = VerticalAlignment.Center,
+			HorizontalAlignment = HorizontalAlignment.Center
+		};
+		Grid.SetRow(bulkBar, 2);
+		layout.Children.Add(bulkBar);
+		selectAll = Button("全选结果", (object s, RoutedEventArgs e) =>
+		{
+			SelectFiltered();
+		}, 90.0);
+		selectAll.ToolTip = "选中当前搜索结果的所有页；已有勾选会保留";
+		bulkBar.Children.Add(selectAll);
+		clearSelection = Button("取消全选", (object s, RoutedEventArgs e) =>
+		{
+			selected.Clear();
+			Render();
+		}, 90.0);
+		bulkBar.Children.Add(clearSelection);
+		deleteSelected = Button("移除已选", (object s, RoutedEventArgs e) =>
+		{
+			C.RemoveMany(selected.ToArray());
+		}, 112.0);
+		deleteSelected.Foreground = new SolidColorBrush(Color.FromRgb(byte.MaxValue, 155, 155));
+		bulkBar.Children.Add(deleteSelected);
+		undoRemoval = Button("撤销", (object s, RoutedEventArgs e) =>
+		{
+			C.UndoBoard();
+		}, 72.0);
+		wrapPanel.Children.Add(undoRemoval);
+		selectionCount = new TextBlock
+		{
+			Foreground = MutedBrush,
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(10.0, 0.0, 0.0, 0.0)
+		};
+		bulkBar.Children.Add(selectionCount);
+		moveGroup = new ComboBox
+		{
+			Width = 112.0,
+			Height = 30.0,
+			Margin = new Thickness(12.0, 0.0, 4.0, 0.0),
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		bulkBar.Children.Add(moveGroup);
+		moveSelected = Button("移动", (object s, RoutedEventArgs e) =>
+		{
+			if (moveGroup.SelectedItem is string to && selected.Count != 0)
+			{
+				C.TransferEntries(selected.ToArray(), currentGroup, to);
+			}
+		}, 100.0);
+		bulkBar.Children.Add(moveSelected);
+		SyncGroups();
+		DockPanel dockPanel = new DockPanel
+		{
+			Margin = new Thickness(0.0, 10.0, 0.0, 4.0)
+		};
+		Grid.SetRow(dockPanel, 3);
+		layout.Children.Add(dockPanel);
+		folderSignature = "";
+		folderBar = new WrapPanel
+		{
+			Margin = new Thickness(0.0, 0.0, 0.0, 8.0),
+			Visibility = ((!foldersVisible) ? Visibility.Collapsed : Visibility.Visible)
+		};
+		DockPanel.SetDock(folderBar, Dock.Top);
+		dockPanel.Children.Add(folderBar);
+		Grid grid3 = new Grid();
+		dockPanel.Children.Add(grid3);
+		Tiles = new UniformGrid
+		{
+			Columns = columns,
+			Rows = rows,
+			ClipToBounds = true
+		};
+		grid3.Children.Add(Tiles);
+		Tiles.SizeChanged += (object s, SizeChangedEventArgs e) =>
+		{
+			QueueSizeRefresh();
+		};
+		Empty = new TextBlock
+		{
+			Text = "将软件、文档或文件夹拖到这里\n面板默认保持打开；按 Esc 收起，也可点击「批量添加」",
+			TextAlignment = TextAlignment.Center,
+			VerticalAlignment = VerticalAlignment.Center,
+			HorizontalAlignment = HorizontalAlignment.Center,
+			Foreground = MutedBrush,
+			FontSize = 19.0,
+			LineHeight = 32.0
+		};
+		grid3.Children.Add(Empty);
+		StackPanel stackPanel2 = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			HorizontalAlignment = HorizontalAlignment.Center
+		};
+		PageNav = stackPanel2;
+		Grid.SetRow(stackPanel2, 4);
+		layout.Children.Add(stackPanel2);
+		stackPanel2.Children.Add(Button("‹", (object s, RoutedEventArgs e) =>
+		{
+			ChangePage(-1);
+		}, 40.0));
+		Pager = new TextBlock
+		{
+			Width = 100.0,
+			TextAlignment = TextAlignment.Center,
+			VerticalAlignment = VerticalAlignment.Center,
+			Foreground = TextBrush,
+			FontSize = 14.0
+		};
+		stackPanel2.Children.Add(Pager);
+		stackPanel2.Children.Add(Button("›", (object s, RoutedEventArgs e) =>
+		{
+			ChangePage(1);
+		}, 40.0));
+		Grid grid4 = new Grid();
+		grid4.ColumnDefinitions.Add(new ColumnDefinition());
+		grid4.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = new GridLength(230.0)
+		});
+		Grid.SetRow(grid4, 5);
+		layout.Children.Add(grid4);
+		Status = new TextBlock
+		{
+			Text = "图标可拖到 Dock 固定 · Esc 收起 · ··· 显示选项",
+			Foreground = MutedBrush,
+			FontSize = 11.0,
+			TextTrimming = TextTrimming.CharacterEllipsis,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		StackPanel stackPanel3 = new StackPanel
+		{
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		stackPanel3.Children.Add(Status);
+		stackPanel3.Children.Add(new TextBlock
+		{
+			Text = "抖音 森霖Sama 制作",
+			Foreground = MutedBrush,
+			FontSize = 10.0,
+			Opacity = 0.7,
+			Margin = new Thickness(0.0, 2.0, 0.0, 0.0),
+			IsHitTestVisible = false
+		});
+		grid4.Children.Add(stackPanel3);
+		StackPanel stackPanel4 = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			VerticalAlignment = VerticalAlignment.Center,
+			HorizontalAlignment = HorizontalAlignment.Right
+		};
+		Grid.SetColumn(stackPanel4, 1);
+		grid4.Children.Add(stackPanel4);
+		TextBlock amount = new TextBlock
+		{
+			Text = "透明度 " + Math.Round(100.0 - GlassPercent) + "%",
+			Foreground = MutedBrush,
+			Width = 83.0,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		stackPanel4.Children.Add(amount);
+		Slider transparency = new Slider
+		{
+			Minimum = 0.0,
+			Maximum = 100.0,
+			Value = 100.0 - GlassPercent,
+			Width = 140.0,
+			TickFrequency = 5.0,
+			IsSnapToTickEnabled = true,
+			ToolTip = "只改变玻璃背景，图标和文字保持清晰"
+		};
+		stackPanel4.Children.Add(transparency);
+		transparency.ValueChanged += (object s, RoutedPropertyChangedEventArgs<double> e) =>
+		{
+			C.Opacity(100.0 - transparency.Value);
+			amount.Text = "透明度 " + Math.Round(transparency.Value) + "%";
+			C.Save();
+		};
+		Render(animate: true);
+	}
+
+	public void SyncGroups()
+	{
+		if (addExisting != null)
+		{
+			addExisting.IsEnabled = currentGroup != "全部";
+		}
+		if (groups != null)
+		{
+			syncingGroups = true;
+			List<string> list = new string[2] { "全部", "未分组" }.Concat(C.Prefs.Groups).ToList();
+			groups.ItemsSource = list;
+			if (!list.Contains(currentGroup))
+			{
+				currentGroup = "全部";
+				selected.Clear();
+				page = 0;
+			}
+			groups.SelectedItem = currentGroup;
+			if (moveGroup != null)
+			{
+				string text = moveGroup.SelectedItem as string;
+				moveGroup.ItemsSource = list.Skip(1).ToList();
+				moveGroup.SelectedItem = (list.Contains(text) ? text : "未分组");
+			}
+			syncingGroups = false;
+			if (addExisting != null)
+			{
+				addExisting.IsEnabled = currentGroup != "全部";
+			}
+		}
+	}
+
+	private List<Entry> Filtered()
+	{
+		string q = "";
+		return C.Prefs.Apps.Where((Entry a) => (C.Prefs.BoardHideGroups || currentGroup == "全部" || FeatureRules.InGroup(a, currentGroup)) && LayoutRules.Matches(a.Name, q)).ToList();
+	}
+
+	private void BuildSearchPopup(Border anchor)
+	{
+		searchPopup = new Popup
+		{
+			PlacementTarget = anchor,
+			Placement = PlacementMode.Bottom,
+			StaysOpen = false,
+			AllowsTransparency = true,
+			PopupAnimation = PopupAnimation.Fade,
+			VerticalOffset = 2.0
+		};
+		// 搜索结果列表强制高对比：背景只跟明暗主题，不掺玻璃色调（tint 白色时曾出现白底白字看不清）
+		System.Windows.Media.Color bg = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(250, 252, 255) : System.Windows.Media.Color.FromRgb(28, 32, 44);
+		System.Windows.Media.Color ink = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(32, 38, 53) : System.Windows.Media.Color.FromRgb(244, 246, 252);
+		System.Windows.Media.Color line = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(210, 216, 226) : System.Windows.Media.Color.FromRgb(62, 72, 96);
+		bg.A = byte.MaxValue;
+		line.A = 180;
+		searchList = new ListBox
+		{
+			Background = Brushes.Transparent,
+			BorderThickness = new Thickness(0.0),
+			MaxHeight = 400.0
+		};
+		ScrollViewer.SetVerticalScrollBarVisibility(searchList, ScrollBarVisibility.Hidden);
+		ScrollViewer.SetHorizontalScrollBarVisibility(searchList, ScrollBarVisibility.Disabled);
+		Border container = new Border
+		{
+			CornerRadius = new CornerRadius(14.0),
+			Background = new SolidColorBrush(bg),
+			BorderBrush = new SolidColorBrush(line),
+			BorderThickness = new Thickness(1.0),
+			Padding = new Thickness(6.0),
+			MinWidth = 300.0,
+			MaxWidth = 460.0,
+			Child = searchList
+		};
+		// Popup 内容不继承窗口隐式样式，这里自带一套：防止系统默认白色 hover/选中底色
+		Style popupListStyle = new Style(typeof(System.Windows.Controls.ListBox));
+		popupListStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+		popupListStyle.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(ink)));
+		popupListStyle.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0.0)));
+		container.Resources[typeof(System.Windows.Controls.ListBox)] = popupListStyle;
+		Style popupItemStyle = new Style(typeof(System.Windows.Controls.ListBoxItem));
+		popupItemStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+		popupItemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8.0, 6.0, 8.0, 6.0)));
+		popupItemStyle.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+		FrameworkElementFactory popupItemFrame = new FrameworkElementFactory(typeof(Border));
+		popupItemFrame.SetValue(Border.CornerRadiusProperty, new CornerRadius(8.0));
+		popupItemFrame.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+		popupItemFrame.AppendChild(new FrameworkElementFactory(typeof(ContentPresenter)));
+		popupItemStyle.Setters.Add(new Setter(Control.TemplateProperty, new ControlTemplate(typeof(System.Windows.Controls.ListBoxItem))
+		{
+			VisualTree = popupItemFrame
+		}));
+		container.Resources[typeof(System.Windows.Controls.ListBoxItem)] = popupItemStyle;
+		searchPopup.Child = container;
+	}
+
+	private void RunSearch()
+	{
+		int serial = ++searchSerial;
+		if (searchCts != null)
+		{
+			searchCts.Cancel();
+			searchCts.Dispose();
+			searchCts = null;
+		}
+		string query = ((Search == null) ? "" : Search.Text.Trim());
+		searchItems = new List<SystemSearchResult>();
+		if (searchList != null)
+		{
+			searchList.ItemsSource = null;
+		}
+		if (query.Length == 0)
+		{
+			if (searchPopup != null)
+			{
+				searchPopup.IsOpen = false;
+			}
+			return;
+		}
+		if (searchPopup != null)
+		{
+			searchPopup.IsOpen = true;
+		}
+		searchCts = new CancellationTokenSource();
+		CancellationToken ct = searchCts.Token;
+		Task.Run(() =>
+		{
+			List<SystemSearchResult> instant = SystemSearch.Instant(query);
+			if (serial != searchSerial || ct.IsCancellationRequested)
+			{
+				return;
+			}
+			Dispatcher.BeginInvoke(new Action(() =>
+			{
+				if (serial == searchSerial)
+				{
+					SetSearchResults(instant);
+				}
+			}));
+			try
+			{
+				SystemSearch.Deep(query, (List<SystemSearchResult> batch2) =>
+				{
+					if (serial != searchSerial || ct.IsCancellationRequested)
+					{
+						return;
+					}
+					Dispatcher.BeginInvoke(new Action(() =>
+					{
+						if (serial == searchSerial)
+						{
+							SetSearchResults(batch2);
+						}
+					}));
+				}, ct);
+			}
+			catch (OperationCanceledException)
+			{
+			}
+			catch
+			{
+			}
+		});
+	}
+
+	private void SetSearchResults(List<SystemSearchResult> incoming)
+	{
+		if (searchList == null)
+		{
+			return;
+		}
+		Dictionary<string, bool> seen = new Dictionary<string, bool>();
+		foreach (SystemSearchResult item in searchItems)
+		{
+			seen[item.Path.ToLowerInvariant()] = true;
+		}
+		foreach (SystemSearchResult item in incoming)
+		{
+			string key = item.Path.ToLowerInvariant();
+			if (!seen.ContainsKey(key))
+			{
+				seen[key] = true;
+				searchItems.Add(item);
+			}
+		}
+		searchItems.Sort((SystemSearchResult a, SystemSearchResult b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+		List<ListBoxItem> rows = new List<ListBoxItem>();
+		int max = Math.Min(searchItems.Count, 60);
+		for (int i = 0; i < max; i++)
+		{
+			rows.Add(MakeSearchRow(searchItems[i]));
+		}
+		searchList.ItemsSource = rows;
+	}
+
+	private ListBoxItem MakeSearchRow(SystemSearchResult r)
+	{
+		// 与 BuildSearchPopup 一致：强制高对比，不掺玻璃色调
+		System.Windows.Media.Color ink = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(32, 38, 53) : System.Windows.Media.Color.FromRgb(244, 246, 252);
+		System.Windows.Media.Color hoverColor = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(58, 96, 205) : System.Windows.Media.Color.FromRgb(255, 255, 255);
+		SolidColorBrush hoverBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(70, hoverColor.R, hoverColor.G, hoverColor.B));
+		ListBoxItem row = new ListBoxItem
+		{
+			Background = Brushes.Transparent,
+			Padding = new Thickness(8.0, 6.0, 8.0, 6.0),
+			HorizontalContentAlignment = HorizontalAlignment.Stretch,
+			Focusable = false
+		};
+		row.MouseEnter += delegate
+		{
+			row.Background = hoverBrush;
+		};
+		row.MouseLeave += delegate
+		{
+			row.Background = Brushes.Transparent;
+		};
+		StackPanel panel = new StackPanel
+		{
+			Orientation = Orientation.Horizontal
+		};
+		// 左：大图标（32px），应用取真实图标、文件夹用原生文件夹样式
+		Border iconHost = new Border
+		{
+			Width = 32.0,
+			Height = 32.0,
+			VerticalAlignment = VerticalAlignment.Center,
+			CornerRadius = new CornerRadius(7.0),
+			Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(22, ink.R, ink.G, ink.B)),
+			Child = new Image
+			{
+				Width = 26.0,
+				Height = 26.0,
+				Stretch = Stretch.Uniform,
+				HorizontalAlignment = HorizontalAlignment.Center,
+				VerticalAlignment = VerticalAlignment.Center
+			}
+		};
+		Image image = (Image)iconHost.Child;
+		if (r.IsFolder)
+		{
+			image.Source = FolderGlyph();
+		}
+		else
+		{
+			LoadSearchIcon(image, r.Path);
+		}
+		panel.Children.Add(iconHost);
+		// 右：两行——名称 + 类型/副标题（仿 Windows 搜索）
+		StackPanel textColumn = new StackPanel
+		{
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(10.0, 0.0, 0.0, 0.0),
+			MaxWidth = 330.0
+		};
+		TextBlock nameBlock = new TextBlock
+		{
+			Text = r.Name,
+			Foreground = new SolidColorBrush(ink),
+			FontSize = 14.0,
+			TextTrimming = TextTrimming.CharacterEllipsis
+		};
+		textColumn.Children.Add(nameBlock);
+		string subtitle;
+		if (r.IsFolder)
+		{
+			subtitle = "文件夹";
+		}
+		else
+		{
+			string ext = ((r.Path.LastIndexOf('.') > r.Path.LastIndexOf('\\')) ? r.Path.Substring(r.Path.LastIndexOf('.') + 1) : "").ToLowerInvariant();
+			subtitle = (ext == "exe" || ext == "lnk" || ext == "url" || ext == "appref-ms") ? "应用" : "文件";
+		}
+		TextBlock subBlock = new TextBlock
+		{
+			Text = subtitle,
+			Foreground = new SolidColorBrush(System.Windows.Media.Color.FromArgb(160, ink.R, ink.G, ink.B)),
+			FontSize = 12.0,
+			Margin = new Thickness(0.0, 1.0, 0.0, 0.0),
+			TextTrimming = TextTrimming.CharacterEllipsis
+		};
+		textColumn.Children.Add(subBlock);
+		panel.Children.Add(textColumn);
+		row.Content = panel;
+		row.MouseLeftButtonUp += (object s, MouseButtonEventArgs e2) =>
+		{
+			OpenSearchResult(r);
+		};
+		row.PreviewMouseRightButtonUp += (object s, MouseButtonEventArgs e2) =>
+		{
+			// 直接弹程序自带的系统右键菜单（打开方式/管理员运行/属性等）
+			e2.Handled = true;
+			if (searchPopup != null)
+			{
+				searchPopup.IsOpen = false;
+			}
+			Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(delegate
+			{
+				ShellContextMenu.ShowAtCursor(r.Path, this);
+			}));
+		};
+		return row;
+	}
+
+	private void LoadSearchIcon(Image image, string path)
+	{
+		Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+		{
+			try
+			{
+				ImageSource source = Native.Icon(path, false, true);
+				if (source != null)
+				{
+					image.Source = source;
+				}
+			}
+			catch
+			{
+			}
+		}));
+	}
+
+	private ImageSource FolderGlyph()
+	{
+		DrawingGroup group = new DrawingGroup();
+		group.Children.Add(new GeometryDrawing(new SolidColorBrush(System.Windows.Media.Color.FromArgb(255, 242, 193, 104)), null, Geometry.Parse("M 2,5 L 8,5 L 10,7 L 18,7 L 18,17 L 2,17 Z")));
+		DrawingImage drawing = new DrawingImage(group);
+		drawing.Freeze();
+		return drawing;
+	}
+
+	private void OpenSearchResult(SystemSearchResult r)
+	{
+		if (searchPopup != null)
+		{
+			searchPopup.IsOpen = false;
+		}
+		Keyboard.ClearFocus();
+		SystemSearch.Open(r);
+	}
+
+	public void SetStatus(string text)
+	{
+		pendingStatus = text;
+		if (Status != null)
+		{
+			Status.Text = text;
+		}
+	}
+
+	private void SetSelectionMode(bool enabled)
+	{
+		editing = enabled;
+		selected.Clear();
+		dragEntry = null;
+		if (editSelection != null)
+		{
+			editSelection.Content = (enabled ? "完成" : "多选");
+		}
+	}
+
+	public void FinishSelection()
+	{
+		SetSelectionMode(enabled: false);
+	}
+
+	private void SelectFiltered()
+	{
+		foreach (Entry item in Filtered())
+		{
+			selected.Add(item.Path);
+		}
+		Render();
+	}
+
+	private void UpdateSelectionBar()
+	{
+		selected.RemoveWhere((string p) => !C.Prefs.Apps.Any((Entry a) => string.Equals(a.Path, p, StringComparison.OrdinalIgnoreCase)));
+		bool flag = editing;
+		bulkBar.Visibility = ((!flag) ? Visibility.Collapsed : Visibility.Visible);
+		bulkRow.Height = (flag ? GridLength.Auto : new GridLength(0.0));
+		moveGroup.IsEnabled = editing;
+		moveSelected.Content = ((currentGroup == "全部") ? "添加到分组" : "移动");
+		moveSelected.IsEnabled = editing && selected.Count > 0;
+		selectAll.IsEnabled = editing;
+		clearSelection.IsEnabled = editing && selected.Count > 0;
+		deleteSelected.IsEnabled = editing && selected.Count > 0;
+		deleteSelected.Content = "移除已选（" + selected.Count + "）";
+		undoRemoval.IsEnabled = C.CanUndoRemoval;
+		undoRemoval.ToolTip = "撤销：" + C.UndoLabel + " · Ctrl+Z";
+		undoRemoval.Visibility = ((!C.CanUndoRemoval) ? Visibility.Collapsed : Visibility.Visible);
+		selectionCount.Text = (editing ? ("已选 " + selected.Count + " · 跨页保留") : "可撤销最近操作");
+	}
+
+	public void Render(bool animate = false)
+	{
+		if (Tiles == null || (!IsVisible && !preparingView))
+		{
+			return;
+		}
+		UpdateSelectionBar();
+		RefreshFolders();
+		Tiles.Children.Clear();
+		List<Entry> list = Filtered();
+		int num = LayoutRules.Pages(list.Count, capacity);
+		page = Math.Min(page, num - 1);
+		Pager.Text = page + 1 + " / " + num;
+		PageNav.Visibility = ((num > 1) ? Visibility.Visible : Visibility.Collapsed);
+		Empty.Visibility = ((list.Count != 0) ? Visibility.Collapsed : Visibility.Visible);
+		if (pendingStatus != null)
+		{
+			Status.Text = pendingStatus;
+		}
+		int num2 = 0;
+		foreach (Entry item in list.Skip(page * capacity).Take(capacity))
+		{
+			Tiles.Children.Add(Tile(item, num2++, animate));
+		}
+	}
+
+	private void ChangePage(int delta)
+	{
+		int num = LayoutRules.Pages(Filtered().Count, capacity);
+		page = Math.Max(0, Math.Min(num - 1, page + delta));
+		Render(animate: true);
+	}
+
+	private FrameworkElement Tile(Entry a, int index, bool animate)
+	{
+		bool isSelected = editing && selected.Contains(a.Path);
+		SolidColorBrush selectedBrush = new SolidColorBrush(Color.FromArgb(48, 111, 167, byte.MaxValue));
+		Border tile = new Border
+		{
+			Tag = a,
+			Background = (isSelected ? selectedBrush : Brushes.Transparent),
+			BorderThickness = new Thickness(1.0),
+			BorderBrush = (isSelected ? new SolidColorBrush(Color.FromArgb(150, 146, 187, byte.MaxValue)) : Brushes.Transparent),
+			CornerRadius = new CornerRadius(18.0),
+			Margin = new Thickness(C.Prefs.BoardIconGap),
+			Padding = new Thickness(4.0),
+			Cursor = Cursors.Hand,
+			ToolTip = a.Name,
+			ContextMenu = (editing ? null : C.Menu(a, currentGroup, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0))),
+			AllowDrop = !editing
+		};
+		Grid grid = new Grid();
+		tile.Child = grid;
+		StackPanel stackPanel = new StackPanel
+		{
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		grid.Children.Add(stackPanel);
+		ImageSource imageSource = FeatureUi.Icon(a, C.Prefs.Dock.ShowShortcutOverlays, true);
+		if (imageSource != null)
+		{
+			System.Windows.Controls.Image image = new System.Windows.Controls.Image
+			{
+				Source = imageSource,
+				Width = C.Prefs.BoardIconSize,
+				Height = C.Prefs.BoardIconSize,
+				Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
+			};
+			RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+			stackPanel.Children.Add(image);
+		}
+		else
+		{
+			stackPanel.Children.Add(new TextBlock
+			{
+				Text = "▣",
+				Foreground = TextBrush,
+				FontSize = C.Prefs.BoardIconSize * 0.84,
+				Height = C.Prefs.BoardIconSize,
+				HorizontalAlignment = HorizontalAlignment.Center,
+				Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
+			});
+		}
+		stackPanel.Children.Add(new TextBlock
+		{
+			Text = a.Name,
+			Foreground = TextBrush,
+			FontSize = 12.0,
+			TextAlignment = TextAlignment.Center,
+			TextTrimming = TextTrimming.CharacterEllipsis,
+			MaxWidth = Math.Max(20.0, ((Tiles.ActualWidth > 0.0) ? Tiles.ActualWidth : (Width - 104.0)) / (double)columns - 2.0 * C.Prefs.BoardIconGap - 10.0)
+		});
+		grid.Children.Add(new Border
+		{
+			Tag = "running",
+			Width = 5.0,
+			Height = 5.0,
+			CornerRadius = new CornerRadius(3.0),
+			Background = new SolidColorBrush(Color.FromRgb(135, 205, byte.MaxValue)),
+			VerticalAlignment = VerticalAlignment.Bottom,
+			HorizontalAlignment = HorizontalAlignment.Center,
+			Margin = new Thickness(0.0, 0.0, 0.0, 1.0),
+			ToolTip = "正在运行，点击切回窗口",
+			Visibility = ((!C.Prefs.Dock.ShowRunning || !RunningWindows.IsRunning(a)) ? Visibility.Collapsed : Visibility.Visible)
+		});
+		if (editing)
+		{
+			CheckBox element = new CheckBox
+			{
+				IsChecked = isSelected,
+				IsHitTestVisible = false,
+				Focusable = false,
+				HorizontalAlignment = HorizontalAlignment.Right,
+				VerticalAlignment = VerticalAlignment.Top,
+				Margin = new Thickness(2.0)
+			};
+			grid.Children.Add(element);
+		}
+		ScaleTransform scale = new ScaleTransform(1.0, 1.0);
+		TranslateTransform lift = new TranslateTransform();
+		TransformGroup transformGroup = new TransformGroup();
+		transformGroup.Children.Add(scale);
+		transformGroup.Children.Add(lift);
+		tile.RenderTransform = transformGroup;
+		tile.RenderTransformOrigin = new Point(0.5, 0.5);
+		Action<bool> hover = (bool over) =>
+		{
+			Border border = tile;
+			SolidColorBrush background = (isSelected ? selectedBrush : (over ? new SolidColorBrush(Color.FromArgb(24, byte.MaxValue, byte.MaxValue, byte.MaxValue)) : Brushes.Transparent));
+			border.Background = background;
+			if (MotionEnabled)
+			{
+				CubicEase easingFunction2 = new CubicEase
+				{
+					EasingMode = EasingMode.EaseOut
+				};
+				scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(over ? (1.0 + 0.025 * MotionLevel) : 1.0, TimeSpan.FromMilliseconds(170.0))
+				{
+					EasingFunction = easingFunction2
+				});
+				scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(over ? (1.0 + 0.025 * MotionLevel) : 1.0, TimeSpan.FromMilliseconds(170.0))
+				{
+					EasingFunction = easingFunction2
+				});
+				lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(over ? (-3.0 * MotionLevel) : 0.0, TimeSpan.FromMilliseconds(170.0))
+				{
+					EasingFunction = easingFunction2
+				});
+			}
+		};
+		tile.MouseEnter += (object s, MouseEventArgs e) =>
+		{
+			hover(obj: true);
+		};
+		tile.MouseLeave += (object s, MouseEventArgs e) =>
+		{
+			hover(obj: false);
+		};
+		if (animate && MotionEnabled)
+		{
+			CubicEase easingFunction = new CubicEase
+			{
+				EasingMode = EasingMode.EaseOut
+			};
+			TimeSpan value = TimeSpan.FromMilliseconds(Math.Min(index, 14) * 12);
+			tile.Opacity = 0.0;
+			tile.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(190.0))
+			{
+				BeginTime = value,
+				EasingFunction = easingFunction
+			});
+			lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(9.0 * MotionLevel, 0.0, TimeSpan.FromMilliseconds(230.0))
+			{
+				BeginTime = value,
+				EasingFunction = easingFunction
+			});
+		}
+		tile.MouseLeftButtonDown += (object s, MouseButtonEventArgs e) =>
+		{
+			dragStart = e.GetPosition(this);
+			dragEntry = a;
+		};
+		tile.MouseMove += (object s, MouseEventArgs e) =>
+		{
+			if (e.LeftButton == MouseButtonState.Pressed && dragEntry == a)
+			{
+				Point position = e.GetPosition(this);
+				if (Math.Abs(position.X - dragStart.X) + Math.Abs(position.Y - dragStart.Y) > 10.0)
+				{
+					dragEntry = null;
+					StartEntryDrag(tile, a);
+				}
+			}
+		};
+		tile.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+		{
+			if (dragEntry == a)
+			{
+				dragEntry = null;
+				if (editing)
+				{
+					if (!selected.Remove(a.Path))
+					{
+						selected.Add(a.Path);
+					}
+					Render();
+					e.Handled = true;
+				}
+				else
+				{
+					C.Launch(a);
+				}
+			}
+		};
+		tile.Drop += (object s, DragEventArgs e) =>
+		{
+			if (e.Data.GetDataPresent("GlassBoard.Entry"))
+			{
+				string path = (string)e.Data.GetData("GlassBoard.Entry");
+				C.ReorderEntry(path, a);
+				e.Handled = true;
+			}
+		};
+		return tile;
+	}
+
+	private string[] DraggedEntries(IDataObject data)
+	{
+		if (data.GetDataPresent("GlassBoard.Entries"))
+		{
+			return (string[])data.GetData("GlassBoard.Entries");
+		}
+		if (data.GetDataPresent("GlassBoard.Entry"))
+		{
+			return new string[1] { (string)data.GetData("GlassBoard.Entry") };
+		}
+		return new string[0];
+	}
+
+	private void OpenGroup(string name)
+	{
+		FinishSelection();
+		currentGroup = name;
+		page = 0;
+		ClearSearch();
+		SyncGroups();
+		Render(animate: true);
+	}
+
+	private void RefreshFolders()
+	{
+		if (folderBar == null || (activeDrag && folderBar.Children.Count > 0))
+		{
+			return;
+		}
+		string text = currentGroup + "/" + LightTheme + "/" + string.Join("|", from g in new string[2] { "全部", "未分组" }.Concat(C.Prefs.Groups)
+			select g + ":" + C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, g)));
+		if (folderSignature == text && folderBar.Children.Count > 0)
+		{
+			return;
+		}
+		folderSignature = text;
+		folderBar.Children.Clear();
+		foreach (string item in new string[2] { "全部", "未分组" }.Concat(C.Prefs.Groups))
+		{
+			string name = item;
+			int num = ((name == "全部") ? C.Prefs.Apps.Count : C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, name)));
+			SolidColorBrush normal = ((name == currentGroup) ? new SolidColorBrush(Color.FromArgb(55, 130, 180, byte.MaxValue)) : new SolidColorBrush(Color.FromArgb(22, byte.MaxValue, byte.MaxValue, byte.MaxValue)));
+			Border box = new Border
+			{
+				CornerRadius = new CornerRadius(12.0),
+				Background = normal,
+				Padding = new Thickness(10.0, 6.0, 10.0, 6.0),
+				Margin = new Thickness(0.0, 0.0, 6.0, 6.0),
+				Cursor = Cursors.Hand,
+				AllowDrop = true,
+				ToolTip = ((name == "全部") ? "查看全部入口" : "点击打开；将一个或多个入口拖到这里分组")
+			};
+			StackPanel stackPanel = new StackPanel
+			{
+				Orientation = Orientation.Horizontal
+			};
+			FrameworkElement frameworkElement = Polish.Icon((name == "全部") ? "grid" : "folder", TextBrush, 18.0);
+			frameworkElement.Margin = new Thickness(0.0, 0.0, 6.0, 0.0);
+			stackPanel.Children.Add(frameworkElement);
+			stackPanel.Children.Add(new TextBlock
+			{
+				Text = name + "  " + num,
+				Foreground = TextBrush,
+				FontSize = 12.0,
+				VerticalAlignment = VerticalAlignment.Center
+			});
+			box.Child = stackPanel;
+			box.MouseLeftButtonUp += (object sender, MouseButtonEventArgs e) =>
+			{
+				OpenGroup(name);
+				e.Handled = true;
+			};
+			box.DragEnter += (object sender, DragEventArgs e) =>
+			{
+				if (DraggedEntries(e.Data).Length != 0 || e.Data.GetDataPresent(DataFormats.FileDrop))
+				{
+					BeginGroupHover(name);
+					box.Background = new SolidColorBrush(Color.FromArgb(90, 100, 160, 240));
+					e.Effects = GroupDragEffect(e.Data, name);
+					e.Handled = true;
+				}
+			};
+			box.DragOver += (object sender, DragEventArgs e) =>
+			{
+				if (DraggedEntries(e.Data).Length != 0 || e.Data.GetDataPresent(DataFormats.FileDrop))
+				{
+					BeginGroupHover(name);
+				}
+				e.Effects = GroupDragEffect(e.Data, name);
+				e.Handled = true;
+			};
+			box.DragLeave += (object sender, DragEventArgs e) =>
+			{
+				StopGroupHover(name);
+				box.Background = normal;
+			};
+			box.Drop += (object sender, DragEventArgs e) =>
+			{
+				e.Handled = true;
+				if (!(name == "全部"))
+				{
+					string[] array = DraggedEntries(e.Data);
+					if (array.Length != 0)
+					{
+						string text2 = (e.Data.GetDataPresent("GlassBoard.SourceGroup") ? ((string)e.Data.GetData("GlassBoard.SourceGroup")) : currentGroup);
+						C.TransferEntries(array, text2, name);
+					}
+					else if (e.Data.GetDataPresent(DataFormats.FileDrop))
+					{
+						C.Add((string[])e.Data.GetData(DataFormats.FileDrop), manual: true, name);
+						OpenGroup(name);
+						SetStatus("已添加到「" + name + "」");
+					}
+				}
+			};
+			folderBar.Children.Add(box);
+		}
+	}
+
+	private void ExternalDrop(object s, DragEventArgs e)
+	{
+		if (e.Data.GetDataPresent(DataFormats.FileDrop))
+		{
+			C.Add((string[])e.Data.GetData(DataFormats.FileDrop), manual: true, currentGroup);
+			ClearSearch();
+			e.Handled = true;
+		}
+	}
+
+	public void UpdateRunning()
+	{
+		if (Tiles == null || !IsVisible)
+		{
+			return;
+		}
+		foreach (Border item in Tiles.Children.OfType<Border>())
+		{
+			Entry entry = item.Tag as Entry;
+			Grid grid = item.Child as Grid;
+			if (entry == null || grid == null)
+			{
+				continue;
+			}
+			foreach (Border item2 in from b in grid.Children.OfType<Border>()
+				where b.Tag as string == "running"
+				select b)
+			{
+				item2.Visibility = ((!C.Prefs.Dock.ShowRunning || !RunningWindows.IsRunning(entry)) ? Visibility.Collapsed : Visibility.Visible);
+			}
+		}
+	}
+
+	private void InitDragExperience()
+	{
+		StackPanel stackPanel = new StackPanel
+		{
+			Orientation = Orientation.Horizontal
+		};
+		dragPreviewIcon = new Image
+		{
+			Width = 28.0,
+			Height = 28.0,
+			Stretch = Stretch.Uniform,
+			Margin = new Thickness(0.0, 0.0, 10.0, 0.0)
+		};
+		dragPreviewText = new TextBlock
+		{
+			Foreground = Brushes.White,
+			VerticalAlignment = VerticalAlignment.Center,
+			MaxWidth = 230.0,
+			TextTrimming = TextTrimming.CharacterEllipsis
+		};
+		stackPanel.Children.Add(dragPreviewIcon);
+		stackPanel.Children.Add(dragPreviewText);
+		dragPreview = new Border
+		{
+			Child = stackPanel,
+			Padding = new Thickness(12.0, 9.0, 12.0, 9.0),
+			CornerRadius = new CornerRadius(14.0),
+			Background = Polish.Color("#E52A3447"),
+			BorderBrush = Polish.Color("#80B8CEEF"),
+			BorderThickness = new Thickness(1.0),
+			HorizontalAlignment = HorizontalAlignment.Left,
+			VerticalAlignment = VerticalAlignment.Top,
+			IsHitTestVisible = false,
+			Visibility = Visibility.Collapsed
+		};
+		Root.Children.Add(dragPreview);
+		hoverTimer.Tick += (object s, EventArgs e) =>
+		{
+			hoverTimer.Stop();
+			if (activeDrag && hoverGroup != null && hoverGroup != currentGroup)
+			{
+				OpenGroup(hoverGroup);
+			}
+		};
+		PreviewDragOver += (object s, DragEventArgs e) =>
+		{
+			string[] array = DraggedEntries(e.Data);
+			bool dataPresent = e.Data.GetDataPresent(DataFormats.FileDrop);
+			if (array.Length != 0 || dataPresent)
+			{
+				activeDrag = true;
+				Point position = e.GetPosition(Root);
+				if (dragPreviewText.Text.Length == 0)
+				{
+					if (dataPresent)
+					{
+						string[] array2 = (string[])e.Data.GetData(DataFormats.FileDrop);
+						dragPreviewText.Text = ((array2.Length == 1) ? Path.GetFileName(array2[0]) : ("添加 " + array2.Length + " 个文件"));
+					}
+					else
+					{
+						dragPreviewText.Text = "正在移动图标";
+					}
+				}
+				dragPreview.RenderTransform = new TranslateTransform(position.X + 16.0, position.Y + 16.0);
+				dragPreview.Visibility = Visibility.Visible;
+			}
+		};
+		PreviewDragLeave += (object s, DragEventArgs e) =>
+		{
+			Point position = e.GetPosition(Root);
+			if (position.X < 0.0 || position.Y < 0.0 || position.X > ActualWidth || position.Y > ActualHeight)
+			{
+				EndDragPreview();
+				Render();
+			}
+		};
+		PreviewDrop += (object s, DragEventArgs e) =>
+		{
+			EndDragPreview();
+			Dispatcher.BeginInvoke((Action)(() =>
+			{
+				if (!activeDrag && IsVisible)
+				{
+					Render();
+				}
+			}));
+		};
+		Closed += (object s, EventArgs e) =>
+		{
+			hoverTimer.Stop();
+		};
+	}
+
+	private void BeginGroupHover(string name)
+	{
+		if (!(hoverGroup == name))
+		{
+			hoverGroup = name;
+			hoverTimer.Stop();
+			hoverTimer.Start();
+		}
+	}
+
+	private void StopGroupHover(string name)
+	{
+		if (name == null || hoverGroup == name)
+		{
+			hoverGroup = null;
+			hoverTimer.Stop();
+		}
+	}
+
+	private void EndDragPreview()
+	{
+		activeDrag = false;
+		hoverTimer.Stop();
+		hoverGroup = null;
+		dragPreview.Visibility = Visibility.Collapsed;
+		dragPreviewText.Text = "";
+		dragPreviewIcon.Source = null;
+		folderSignature = "";
+	}
+
+	private void StartEntryDrag(FrameworkElement tile, Entry entry)
+	{
+		string[] array = ((editing && selected.Contains(entry.Path)) ? selected.ToArray() : new string[1] { entry.Path });
+		DataObject dataObject = new DataObject();
+		dataObject.SetData("GlassBoard.Entry", entry.Path);
+		dataObject.SetData("GlassBoard.Entries", array);
+		dataObject.SetData("GlassBoard.SourceGroup", currentGroup);
+		dragPreviewText.Text = ((array.Length == 1) ? entry.Name : (entry.Name + " 等 " + array.Length + " 个"));
+		try
+		{
+			dragPreviewIcon.Source = FeatureUi.Icon(entry, C.Prefs.Dock.ShowShortcutOverlays, true);
+		}
+		catch
+		{
+			dragPreviewIcon.Source = null;
+		}
+		bool modalBusy = ModalBusy;
+		ModalBusy = true;
+		activeDrag = true;
+		C.Dock.BeginBoardPinDrag();
+		try
+		{
+			DragDrop.DoDragDrop(tile, dataObject, DragDropEffects.Copy | DragDropEffects.Move);
+		}
+		finally
+		{
+			C.Dock.EndBoardPinDrag();
+			EndDragPreview();
+			ModalBusy = modalBusy;
+			Render();
+		}
+	}
+
+	private DragDropEffects GroupDragEffect(IDataObject data, string name)
+	{
+		if (name == "全部")
+		{
+			return DragDropEffects.None;
+		}
+		if (DraggedEntries(data).Length != 0)
+		{
+			if (!data.GetDataPresent("GlassBoard.SourceGroup") || !((string)data.GetData("GlassBoard.SourceGroup") == "全部"))
+			{
+				return DragDropEffects.Move;
+			}
+			return DragDropEffects.Copy;
+		}
+		if (!data.GetDataPresent(DataFormats.FileDrop))
+		{
+			return DragDropEffects.None;
+		}
+		return DragDropEffects.Copy;
+	}
+
+	public void ApplyDisplayOptions()
+	{
+		if (C.Prefs.BoardHideGroups)
+		{
+			currentGroup = "全部";
+		}
+		if (C.Prefs.BoardHideSearch && Search != null)
+		{
+			Search.Clear();
+		}
+		if (IsVisible)
+		{
+			BuildForSize();
+			QueueSizeRefresh();
+		}
+	}
+
+	private void MoreMenu()
+	{
+		ContextMenu menu = MenuTheme.Create(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
+		iconMenu = menu;
+		menu.Closed += (object s, RoutedEventArgs e) =>
+		{
+			if (iconMenu == menu)
+			{
+				iconMenu = null;
+			}
+		};
+		Action<string, Action, bool> action = (string label, Action action2, bool enabled) =>
+		{
+			MenuItem menuItem = new MenuItem
+			{
+				Header = label,
+				IsEnabled = enabled
+			};
+			menuItem.Click += (object s, RoutedEventArgs e) =>
+			{
+				bool modalBusy = ModalBusy;
+				ModalBusy = true;
+				try
+				{
+					menu.IsOpen = false;
+					action2();
+				}
+				finally
+				{
+					ModalBusy = modalBusy;
+				}
+			};
+			menu.Items.Add(menuItem);
+		};
+		action("撤销 · Ctrl+Z", () =>
+		{
+			C.UndoBoard();
+		}, C.CanUndoRemoval);
+		action("重做 · Ctrl+Y", () =>
+		{
+			C.RedoBoard();
+		}, C.CanRedoBoard);
+		menu.Items.Add(new Separator());
+		action("图标间距与默认大小", () =>
+		{
+			IconSettings();
+		}, arg3: true);
+		action(C.Prefs.BoardHideGroups ? "显示分组栏" : "隐藏分组栏 · 显示全部图标", () =>
+		{
+			C.Prefs.BoardHideGroups = !C.Prefs.BoardHideGroups;
+			C.Save();
+			ApplyDisplayOptions();
+		}, arg3: true);
+		action(foldersVisible ? "收起分组文件夹" : "展开分组文件夹", () =>
+		{
+			C.Prefs.BoardHideFolders = !C.Prefs.BoardHideFolders;
+			C.Save();
+			ApplyDisplayOptions();
+		}, !C.Prefs.BoardHideGroups);
+		action("自动分组", () =>
+		{
+			C.AutoGroupApps();
+		}, arg3: true);
+		action("管理分组", () =>
+		{
+			C.ManageGroups();
+		}, arg3: true);
+		action("工作区", () =>
+		{
+			C.ManageWorkspaces();
+		}, arg3: true);
+		action("外观方案", () =>
+		{
+			C.ManageSchemes();
+		}, arg3: true);
+		menu.Items.Add(new Separator());
+		action("导出完整备份", () =>
+		{
+			C.ExportFullBackup();
+		}, arg3: true);
+		action("恢复完整备份", () =>
+		{
+			C.RestoreFullBackup();
+		}, arg3: true);
+		action("支持创作者 · 森霖sama", () =>
+		{
+			C.Settings(5);
+		}, arg3: true);
+		menu.PlacementTarget = this;
+		menu.IsOpen = true;
+	}
+
+	private void InitResizeRefresh()
+	{
+		sizeRefresh.Tick += (object s, EventArgs e) =>
+		{
+			sizeRefresh.Stop();
+			ApplySizeRefresh();
+		};
+	}
+
+	private void QueueSizeRefresh()
+	{
+		if (Tiles != null && !resizingPanel && !refreshingSize && (IsVisible || preparingView) && !sizeRefresh.IsEnabled)
+		{
+			sizeRefresh.Start();
+		}
+	}
+
+	private void ApplySizeRefresh()
+	{
+		if (Tiles == null || resizingPanel || refreshingSize || (!IsVisible && !preparingView))
+		{
+			return;
+		}
+		refreshingSize = true;
+		try
+		{
+			int num = BoardIconRules.Columns((Tiles.ActualWidth > 0.0) ? Tiles.ActualWidth : (Width - 104.0), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
+			int num2 = BoardIconRules.Rows((Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight : (Height - (double)(C.Prefs.BoardHideGroups ? 180 : 258)), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
+			if (iconsDirty || columns != num || Tiles.Rows != num2)
+			{
+				iconsDirty = false;
+				columns = num;
+				capacity = num * num2;
+				Tiles.Columns = num;
+				Tiles.Rows = num2;
+				Render();
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+			SetStatus("面板刷新未完成，请重新打开面板。");
+		}
+		finally
+		{
+			refreshingSize = false;
+		}
+	}
+
+	internal void CheckResizeRefresh()
+	{
+		Open();
+		string text = Search.Text;
+		TextBox search = Search;
+		UniformGrid tiles = Tiles;
+		double[] array = new double[4] { 900.0, 1200.0, 920.0, 1260.0 };
+		foreach (double width in array)
+		{
+			Width = width;
+			Height = 620.0;
+			UpdateLayout();
+			QueueSizeRefresh();
+			ApplySizeRefresh();
+			UpdateLayout();
+		}
+		sizeRefresh.Stop();
+		if (search != Search || tiles != Tiles || Search.Text != text)
+		{
+			throw new Exception("缩放不应重建搜索框或图标宿主");
+		}
+		Hide();
+	}
+}

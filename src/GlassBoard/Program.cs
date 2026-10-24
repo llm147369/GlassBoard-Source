@@ -1,0 +1,244 @@
+using System;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Windows;
+using System.Windows.Threading;
+
+namespace GlassBoard;
+
+public static class Program
+{
+	private static void CleanLegacyUpdater()
+	{
+		try
+		{
+			string folder = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GlassBoard");
+			string updates = System.IO.Path.Combine(folder, "updates");
+			if (System.IO.Directory.Exists(updates))
+			{
+				try
+				{
+					System.IO.Directory.Delete(updates, recursive: true);
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
+			}
+			string updater = System.IO.Path.Combine(folder, "GlassBoard.Updater.exe");
+			if (System.IO.File.Exists(updater))
+			{
+				try
+				{
+					System.IO.File.Delete(updater);
+				}
+				catch (Exception ex2)
+				{
+					Store.Log(ex2);
+				}
+			}
+		}
+		catch
+		{
+		}
+	}
+
+	[STAThread]
+	public static int Main(string[] args)
+	{
+		if (args.Length != 0 && args[0] == "--netease-ui-bridge")
+		{
+			return NeteaseUiReader.Run();
+		}
+		if (args.Length != 0 && args[0] == "--self-test")
+		{
+			return SelfTest.Run();
+		}
+		if (args.Length != 0 && args[0] == "--restore-shell")
+		{
+			try
+			{
+				if (Native.RequestRestore())
+				{
+					return 0;
+				}
+				try
+				{
+					TaskbarAutoHide.ShowAndClear();
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
+				DesktopVisibility.ShowAll();
+				MessageBox.Show("已执行任务栏和桌面图标恢复。", "GlassBoard");
+				return 0;
+			}
+			catch (Exception ex2)
+			{
+				MessageBox.Show(ex2.Message, "GlassBoard");
+				return 1;
+			}
+		}
+		// 每次启动自动清除旧版在线更新器残留（%LOCALAPPDATA%\GlassBoard\updates 与
+		// GlassBoard.Updater.exe）。旧版卸载只删安装目录，更新器缓存里的旧版程序会在
+		// 重启后被旧计划任务恢复出来——"装了新版、重启又变回 0.9.17"的元凶。
+		CleanLegacyUpdater();
+		bool createdNew;
+		using (new Mutex(initiallyOwned: true, "Local\\GlassBoard.Desktop.v1", out createdNew))
+		{
+			if (!createdNew)
+			{
+				// 已有实例在运行：先判断它是不是旧版（0.9.18 之前的二改前版本）。
+				// 若是，直接结束旧版并重启本进程接管——否则旧版抢先自启（计划任务/Run 键
+				// 指向旧目录）时，新版本每次都会被"已有实例"顶掉，用户看到的永远是旧程序。
+				int takeover = 0;
+				for (int ai = 1; ai < args.Length; ai++)
+				{
+					if (args[ai].StartsWith("--takeover=", StringComparison.Ordinal))
+					{
+						int.TryParse(args[ai].Substring("--takeover=".Length), out takeover);
+					}
+				}
+				// 找出所有 GlassBoard 进程里"非本机路径"的实例：旧版可能藏在别的目录
+				// 或更新器缓存里，读 FileVersion 会因权限/WOW64 失败——比较进程路径更可靠，
+				// 路径不同（或读不到路径）即视为外来实例，一律结束并接管。
+				string selfPath = Assembly.GetExecutingAssembly().Location.ToLowerInvariant();
+				System.Collections.Generic.List<System.Diagnostics.Process> foreign = new System.Collections.Generic.List<System.Diagnostics.Process>();
+				try
+				{
+					foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcessesByName("GlassBoard"))
+					{
+						if (p.Id == System.Diagnostics.Process.GetCurrentProcess().Id) continue;
+						try
+						{
+							string pPath = (p.MainModule?.FileName ?? "").ToLowerInvariant();
+							if (pPath.Length == 0 || pPath != selfPath)
+								foreign.Add(p);
+						}
+						catch
+						{
+							foreign.Add(p);
+						}
+					}
+				}
+				catch
+				{
+				}
+				if (foreign.Count > 0 && takeover < 2)
+				{
+					foreach (System.Diagnostics.Process p in foreign)
+					{
+						try
+						{
+							p.Kill();
+							p.WaitForExit(3000);
+						}
+						catch
+						{
+						}
+					}
+					Thread.Sleep(400);
+					try
+					{
+						System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Assembly.GetExecutingAssembly().Location, "--takeover=" + (takeover + 1))
+						{
+							UseShellExecute = true
+						});
+					}
+					catch
+					{
+					}
+					return 0;
+				}
+				// 唤起已有实例的 Dock 后静默退出。
+				// 不再弹"已有 GlassBoard 在运行"提示框——开机自启动、重复点击 EXE
+				// 都不应打扰用户，第二个实例直接把请求转发给第一个实例。
+				try
+				{
+					Native.RequestRestore();
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
+				return 0;
+			}
+			try
+			{
+				Store.Trace("START exe=" + Assembly.GetExecutingAssembly().Location + " OS=" + Environment.OSVersion?.ToString() + " CLR=" + Environment.Version);
+				try
+				{
+					DesktopVisibility.Recover();
+				}
+				catch (Exception ex3)
+				{
+					Store.Log(ex3);
+				}
+				try
+				{
+					TaskbarAutoHide.Restore();
+				}
+				catch (Exception ex4)
+				{
+					Store.Log(ex4);
+				}
+				ConfigImport.TryRun();
+				Application application = new Application();
+				application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+				application.Exit += (object s, ExitEventArgs e) =>
+				{
+					try
+					{
+						DesktopVisibility.RestoreOriginal();
+					}
+					catch (Exception ex6)
+					{
+						Store.Log(ex6);
+					}
+					try
+					{
+						TaskbarAutoHide.Restore();
+					}
+					catch (Exception ex7)
+					{
+						Store.Log(ex7);
+					}
+				};
+				Controller controller = null;
+				application.DispatcherUnhandledException += (object s, DispatcherUnhandledExceptionEventArgs e) =>
+				{
+					Store.Log(e.Exception);
+					if (controller != null)
+					{
+						try
+						{
+							Store.Save(controller.Prefs);
+						}
+						catch (Exception ex6)
+						{
+							Store.Log(ex6);
+						}
+					}
+					MessageBox.Show("操作失败，详情已记录在配置文件夹 error.log。\n" + e.Exception.Message, "GlassBoard");
+					e.Handled = true;
+				};
+				controller = new Controller();
+				if (args.Any((string a) => a == "--recover-widgets"))
+				{
+					controller.RecoverWidgets();
+				}
+				application.Run();
+				GC.KeepAlive(controller);
+				return 0;
+			}
+			catch (Exception ex5)
+			{
+				Store.Log(ex5);
+				MessageBox.Show("启动失败：" + ex5.Message, "GlassBoard");
+				return 1;
+			}
+		}
+	}
+}
