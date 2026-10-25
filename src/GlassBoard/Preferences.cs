@@ -124,6 +124,7 @@ public class Preferences
 	[DataMember]
 	public Dictionary<string, string> LearnedGroups = new Dictionary<string, string>();
 
+	[DataMember]
 	public bool HotkeyMigrationConflict;
 
 	[OnDeserializing]

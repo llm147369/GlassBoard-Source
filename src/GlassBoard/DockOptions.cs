@@ -79,6 +79,8 @@ public class DockOptions
 
 	[DataMember]
 	public bool ShowControlCenter = true;
+
+	[DataMember]
 	public bool ShowRunningList = true;
 
 	[DataMember]
