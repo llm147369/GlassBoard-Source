@@ -59,6 +59,13 @@ public class BoardWindow : GlassWindow
 
 	private RowDefinition bulkRow;
 
+	// 媒体悬浮预览：图片显示大图，视频静音播放（任务栏缩略图风格）
+	private Popup mediaPreviewPopup;
+	private DispatcherTimer mediaPreviewTimer;
+	private Entry mediaPreviewEntry;
+	private FrameworkElement mediaPreviewAnchor;
+	private MediaElement mediaPreviewPlayer;
+
 	private TextBlock selectionCount;
 
 	private Button selectAll;
@@ -1444,6 +1451,7 @@ public class BoardWindow : GlassWindow
 
 	public void Render(bool animate = false)
 	{
+		CloseMediaPreview();
 		if (Tiles == null || (!IsVisible && !preparingView))
 		{
 			return;
@@ -1475,6 +1483,205 @@ public class BoardWindow : GlassWindow
 		Render(animate: true);
 	}
 
+	// —— 媒体悬浮预览：图片显示大图，视频静音循环播放（悬浮 450ms 触发）——
+
+	private void QueueMediaPreview(Entry entry, FrameworkElement anchor)
+	{
+		if (editing || !MediaThumb.IsPreviewable(entry.Path))
+		{
+			return;
+		}
+		mediaPreviewEntry = entry;
+		mediaPreviewAnchor = anchor;
+		if (mediaPreviewTimer == null)
+		{
+			mediaPreviewTimer = new DispatcherTimer
+			{
+				Interval = TimeSpan.FromMilliseconds(450.0)
+			};
+			mediaPreviewTimer.Tick += (object s, EventArgs e) =>
+			{
+				mediaPreviewTimer.Stop();
+				Entry captured = mediaPreviewEntry;
+				FrameworkElement capturedAnchor = mediaPreviewAnchor;
+				if (captured != null && capturedAnchor != null)
+				{
+					OpenMediaPreview(captured, capturedAnchor);
+				}
+			};
+		}
+		mediaPreviewTimer.Stop();
+		mediaPreviewTimer.Start();
+	}
+
+	private void CancelMediaPreview()
+	{
+		mediaPreviewTimer?.Stop();
+		CloseMediaPreview();
+	}
+
+	private void OpenMediaPreview(Entry entry, FrameworkElement anchor)
+	{
+		CloseMediaPreview();
+		mediaPreviewPopup = new Popup
+		{
+			PlacementTarget = anchor,
+			Placement = PlacementMode.Top,
+			VerticalOffset = -8.0,
+			AllowsTransparency = true,
+			PopupAnimation = PopupAnimation.Fade,
+			IsHitTestVisible = false,
+			StaysOpen = false,
+			Child = BuildMediaCard(entry)
+		};
+		mediaPreviewPopup.IsOpen = true;
+	}
+
+	private FrameworkElement BuildMediaCard(Entry entry)
+	{
+		string ext = Path.GetExtension(entry.Path);
+		bool isVideo = MediaThumb.IsVideo(entry.Path);
+		Grid host = new Grid
+		{
+			Width = 424.0,
+			Height = 238.0,
+			ClipToBounds = true
+		};
+		if (isVideo)
+		{
+			MediaElement player = new MediaElement
+			{
+				Stretch = Stretch.Uniform,
+				LoadedBehavior = MediaState.Play,
+				UnloadedBehavior = MediaState.Close,
+				Volume = 0.0,
+				ScrubbingEnabled = true
+			};
+			player.MediaFailed += (object s, ExceptionRoutedEventArgs e) =>
+			{
+				host.Children.Clear();
+				host.Children.Add(new TextBlock
+				{
+					Text = "无法解码该视频（缺少系统解码器）",
+					Foreground = new SolidColorBrush(Color.FromRgb(150, 155, 170)),
+					FontSize = 13.0,
+					HorizontalAlignment = HorizontalAlignment.Center,
+					VerticalAlignment = VerticalAlignment.Center
+				});
+			};
+			player.Source = new Uri(entry.Path);
+			mediaPreviewPlayer = player;
+			host.Children.Add(player);
+		}
+		else
+		{
+			ImageSource src = null;
+			if (string.Equals(ext, ".svg", StringComparison.OrdinalIgnoreCase))
+			{
+				src = MediaThumb.SvgPreview(entry.Path, 480);
+			}
+			else
+			{
+				src = MediaThumb.LoadFile(entry.Path, 480);
+				if (src == null)
+				{
+					src = ShellThumbnail.Get(entry.Path, 480);
+				}
+			}
+			if (src != null)
+			{
+				System.Windows.Controls.Image img = new System.Windows.Controls.Image
+				{
+					Source = src,
+					MaxWidth = 424.0,
+					MaxHeight = 238.0,
+					Stretch = Stretch.Uniform
+				};
+				RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+				host.Children.Add(img);
+			}
+			else
+			{
+				host.Children.Add(new TextBlock
+				{
+					Text = "无法生成预览",
+					Foreground = new SolidColorBrush(Color.FromRgb(150, 155, 170)),
+					FontSize = 13.0,
+					HorizontalAlignment = HorizontalAlignment.Center,
+					VerticalAlignment = VerticalAlignment.Center
+				});
+			}
+		}
+		string sizeText = "—";
+		try
+		{
+			sizeText = FormatBytes(new FileInfo(entry.Path).Length);
+		}
+		catch
+		{
+		}
+		StackPanel caption = new StackPanel
+		{
+			Margin = new Thickness(12.0, 9.0, 12.0, 11.0)
+		};
+		caption.Children.Add(new TextBlock
+		{
+			Text = entry.Name,
+			FontSize = 13.0,
+			FontWeight = FontWeights.SemiBold,
+			Foreground = Brushes.White,
+			TextTrimming = TextTrimming.CharacterEllipsis
+		});
+		caption.Children.Add(new TextBlock
+		{
+			Text = ((isVideo ? "视频 · " : "图片 · ") + sizeText + " · 点击磁贴用默认应用打开"),
+			FontSize = 11.0,
+			Foreground = new SolidColorBrush(Color.FromRgb(150, 155, 170)),
+			Margin = new Thickness(0.0, 3.0, 0.0, 0.0)
+		});
+		StackPanel layout = new StackPanel();
+		layout.Children.Add(host);
+		layout.Children.Add(caption);
+		return new Border
+		{
+			CornerRadius = new CornerRadius(10.0),
+			Background = new SolidColorBrush(Color.FromArgb(247, 32, 35, 45)),
+			BorderBrush = new SolidColorBrush(Color.FromArgb(40, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
+			BorderThickness = new Thickness(1.0),
+			Child = layout,
+			SnapsToDevicePixels = true
+		};
+	}
+
+	private void CloseMediaPreview()
+	{
+		mediaPreviewTimer?.Stop();
+		if (mediaPreviewPopup != null)
+		{
+			mediaPreviewPopup.IsOpen = false;
+			mediaPreviewPopup = null;
+		}
+		if (mediaPreviewPlayer != null)
+		{
+			mediaPreviewPlayer.Stop();
+			mediaPreviewPlayer.Source = null;
+			mediaPreviewPlayer = null;
+		}
+	}
+
+	private static string FormatBytes(long bytes)
+	{
+		string[] units = { "B", "KB", "MB", "GB", "TB" };
+		double value = bytes;
+		int unit = 0;
+		while (value >= 1024.0 && unit < units.Length - 1)
+		{
+			value /= 1024.0;
+			unit++;
+		}
+		return value.ToString((unit == 0) ? "0" : "0.##", System.Globalization.CultureInfo.InvariantCulture) + " " + units[unit];
+	}
+
 	private FrameworkElement Tile(Entry a, int index, bool animate)
 	{
 		bool isSelected = editing && selected.Contains(a.Path);
@@ -1500,7 +1707,7 @@ public class BoardWindow : GlassWindow
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		grid.Children.Add(stackPanel);
-		ImageSource imageSource = FeatureUi.Icon(a, C.Prefs.Dock.ShowShortcutOverlays, true);
+		ImageSource imageSource = MediaThumb.TileIcon(a, C.Prefs.Dock.ShowShortcutOverlays);
 		if (imageSource != null)
 		{
 			System.Windows.Controls.Image image = new System.Windows.Controls.Image
@@ -1595,10 +1802,12 @@ public class BoardWindow : GlassWindow
 		tile.MouseEnter += (object s, MouseEventArgs e) =>
 		{
 			hover(obj: true);
+			QueueMediaPreview(a, tile);
 		};
 		tile.MouseLeave += (object s, MouseEventArgs e) =>
 		{
 			hover(obj: false);
+			CancelMediaPreview();
 		};
 		if (animate && MotionEnabled)
 		{
