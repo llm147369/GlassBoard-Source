@@ -29,12 +29,14 @@
 dotnet build src\GlassBoard.csproj -c Release
 ```
 
+> **无需编译也能用**：仓库 `release\` 文件夹内已包含编译好的便携版（含全部运行时文件）。拉取仓库后直接双击 `release\GlassBoard.exe` 即可运行，无需下载发布包，也无需安装 .NET SDK。
+
 ## 发布说明
 
-本仓库源码对应 v0.9.18（程序集版本 0.9.18.3）。安装包与便携包在 `dist\` 目录：
+本仓库源码对应 v0.9.18（程序集版本 0.9.18.3）。已编译的便携版在仓库 `release\` 目录（拉取即用），GitHub Release 页面同时提供便携压缩包：
 
-- `GlassBoard-Setup-0.9.18.exe`：安装包（含推荐配置导入）
-- `GlassBoard-0.9.18-portable.zip`：便携版
+- `release\GlassBoard.exe`：编译好的便携版，直接运行
+- GitHub Release：`GlassBoard-0.9.18.3-portable.zip` 便携压缩包
 
 ## 原作者
 

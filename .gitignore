@@ -24,3 +24,7 @@ GlassBoard.exe.config
 SHA256SUMS.txt
 *.cmd
 *.bat
+
+# 便携版编译产物：release/ 随仓库分发（拉取即用，无需下载发布包）
+!release/
+!release/**

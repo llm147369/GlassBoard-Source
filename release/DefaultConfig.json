@@ -1,0 +1,283 @@
+{
+    "Apps": [],
+    "AutoCheckUpdates": true,
+    "AutoDesktopImport": true,
+    "AutoGameMode": false,
+    "AutoGrouping": true,
+    "AutoHideTaskbar": false,
+    "BoardDismissOnDeactivate": true,
+    "BoardHideFolders": false,
+    "BoardHideGroups": true,
+    "BoardHideSearch": true,
+    "BoardIconGap": 12,
+    "BoardIconSize": 54,
+    "BoardMaterial": {
+        "Gloss": 0,
+        "Grain": 0,
+        "Kind": 0,
+        "Shadow": true,
+        "Tint": "#FFFFFF"
+    },
+    "ControlCenter": {
+        "ShowBluetooth": true,
+        "ShowBrightness": true,
+        "ShowNetworks": true,
+        "ShowOutput": true,
+        "ShowVolume": true
+    },
+    "Dock": {
+        "Accent": 0,
+        "Alignment": 1,
+        "AlwaysOnTop": false,
+        "AutoHide": false,
+        "BlurRadius": 34,
+        "ComputerStyle": 1,
+        "EdgeRange": 12,
+        "EdgeStrength": 1,
+        "HideDelay": 900,
+        "IconPack": 0,
+        "IconSize": 46,
+        "ItemOrder": [
+            "glassboard://dock/apps",
+            "glassboard://dock/computer",
+            "glassboard://dock/power",
+            "glassboard://dock/network",
+            "glassboard://dock/settings",
+            "glassboard://dock/control",
+            "glassboard://dock/running"
+        ],
+        "Material": {
+            "Gloss": 0,
+            "Grain": 0,
+            "Kind": 0,
+            "Shadow": true,
+            "Tint": "#FFFFFF"
+        },
+        "MaxPinned": 20,
+        "MotionEnabled": true,
+        "MotionLevel": 0.6,
+        "Offset": 0,
+        "OpacityPercent": 0,
+        "Padding": 8,
+        "Radius": 20,
+        "RunningOrder": [],
+        "SharperIcons": true,
+        "ShowComputer": true,
+        "ShowControlCenter": true,
+        "ShowLabels": false,
+        "ShowNetwork": false,
+        "ShowPower": true,
+        "ShowRunning": false,
+        "ShowSeparator": false,
+        "ShowSettings": true,
+        "ShowShortcutOverlays": false,
+        "Spacing": 1,
+        "SpringReveal": true,
+        "Zoom": 1.2
+    },
+    "DockGap": 48,
+    "DockOrder": [],
+    "FormatVersion": 2,
+    "GameMode": false,
+    "GlobalStyle": {
+        "Blur": 34,
+        "Edge": 1,
+        "Material": {
+            "Gloss": 0,
+            "Grain": 0,
+            "Kind": 0,
+            "Shadow": true,
+            "Tint": "#FFFFFF"
+        },
+        "OpacityPercent": 10,
+        "Radius": 20,
+        "Unify": true
+    },
+    "Groups": [],
+    "HideDesktopIcons": true,
+    "HideTaskbar": true,
+    "Hotkeys": [
+        {
+            "ActionId": 1,
+            "Enabled": true,
+            "Key": 32,
+            "Modifiers": 3
+        },
+        {
+            "ActionId": 2,
+            "Enabled": true,
+            "Key": 84,
+            "Modifiers": 3
+        },
+        {
+            "ActionId": 3,
+            "Enabled": true,
+            "Key": 68,
+            "Modifiers": 3
+        },
+        {
+            "ActionId": 4,
+            "Enabled": true,
+            "Key": 65,
+            "Modifiers": 3
+        },
+        {
+            "ActionId": 5,
+            "Enabled": true,
+            "Key": 83,
+            "Modifiers": 3
+        },
+        {
+            "ActionId": 6,
+            "Enabled": true,
+            "Key": 82,
+            "Modifiers": 3
+        },
+        {
+            "ActionId": 7,
+            "Enabled": true,
+            "Key": 72,
+            "Modifiers": 3
+        }
+    ],
+    "Imported": false,
+    "LastUpdateCheckUtc": null,
+    "LearnedGroups": [],
+    "Light": false,
+    "OpacityPercent": 10,
+    "PanelSize": 1,
+    "Placement": {
+        "DockCenter": null,
+        "DockLeft": null,
+        "DockLocked": false,
+        "DockTop": null,
+        "PanelHeight": null,
+        "PanelLeft": null,
+        "PanelLocked": false,
+        "PanelTop": null,
+        "PanelWidth": null,
+        "WidgetLeft": null,
+        "WidgetTop": null
+    },
+    "Removed": [],
+    "RemovedIdentities": [],
+    "SystemIconGlyphs": [],
+    "SystemIconImages": [],
+    "UpdateDirectConnection": false,
+    "Widgets": {
+        "Alarms": [],
+        "AutoNativeMediaCompatibility": true,
+        "City": "",
+        "Clock": true,
+        "ClockPanel": 0,
+        "CompactMusic": false,
+        "HideControls": true,
+        "Locked": true,
+        "Material": {
+            "Gloss": 0,
+            "Grain": 0,
+            "Kind": 0,
+            "Shadow": true,
+            "Tint": "#FFFFFF"
+        },
+        "Music": true,
+        "MusicMode": "system",
+        "MusicPanel": 0,
+        "NativeMediaCompatibility": false,
+        "Notes": false,
+        "NotesPanel": 0,
+        "OpacityPercent": 10,
+        "Panels": [
+            {
+                "Height": null,
+                "HideControls": true,
+                "Id": 0,
+                "Left": null,
+                "OpacityPercent": 20,
+                "Top": null,
+                "Width": 450
+            },
+            {
+                "Height": null,
+                "Id": 1,
+                "Left": null,
+                "OpacityPercent": null,
+                "Top": null,
+                "Width": null
+            },
+            {
+                "Height": null,
+                "Id": 2,
+                "Left": null,
+                "OpacityPercent": null,
+                "Top": null,
+                "Width": null
+            }
+        ],
+        "Playlist": [],
+        "RepeatMode": 0,
+        "Shuffle": false,
+        "Styles": [
+            {
+                "ClockSize": 48,
+                "ClockStyle": 0,
+                "Font": "",
+                "Frameless": false,
+                "Hour24": true,
+                "Kind": "weather",
+                "MusicButtons": 0,
+                "ShowDate": true,
+                "TextColor": "",
+                "TextOpacity": 100,
+                "TextShadow": false
+            },
+            {
+                "ClockSize": 48,
+                "ClockStyle": 0,
+                "Font": "",
+                "Frameless": false,
+                "Hour24": true,
+                "Kind": "music",
+                "MusicButtons": 2,
+                "ShowDate": true,
+                "TextColor": "",
+                "TextOpacity": 100,
+                "TextShadow": true
+            },
+            {
+                "ClockSize": 48,
+                "ClockStyle": 0,
+                "Font": "",
+                "Frameless": false,
+                "Hour24": true,
+                "Kind": "notes",
+                "MusicButtons": 0,
+                "ShowDate": true,
+                "TextColor": "",
+                "TextOpacity": 100,
+                "TextShadow": false
+            },
+            {
+                "ClockSize": 48,
+                "ClockStyle": 11,
+                "Font": "",
+                "Frameless": false,
+                "Hour24": true,
+                "Kind": "clock",
+                "MusicButtons": 0,
+                "ShowDate": true,
+                "TextColor": "",
+                "TextOpacity": 100,
+                "TextShadow": false
+            }
+        ],
+        "TimerDueUtc": null,
+        "TimerPausedSeconds": 0,
+        "Topmost": false,
+        "TrackIndex": 0,
+        "Volume": 1,
+        "Weather": false,
+        "WeatherPanel": 0
+    },
+    "Workspaces": []
+}

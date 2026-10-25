@@ -27,8 +27,9 @@ public static class UpdateNotice
 		content.Children.Add(Card("项目已开源，更新方式如下", new string[]
 		{
 			"源码仓库：https://github.com/llm147369/GlassBoard-Source",
-			"后续发布新版本时，可以直接用 AI 软件（如豆包、Codex、Cursor、Claude Code 等）拉取仓库最新代码，覆盖本地项目文件后重新编译，即可完成升级。",
-			"拉取覆盖只会替换程序文件，不会影响你的配置数据（配置保存在 %LocalAppData%\\GlassBoard，与项目目录无关）。",
+			"仓库 release 文件夹里已包含编译好的便携版：AI 软件拉取后直接运行 release\\GlassBoard.exe 即可，无需再下载发布包，也无需安装编译环境。",
+			"更新时用 AI 软件（如豆包、Codex、Cursor、Claude Code 等）拉取仓库最新代码覆盖本地，运行 release 里的新程序即完成升级。",
+			"覆盖只会替换程序文件，不会影响你的配置数据（配置保存在 %LocalAppData%\\GlassBoard，与项目目录无关）。",
 			"覆盖前建议先备份整个项目文件夹，避免自己改过的内容被覆盖丢失。"
 		}, accent, cardBrush, lineBrush));
 		content.Children.Add(Card("在线更新功能（即将上线）", new string[]
