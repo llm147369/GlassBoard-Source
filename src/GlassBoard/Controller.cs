@@ -1793,7 +1793,7 @@ public class Controller
 			});
 			stackPanel4.Children.Add(new TextBlock
 			{
-				Text = "可点击录制直接按组合键，保存后生效。右侧开关即时操作。\n隐藏开关：开启隐藏，关闭显示；自动开关：Windows 任务栏自动隐藏。",
+				Text = "可点击录制直接按组合键，保存后生效。右侧开关即时操作。\n隐藏开关：开启隐藏，关闭显示；自动开关：Windows 任务栏自动隐藏。\n修改组合时下方会实时探测冲突（可用/被占用）。快捷键在 GlassBoard 后台运行时始终有效：关闭面板不影响，托盘「退出」才失效；组合被其他软件占用时会每 5 秒自动重试，对方释放后自动接管。",
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				TextWrapping = TextWrapping.Wrap,
 				Margin = new Thickness(0.0, 8.0, 0.0, 18.0)
@@ -1976,6 +1976,31 @@ public class Controller
 				foreach (HotkeySetting hotkey in Prefs.Hotkeys)
 				{
 					string text2 = ((!hotkey.Enabled) ? "快捷键已关闭" : (Dock.HotkeyActive(hotkey.ActionId) ? "快捷键已注册" : "快捷键未注册，请换组合或重新注册"));
+					if (controls.TryGetValue(hotkey.ActionId, out Tuple<System.Windows.Controls.CheckBox, System.Windows.Controls.ComboBox, System.Windows.Controls.ComboBox> row) && row.Item1.IsChecked == true)
+					{
+						try
+						{
+							int mi = row.Item2.SelectedIndex;
+							string kn = (string)row.Item3.SelectedItem;
+							if (mi >= 0 && kn != null)
+							{
+								uint mods = HotkeyRules.ModifierValues[mi];
+								uint vk = keyChoices[kn];
+								if (mods != hotkey.Modifiers || vk != hotkey.Key || !hotkey.Enabled)
+								{
+									string probe = Dock.ProbeHotkey(mods, vk);
+									text2 = ((probe == null) ? "新组合可用，保存后生效" : ((probe.Length == 0) ? "该组合已被其他程序占用，请换一个" : "该组合与本程序「" + probe + "」重复，请换一个"));
+								}
+							}
+						}
+						catch
+						{
+						}
+					}
+					else if (controls.TryGetValue(hotkey.ActionId, out row) && row.Item1.IsChecked == false && hotkey.Enabled)
+					{
+						text2 = "已取消启用，保存后关闭";
+					}
 					if (hotkey.ActionId == 2 || hotkey.ActionId == 3)
 					{
 						bool taskbar = hotkey.ActionId == 2;

@@ -418,6 +418,32 @@ public class DockWindow : GlassWindow
 		return false;
 	}
 
+	/// <summary>实时探测组合键占用情况：null=可用；""=被其他程序占用；非空字符串=与本程序某动作重复（返回该动作名）。</summary>
+	public string ProbeHotkey(uint modifiers, uint key)
+	{
+		if (hotkeys != null)
+		{
+			foreach (HotkeySetting item in hotkeys.Active)
+			{
+				if (item.Modifiers == modifiers && item.Key == key)
+				{
+					return HotkeyRules.Actions[item.ActionId - 1];
+				}
+			}
+		}
+		if (source == null)
+		{
+			return null;
+		}
+		int id = 24576 + (int)(key % 511);
+		if (Native.RegisterHotKey(source.Handle, id, modifiers | 0x4000, key))
+		{
+			Native.UnregisterHotKey(source.Handle, id);
+			return null;
+		}
+		return "";
+	}
+
 	public string RetryHotkeys()
 	{
 		if (hotkeys == null)
