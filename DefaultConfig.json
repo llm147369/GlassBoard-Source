@@ -37,7 +37,15 @@
         "HideDelay": 900,
         "IconPack": 0,
         "IconSize": 46,
-        "ItemOrder": [],
+        "ItemOrder": [
+            "glassboard://dock/apps",
+            "glassboard://dock/computer",
+            "glassboard://dock/power",
+            "glassboard://dock/network",
+            "glassboard://dock/settings",
+            "glassboard://dock/control",
+            "glassboard://dock/running"
+        ],
         "Material": {
             "Gloss": 0,
             "Grain": 0,

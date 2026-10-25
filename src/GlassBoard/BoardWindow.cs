@@ -181,6 +181,14 @@ public class BoardWindow : GlassWindow
 				Keyboard.ClearFocus();
 			}
 		};
+		// 媒体预览打开期间：光标离开磁贴与预览的合并区域才收起，避免悬浮抖动反复开关
+		MouseMove += delegate
+		{
+			if (mediaPreviewPopup != null && mediaPreviewPopup.IsOpen && !IsCursorOverMediaPreview())
+			{
+				CancelMediaPreview();
+			}
+		};
 		InitDragExperience();
 		IsVisibleChanged += (object s, DependencyPropertyChangedEventArgs e) =>
 		{
@@ -1491,6 +1499,11 @@ public class BoardWindow : GlassWindow
 		{
 			return;
 		}
+		// 同一入口的预览已打开时不重开：悬浮动画抖动会反复触发 Enter，重开会闪
+		if (mediaPreviewPopup != null && mediaPreviewPopup.IsOpen && ReferenceEquals(mediaPreviewAnchor, anchor))
+		{
+			return;
+		}
 		mediaPreviewEntry = entry;
 		mediaPreviewAnchor = anchor;
 		if (mediaPreviewTimer == null)
@@ -1520,6 +1533,42 @@ public class BoardWindow : GlassWindow
 		CloseMediaPreview();
 	}
 
+	// 悬浮动画的缩放/位移会让光标在磁贴边缘反复进出（Enter/Leave 抖动），
+	// 预览已打开时不再因 Leave 立即关闭，改由窗口级 MouseMove 判断光标真正离开后收起。
+	private void OnMediaTileLeave()
+	{
+		if (mediaPreviewPopup != null && mediaPreviewPopup.IsOpen)
+		{
+			return;
+		}
+		CancelMediaPreview();
+	}
+
+	private bool IsCursorOverMediaPreview()
+	{
+		System.Drawing.Point raw = System.Windows.Forms.Cursor.Position;
+		System.Windows.Point cursor = new System.Windows.Point(raw.X, raw.Y);
+		if (mediaPreviewAnchor != null && mediaPreviewAnchor.IsVisible)
+		{
+			System.Windows.Point tl = mediaPreviewAnchor.PointToScreen(new System.Windows.Point(0.0, 0.0));
+			System.Windows.Rect anchorRect = new System.Windows.Rect(tl.X, tl.Y, Math.Max(1.0, mediaPreviewAnchor.ActualWidth), Math.Max(1.0, mediaPreviewAnchor.ActualHeight));
+			if (anchorRect.Contains(cursor))
+			{
+				return true;
+			}
+		}
+		if (mediaPreviewPopup != null && mediaPreviewPopup.IsOpen && mediaPreviewPopup.Child is FrameworkElement child && child.IsVisible)
+		{
+			System.Windows.Point tl2 = child.PointToScreen(new System.Windows.Point(0.0, 0.0));
+			System.Windows.Rect popupRect = new System.Windows.Rect(tl2.X, tl2.Y, Math.Max(1.0, child.ActualWidth), Math.Max(1.0, child.ActualHeight));
+			if (popupRect.Contains(cursor))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private void OpenMediaPreview(Entry entry, FrameworkElement anchor)
 	{
 		CloseMediaPreview();
@@ -1531,7 +1580,7 @@ public class BoardWindow : GlassWindow
 			AllowsTransparency = true,
 			PopupAnimation = PopupAnimation.Fade,
 			IsHitTestVisible = false,
-			StaysOpen = false,
+			StaysOpen = true,
 			Child = BuildMediaCard(entry)
 		};
 		mediaPreviewPopup.Closed += (object s, EventArgs e) =>
@@ -1830,7 +1879,7 @@ public class BoardWindow : GlassWindow
 		tile.MouseLeave += (object s, MouseEventArgs e) =>
 		{
 			hover(obj: false);
-			CancelMediaPreview();
+			OnMediaTileLeave();
 		};
 		if (animate && MotionEnabled)
 		{
