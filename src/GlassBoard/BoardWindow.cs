@@ -687,10 +687,10 @@ public class BoardWindow : GlassWindow
 			BorderThickness = new Thickness(1.0),
 			BorderBrush = new SolidColorBrush(Color.FromArgb(90, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
 			Background = new SolidColorBrush(Color.FromArgb(25, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
-			HorizontalAlignment = HorizontalAlignment.Center,
-			MinWidth = 280.0,
-			MaxWidth = 440.0,
-			Margin = new Thickness(10.0, 0.0, 10.0, 9.0)
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			ClipToBounds = true,
+			Height = 36.0,
+			Margin = new Thickness(8.0, 4.0, 8.0, 4.0)
 		};
 		Grid grid2 = (Grid)(border.Child = new Grid());
 		// 放大镜与提示文字放在同一个水平 StackPanel 里，紧贴输入框左侧：
@@ -727,7 +727,8 @@ public class BoardWindow : GlassWindow
 			FontSize = 15.0,
 			Foreground = MutedBrush,
 			Margin = new Thickness(6.0, 0.0, 0.0, 0.0),
-			VerticalAlignment = VerticalAlignment.Center
+			VerticalAlignment = VerticalAlignment.Center,
+			TextTrimming = TextTrimming.CharacterEllipsis
 		};
 		searchHint.Children.Add(magnifierBox);
 		searchHint.Children.Add(hint);
@@ -740,7 +741,7 @@ public class BoardWindow : GlassWindow
 			BorderThickness = new Thickness(0.0),
 			CaretBrush = TextBrush,
 			VerticalContentAlignment = VerticalAlignment.Center,
-			Padding = new Thickness(36.0, 0.0, 18.0, 0.0)
+			Padding = new Thickness(30.0, 0.0, 12.0, 0.0)
 		};
 		System.Windows.Media.Color idleBorder = Color.FromArgb(90, byte.MaxValue, byte.MaxValue, byte.MaxValue);
 		System.Windows.Media.Color accentColor = IconPacks.AccentColor(C.Prefs.Dock.Accent);
