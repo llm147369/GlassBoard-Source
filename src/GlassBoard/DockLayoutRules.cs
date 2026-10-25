@@ -56,7 +56,8 @@ public static class DockLayoutRules
 		List<string> list = (saved ?? new string[0]).Where((string k) => k != null && allowed.Contains(k)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 		if (list.Count == 0)
 		{
-			return new string[2] { "glassboard://dock/apps", "glassboard://dock/computer" }.Concat(apps).Concat(new string[5] { "glassboard://dock/control", "glassboard://dock/running", "glassboard://dock/power", "glassboard://dock/network", "glassboard://dock/settings" }).ToList();
+			// 设置图标排在控制中心/运行列表之前，避免 Dock 溢出时被收进"更多"
+			return new string[2] { "glassboard://dock/apps", "glassboard://dock/computer" }.Concat(apps).Concat(new string[5] { "glassboard://dock/power", "glassboard://dock/network", "glassboard://dock/settings", "glassboard://dock/control", "glassboard://dock/running" }).ToList();
 		}
 		string[] systemKeys = SystemKeys;
 		foreach (string text in systemKeys)
