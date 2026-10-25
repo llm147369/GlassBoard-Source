@@ -1071,7 +1071,7 @@ public class Controller
 			{
 				if (selectedPage >= 0 && settingsTabs != null)
 				{
-					settingsTabs.SelectedIndex = Math.Max(0, Math.Min(6, selectedPage));
+					settingsTabs.SelectedIndex = Math.Max(0, Math.Min(7, selectedPage));
 				}
 				// 与 Dock 其它图标一致：设置窗口在前台时再点 → 最小化；否则恢复并激活。
 				// 显式指定页面（selectedPage>=0）时总是恢复并激活，不做最小化。
@@ -1246,16 +1246,17 @@ public class Controller
 					creatorLoaded = true;
 				}
 			};
+			UpdateNotice.Build(tabs);
 			UsageGuide.Build(tabs);
 			tabs.SelectionChanged += (object ss, SelectionChangedEventArgs ee) =>
 			{
-				if (tabs.SelectedIndex == 6)
+				if (tabs.SelectedIndex == 7)
 				{
 					loadCreator();
 				}
 			};
-			tabs.SelectedIndex = Math.Max(0, Math.Min(6, selectedPage));
-			if (tabs.SelectedIndex == 6)
+			tabs.SelectedIndex = Math.Max(0, Math.Min(7, selectedPage));
+			if (tabs.SelectedIndex == 7)
 			{
 				loadCreator();
 			}
@@ -3653,7 +3654,7 @@ public class Controller
 
 	public void ConfigureWidgets()
 	{
-		Settings(3);
+		Settings(4);
 	}
 
 	public void AddFolder()
