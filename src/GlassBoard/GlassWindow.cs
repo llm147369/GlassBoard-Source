@@ -131,17 +131,27 @@ public class GlassWindow : Window
 			{
 				Store.Log(ex);
 			}
-			if (this is WidgetWindow widget)
+			// 屏蔽「显示桌面」(Win+D / Win+M) 的最小化广播：Dock 与组件保持可见（与系统任务栏同等待遇）
+			HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wp, IntPtr lp, ref bool handled) =>
 			{
-				// WM_ENDSESSION：关机/注销时在窗口销毁前标记退出，防止组件被误禁用
-				HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wp, IntPtr lp, ref bool handled) =>
+				if (msg == 274 && ((wp.ToInt64() & 0xFFF0) == 0xF020) && lp == IntPtr.Zero)
 				{
-					if (msg == 22 && wp != IntPtr.Zero)
-					{
-						widget.MarkSessionEnding();
-					}
+					handled = true;
 					return IntPtr.Zero;
-				});
+				}
+				if (this is WidgetWindow widget && msg == 22 && wp != IntPtr.Zero)
+				{
+					widget.MarkSessionEnding();
+				}
+				return IntPtr.Zero;
+			});
+		};
+		StateChanged += (object s, EventArgs e) =>
+		{
+			// 兜底：若显示桌面仍以其他途径最小化本窗口，立即还原（Dock/组件无最小化需求）
+			if (WindowState == WindowState.Minimized && IsVisible)
+			{
+				WindowState = WindowState.Normal;
 			}
 		};
 	}
