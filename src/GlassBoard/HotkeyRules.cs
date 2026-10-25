@@ -14,7 +14,7 @@ public static class HotkeyRules
 
 	public static List<HotkeySetting> Defaults()
 	{
-		return new uint[7] { 32u, 84u, 68u, 65u, 83u, 82u, 72u }.Select((uint k, int i) => new HotkeySetting
+		return new uint[7] { 32u, 84u, 69u, 65u, 83u, 82u, 72u }.Select((uint k, int i) => new HotkeySetting
 		{
 			ActionId = i + 1,
 			Modifiers = 3u,
