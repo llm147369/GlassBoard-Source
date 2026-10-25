@@ -2383,7 +2383,7 @@ public class BoardWindow : GlassWindow
 		}, arg3: true);
 		action("支持创作者 · 森霖sama", () =>
 		{
-			C.Settings(5);
+			C.Settings(6);
 		}, arg3: true);
 		menu.PlacementTarget = this;
 		menu.IsOpen = true;

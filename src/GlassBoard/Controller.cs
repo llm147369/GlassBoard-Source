@@ -1071,7 +1071,7 @@ public class Controller
 			{
 				if (selectedPage >= 0 && settingsTabs != null)
 				{
-					settingsTabs.SelectedIndex = Math.Max(0, Math.Min(7, selectedPage));
+					settingsTabs.SelectedIndex = Math.Max(0, Math.Min(6, selectedPage));
 				}
 				// 与 Dock 其它图标一致：设置窗口在前台时再点 → 最小化；否则恢复并激活。
 				// 显式指定页面（selectedPage>=0）时总是恢复并激活，不做最小化。
@@ -1246,17 +1246,16 @@ public class Controller
 					creatorLoaded = true;
 				}
 			};
-			UpdateNotice.Build(tabs);
 			UsageGuide.Build(tabs);
 			tabs.SelectionChanged += (object ss, SelectionChangedEventArgs ee) =>
 			{
-				if (tabs.SelectedIndex == 7)
+				if (tabs.SelectedIndex == 6)
 				{
 					loadCreator();
 				}
 			};
-			tabs.SelectedIndex = Math.Max(0, Math.Min(7, selectedPage));
-			if (tabs.SelectedIndex == 7)
+			tabs.SelectedIndex = Math.Max(0, Math.Min(6, selectedPage));
+			if (tabs.SelectedIndex == 6)
 			{
 				loadCreator();
 			}
@@ -3602,9 +3601,9 @@ public class Controller
 		{
 			Text = "由 森霖sama 制作",
 			Foreground = System.Windows.Media.Brushes.White,
-			FontSize = 25.0,
+			FontSize = 14.5,
 			FontWeight = FontWeights.SemiBold,
-			Margin = new Thickness(0.0, 10.0, 0.0, 12.0)
+			Margin = new Thickness(0.0, 10.0, 0.0, 6.0)
 		});
 		panel.Children.Add(new TextBlock
 		{
@@ -3613,8 +3612,44 @@ public class Controller
 			Foreground = System.Windows.Media.Brushes.LightGray,
 			FontSize = 14.0,
 			LineHeight = 24.0,
-			Margin = new Thickness(0.0, 0.0, 0.0, 16.0)
+			Margin = new Thickness(0.0, 0.0, 0.0, 14.0)
 		});
+		try
+		{
+			using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("GlassBoard.Assets.qrcode.png"))
+			{
+				if (stream != null)
+				{
+					BitmapImage bitmap = new BitmapImage();
+					bitmap.BeginInit();
+					bitmap.CacheOption = BitmapCacheOption.OnLoad;
+					bitmap.StreamSource = stream;
+					bitmap.EndInit();
+					bitmap.Freeze();
+					System.Windows.Controls.Image qr = new System.Windows.Controls.Image
+					{
+						Source = bitmap,
+						Width = 220.0,
+						Height = 220.0,
+						Stretch = System.Windows.Media.Stretch.Uniform
+					};
+					RenderOptions.SetBitmapScalingMode(qr, System.Windows.Media.BitmapScalingMode.HighQuality);
+					Border card = new Border
+					{
+						Background = System.Windows.Media.Brushes.White,
+						CornerRadius = new CornerRadius(10.0),
+						Padding = new Thickness(10.0),
+						HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+						Margin = new Thickness(0.0, 0.0, 0.0, 10.0),
+						Child = qr
+					};
+					panel.Children.Add(card);
+				}
+			}
+		}
+		catch
+		{
+		}
 	}
 
 	public void RefreshWidgets()

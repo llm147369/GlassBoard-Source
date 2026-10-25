@@ -30,6 +30,7 @@
     <EmbeddedResource Include="GlassBoard\Assets\launchpad.png" LogicalName="GlassBoard.Assets.launchpad.png" />
     <EmbeddedResource Include="GlassBoard\Assets\settings.svg" LogicalName="GlassBoard.Assets.settings.svg" />
     <EmbeddedResource Include="GlassBoard\Assets\running.png" LogicalName="GlassBoard.Assets.running.png" />
+    <EmbeddedResource Include="GlassBoard\Assets\qrcode.png" LogicalName="GlassBoard.Assets.qrcode.png" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="Interop.UIAutomationClient">
