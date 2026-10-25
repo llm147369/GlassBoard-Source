@@ -420,7 +420,14 @@ public static class RunningWindows
 			}
 			StringBuilder stringBuilder2 = new StringBuilder(128);
 			GetClassName(handle, stringBuilder2, stringBuilder2.Capacity);
-			if (new string[4] { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd" }.Contains(stringBuilder2.ToString()))
+			string className = stringBuilder2.ToString();
+			if (new string[7] { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Default IME", "IME", "MSCTFIME UI" }.Contains(className))
+			{
+				return true;
+			}
+			// 输入法辅助窗口（标题可能与类名不同）：一律排除，避免提权/无法取路径的程序在 Dock 显示成 "Default IME"
+			string titleCheck = stringBuilder.ToString().Trim();
+			if (titleCheck == "Default IME" || titleCheck == "MSCTFIME UI" || titleCheck == "IME")
 			{
 				return true;
 			}
@@ -575,7 +582,7 @@ public static class RunningWindows
 		{
 			taken.Add(w.ProcessId);
 		}
-		string[] systemClasses = new string[9] { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "DV2ControlHost", "ForegroundStaging", "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow", "Shell_ToastWindow" };
+		string[] systemClasses = new string[12] { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "DV2ControlHost", "ForegroundStaging", "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow", "Shell_ToastWindow", "Default IME", "IME", "MSCTFIME UI" };
 		EnumWindows((IntPtr handle, IntPtr value) =>
 		{
 			if (IsWindowVisible(handle))
