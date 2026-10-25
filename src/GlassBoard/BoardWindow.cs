@@ -1534,6 +1534,21 @@ public class BoardWindow : GlassWindow
 			StaysOpen = false,
 			Child = BuildMediaCard(entry)
 		};
+		mediaPreviewPopup.Closed += (object s, EventArgs e) =>
+		{
+			if (mediaPreviewPlayer != null)
+			{
+				try
+				{
+					mediaPreviewPlayer.Stop();
+				}
+				catch
+				{
+				}
+				mediaPreviewPlayer.Source = null;
+				mediaPreviewPlayer = null;
+			}
+		};
 		mediaPreviewPopup.IsOpen = true;
 	}
 
@@ -1663,9 +1678,17 @@ public class BoardWindow : GlassWindow
 		}
 		if (mediaPreviewPlayer != null)
 		{
-			mediaPreviewPlayer.Stop();
-			mediaPreviewPlayer.Source = null;
+			// LoadedBehavior 为自动模式时调用 Stop() 会抛 NotSupportedException，直接置空 Source 即可停止并释放文件句柄
+			MediaElement player = mediaPreviewPlayer;
 			mediaPreviewPlayer = null;
+			try
+			{
+				player.Stop();
+			}
+			catch
+			{
+			}
+			player.Source = null;
 		}
 	}
 
