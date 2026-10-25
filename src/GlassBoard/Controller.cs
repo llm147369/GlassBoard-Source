@@ -3453,55 +3453,52 @@ public class Controller
 		}
 	}
 
-	// 拖动排序：把多个入口按原顺序移到 targetIndex 之前（索引按拖动前布局计算，支持拖到末尾）
-	public bool ReorderEntries(string[] paths, int targetIndex)
+	// 拖动排序提交：sequence 是拖放结束时当前页磁贴的最终顺序（含被拖项），
+	// sliceOffset 是当前页在 Apps 列表中的起始下标。仅当顺序实际变化时才写入历史。
+	public bool ReorderToSequence(string[] sequence, int sliceOffset)
 	{
-		List<Entry> moving = new List<Entry>();
-		foreach (string path in paths)
-		{
-			Entry entry = Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase));
-			if (entry != null && !moving.Contains(entry))
-			{
-				moving.Add(entry);
-			}
-		}
-		if (moving.Count == 0)
+		List<Entry> sliceNow = Prefs.Apps.Skip(sliceOffset).Take(sequence.Length).ToList();
+		if (sliceNow.Count != sequence.Length)
 		{
 			return false;
 		}
-		int count = Prefs.Apps.Count;
-		// 目标索引按拖动前的布局计算：扣除位于目标之前被拖走的项，保证落点视觉一致
-		int shift = 0;
-		foreach (Entry item in moving)
+		// 安全网：分组/搜索等过滤视图下页内顺序与 Apps 切片不一致，直接放弃提交（交由 Render 复原）
+		HashSet<string> seqSet = new HashSet<string>(sequence, StringComparer.OrdinalIgnoreCase);
+		if (seqSet.Count != sliceNow.Count || sliceNow.Any((Entry a) => !seqSet.Contains(a.Path)))
 		{
-			int num = Prefs.Apps.IndexOf(item);
-			if (num >= 0 && num < targetIndex)
-			{
-				shift++;
-			}
+			return false;
 		}
-		int insertAt = Math.Max(0, Math.Min(targetIndex - shift, count - moving.Count));
-		bool same = true;
-		for (int i = 0; i < moving.Count; i++)
+		List<Entry> target = new List<Entry>();
+		foreach (string path in sequence)
 		{
-			if (Prefs.Apps.IndexOf(moving[i]) != insertAt + i)
+			Entry entry = Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase));
+			if (entry == null)
 			{
-				same = false;
+				return false;
+			}
+			target.Add(entry);
+		}
+		bool changed = false;
+		for (int i = 0; i < target.Count; i++)
+		{
+			if (sliceNow[i] != target[i])
+			{
+				changed = true;
 				break;
 			}
 		}
-		if (same)
+		if (!changed)
 		{
 			return false;
 		}
 		BoardEditState before = BeginBoardEdit();
-		foreach (Entry item in moving)
+		foreach (Entry item in sliceNow)
 		{
 			Prefs.Apps.Remove(item);
 		}
-		for (int i = 0; i < moving.Count; i++)
+		for (int i = 0; i < target.Count; i++)
 		{
-			Prefs.Apps.Insert(insertAt + i, moving[i]);
+			Prefs.Apps.Insert(sliceOffset + i, target[i]);
 		}
 		EndBoardEdit(before, "调整图标顺序");
 		Refresh();

@@ -69,6 +69,9 @@ public class BoardWindow : GlassWindow
 	// 图标拖动排序：插入位置指示条（渲染于 Tiles 之上的竖线）
 	private Border insertMarker;
 	private int insertIndex = -1;
+	// 拖动实时预览：其他图标滑开让位，被拖图标半透明占位
+	private bool livePreview;
+	private int liveIndex = -1;
 
 	private TextBlock selectionCount;
 
@@ -969,15 +972,16 @@ public class BoardWindow : GlassWindow
 		{
 			QueueSizeRefresh();
 		};
-		// 容器级拖放：允许把图标放到任意空格 / 末尾，按落点计算插入位置
+		// 容器级拖放：任意空格 / 末尾都可落点，悬停时其他图标实时让位
 		Tiles.DragOver += (object s, DragEventArgs e) =>
 		{
 			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == Tiles)
 			{
 				int idx = InsertIndexFor(e.GetPosition(Tiles));
-				if (idx != insertIndex)
+				if (idx != liveIndex)
 				{
-					ShowInsertMarker(idx);
+					liveIndex = idx;
+					ApplyLivePreview(DraggedEntries(e.Data), idx);
 				}
 				e.Effects = DragDropEffects.Move;
 				e.Handled = true;
@@ -987,18 +991,17 @@ public class BoardWindow : GlassWindow
 		{
 			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == Tiles)
 			{
-				string[] array = DraggedEntries(e.Data);
-				int idx = InsertIndexFor(e.GetPosition(Tiles));
 				HideInsertMarker();
-				if (C.ReorderEntries(array, page * capacity + idx))
+				if (!C.ReorderToSequence(CurrentPageSequence(), page * capacity))
 				{
-					Render(animate: true);
+					Render();
 				}
 				e.Handled = true;
 			}
 		};
 		Tiles.DragLeave += (object s, DragEventArgs e) =>
 		{
+			// 离开网格（如移向分组栏）只收起指示线；让位布局保留，回到网格继续拖
 			HideInsertMarker();
 		};
 		insertMarker = new Border
@@ -2003,9 +2006,10 @@ public class BoardWindow : GlassWindow
 				{
 					idx++;
 				}
-				if (idx != insertIndex)
+				if (idx != liveIndex)
 				{
-					ShowInsertMarker(idx);
+					liveIndex = idx;
+					ApplyLivePreview(DraggedEntries(e.Data), idx);
 				}
 				e.Effects = DragDropEffects.Move;
 				e.Handled = true;
@@ -2016,15 +2020,10 @@ public class BoardWindow : GlassWindow
 			string[] array = DraggedEntries(e.Data);
 			if (array.Length != 0)
 			{
-				int idx = Tiles.Children.IndexOf(tile);
-				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
-				{
-					idx++;
-				}
 				HideInsertMarker();
-				if (C.ReorderEntries(array, page * capacity + idx))
+				if (!C.ReorderToSequence(CurrentPageSequence(), page * capacity))
 				{
-					Render(animate: true);
+					Render();
 				}
 				e.Handled = true;
 			}
@@ -2089,6 +2088,103 @@ public class BoardWindow : GlassWindow
 			insertMarker.Visibility = Visibility.Collapsed;
 		}
 		insertIndex = -1;
+		liveIndex = -1;
+		livePreview = false;
+	}
+
+	// 当前页磁贴按容器顺序取出的路径序列（拖放落点以它为准提交）
+	private string[] CurrentPageSequence()
+	{
+		List<string> list = new List<string>();
+		foreach (Border b in Tiles.Children.OfType<Border>())
+		{
+			if (b.Tag is Entry entry)
+			{
+				list.Add(entry.Path);
+			}
+		}
+		return list.ToArray();
+	}
+
+	// 磁贴内容的视觉位置（含滑动动画进行中的位移）
+	private Point TileVisualPos(Border b)
+	{
+		FrameworkElement content = b.Child as FrameworkElement;
+		FrameworkElement measure = content ?? b;
+		return measure.TransformToAncestor(Tiles).Transform(new Point(0.0, 0.0));
+	}
+
+	// 拖动实时让位：其余图标滑开，被拖图标半透明放到目标位置
+	private void ApplyLivePreview(string[] paths, int idx)
+	{
+		if (Tiles == null)
+		{
+			return;
+		}
+		List<Border> items = Tiles.Children.OfType<Border>().ToList();
+		if (items.Count == 0)
+		{
+			return;
+		}
+		Dictionary<Border, Point> before = new Dictionary<Border, Point>();
+		foreach (Border b in items)
+		{
+			before[b] = TileVisualPos(b);
+		}
+		List<Border> draggedTiles = new List<Border>();
+		foreach (string p in paths)
+		{
+			Border border = items.FirstOrDefault((Border b) => b.Tag is Entry entry && string.Equals(entry.Path, p, StringComparison.OrdinalIgnoreCase));
+			if (border != null && !draggedTiles.Contains(border))
+			{
+				draggedTiles.Add(border);
+			}
+		}
+		List<Border> rest = items.Except(draggedTiles).ToList();
+		List<Border> order = new List<Border>(rest);
+		int insert = Math.Max(0, Math.Min(idx, order.Count));
+		for (int i = 0; i < draggedTiles.Count; i++)
+		{
+			order.Insert(insert + i, draggedTiles[i]);
+		}
+		for (int i = 0; i < order.Count; i++)
+		{
+			if (Tiles.Children.IndexOf(order[i]) != i)
+			{
+				Tiles.Children.Remove(order[i]);
+				Tiles.Children.Insert(i, order[i]);
+			}
+		}
+		CubicEase ease = new CubicEase
+		{
+			EasingMode = EasingMode.EaseOut
+		};
+		foreach (Border b in order)
+		{
+			Point now = TileVisualPos(b);
+			Point old = before[b];
+			double dx = old.X - now.X;
+			double dy = old.Y - now.Y;
+			if (Math.Abs(dx) > 0.5 || Math.Abs(dy) > 0.5)
+			{
+				TranslateTransform slide = new TranslateTransform(dx, dy);
+				if (b.Child is FrameworkElement content)
+				{
+					content.RenderTransform = slide;
+				}
+				slide.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(160.0))
+				{
+					EasingFunction = ease
+				});
+				slide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(160.0))
+				{
+					EasingFunction = ease
+				});
+			}
+			b.Opacity = (draggedTiles.Contains(b) ? 0.3 : 1.0);
+		}
+		ShowInsertMarker(insert);
+		livePreview = true;
 	}
 
 	private void OpenGroup(string name)
