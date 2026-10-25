@@ -66,6 +66,10 @@ public class BoardWindow : GlassWindow
 	private FrameworkElement mediaPreviewAnchor;
 	private MediaElement mediaPreviewPlayer;
 
+	// 图标拖动排序：插入位置指示条（渲染于 Tiles 之上的竖线）
+	private Border insertMarker;
+	private int insertIndex = -1;
+
 	private TextBlock selectionCount;
 
 	private Button selectAll;
@@ -955,13 +959,60 @@ public class BoardWindow : GlassWindow
 		{
 			Columns = columns,
 			Rows = rows,
-			ClipToBounds = true
+			ClipToBounds = true,
+			// 透明背景让空格子也能命中拖放事件（否则空白处会穿透到窗口层）
+			Background = Brushes.Transparent,
+			AllowDrop = true
 		};
 		grid3.Children.Add(Tiles);
 		Tiles.SizeChanged += (object s, SizeChangedEventArgs e) =>
 		{
 			QueueSizeRefresh();
 		};
+		// 容器级拖放：允许把图标放到任意空格 / 末尾，按落点计算插入位置
+		Tiles.DragOver += (object s, DragEventArgs e) =>
+		{
+			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == Tiles)
+			{
+				int idx = InsertIndexFor(e.GetPosition(Tiles));
+				if (idx != insertIndex)
+				{
+					ShowInsertMarker(idx);
+				}
+				e.Effects = DragDropEffects.Move;
+				e.Handled = true;
+			}
+		};
+		Tiles.Drop += (object s, DragEventArgs e) =>
+		{
+			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == Tiles)
+			{
+				string[] array = DraggedEntries(e.Data);
+				int idx = InsertIndexFor(e.GetPosition(Tiles));
+				HideInsertMarker();
+				if (C.ReorderEntries(array, page * capacity + idx))
+				{
+					Render(animate: true);
+				}
+				e.Handled = true;
+			}
+		};
+		Tiles.DragLeave += (object s, DragEventArgs e) =>
+		{
+			HideInsertMarker();
+		};
+		insertMarker = new Border
+		{
+			Width = 3.0,
+			CornerRadius = new CornerRadius(1.5),
+			Background = new SolidColorBrush(IconPacks.AccentColor(C.Prefs.Dock.Accent)),
+			Visibility = Visibility.Collapsed,
+			IsHitTestVisible = false,
+			HorizontalAlignment = HorizontalAlignment.Left,
+			VerticalAlignment = VerticalAlignment.Top,
+			RenderTransform = new TranslateTransform()
+		};
+		grid3.Children.Add(insertMarker);
 		Empty = new TextBlock
 		{
 			Text = "将软件、文档或文件夹拖到这里\n面板默认保持打开；按 Esc 收起，也可点击「批量添加」",
@@ -1461,6 +1512,7 @@ public class BoardWindow : GlassWindow
 	public void Render(bool animate = false)
 	{
 		CloseMediaPreview();
+		HideInsertMarker();
 		if (Tiles == null || (!IsVisible && !preparingView))
 		{
 			return;
@@ -1771,7 +1823,7 @@ public class BoardWindow : GlassWindow
 			Cursor = Cursors.Hand,
 			ToolTip = a.Name,
 			ContextMenu = (editing ? null : C.Menu(a, currentGroup, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0))),
-			AllowDrop = !editing
+			AllowDrop = true
 		};
 		Grid grid = new Grid();
 		tile.Child = grid;
@@ -1874,6 +1926,10 @@ public class BoardWindow : GlassWindow
 		};
 		tile.MouseEnter += (object s, MouseEventArgs e) =>
 		{
+			if (activeDrag)
+			{
+				return;
+			}
 			hover(obj: true);
 			QueueMediaPreview(a, tile);
 		};
@@ -1938,12 +1994,38 @@ public class BoardWindow : GlassWindow
 				}
 			}
 		};
+		tile.DragOver += (object s, DragEventArgs e) =>
+		{
+			if (DraggedEntries(e.Data).Length != 0)
+			{
+				int idx = Tiles.Children.IndexOf(tile);
+				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
+				{
+					idx++;
+				}
+				if (idx != insertIndex)
+				{
+					ShowInsertMarker(idx);
+				}
+				e.Effects = DragDropEffects.Move;
+				e.Handled = true;
+			}
+		};
 		tile.Drop += (object s, DragEventArgs e) =>
 		{
-			if (e.Data.GetDataPresent("GlassBoard.Entry"))
+			string[] array = DraggedEntries(e.Data);
+			if (array.Length != 0)
 			{
-				string path = (string)e.Data.GetData("GlassBoard.Entry");
-				C.ReorderEntry(path, a);
+				int idx = Tiles.Children.IndexOf(tile);
+				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
+				{
+					idx++;
+				}
+				HideInsertMarker();
+				if (C.ReorderEntries(array, page * capacity + idx))
+				{
+					Render(animate: true);
+				}
 				e.Handled = true;
 			}
 		};
@@ -1961,6 +2043,52 @@ public class BoardWindow : GlassWindow
 			return new string[1] { (string)data.GetData("GlassBoard.Entry") };
 		}
 		return new string[0];
+	}
+
+	// 按落点（相对 Tiles 的坐标）换算插入位置：行优先，越界时取末尾（追加）
+	private int InsertIndexFor(Point p)
+	{
+		if (columns <= 0 || Tiles.ActualWidth <= 0.0)
+		{
+			return Tiles.Children.Count;
+		}
+		double cellW = Tiles.ActualWidth / (double)columns;
+		double cellH = (Tiles.Rows > 0 && Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight / (double)Tiles.Rows : 96.0;
+		int col = Math.Max(0, Math.Min((int)(p.X / cellW), columns - 1));
+		int row = Math.Max(0, Math.Min((int)(p.Y / cellH), Math.Max(0, Tiles.Rows - 1)));
+		return Math.Min(row * columns + col, Tiles.Children.Count);
+	}
+
+	// 在目标格左侧画一条插入指示线；idx == 数量时画在最后一个图标右侧（追加）
+	private void ShowInsertMarker(int idx)
+	{
+		if (Tiles == null || columns <= 0 || Tiles.ActualWidth <= 0.0)
+		{
+			HideInsertMarker();
+			return;
+		}
+		int count = Tiles.Children.Count;
+		int cell = Math.Min(idx, count);
+		double cellW = Tiles.ActualWidth / (double)columns;
+		double cellH = (Tiles.Rows > 0 && Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight / (double)Tiles.Rows : 96.0;
+		int col = cell % columns;
+		int row = cell / columns;
+		double x = col * cellW + ((cell >= count) ? cellW : 0.0) - 1.5;
+		TranslateTransform t = (TranslateTransform)insertMarker.RenderTransform;
+		t.X = x;
+		t.Y = row * cellH + 6.0;
+		insertMarker.Height = Math.Max(24.0, cellH - 12.0);
+		insertMarker.Visibility = Visibility.Visible;
+		insertIndex = idx;
+	}
+
+	private void HideInsertMarker()
+	{
+		if (insertMarker != null)
+		{
+			insertMarker.Visibility = Visibility.Collapsed;
+		}
+		insertIndex = -1;
 	}
 
 	private void OpenGroup(string name)

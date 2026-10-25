@@ -3453,6 +3453,62 @@ public class Controller
 		}
 	}
 
+	// 拖动排序：把多个入口按原顺序移到 targetIndex 之前（索引按拖动前布局计算，支持拖到末尾）
+	public bool ReorderEntries(string[] paths, int targetIndex)
+	{
+		List<Entry> moving = new List<Entry>();
+		foreach (string path in paths)
+		{
+			Entry entry = Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase));
+			if (entry != null && !moving.Contains(entry))
+			{
+				moving.Add(entry);
+			}
+		}
+		if (moving.Count == 0)
+		{
+			return false;
+		}
+		int count = Prefs.Apps.Count;
+		// 目标索引按拖动前的布局计算：扣除位于目标之前被拖走的项，保证落点视觉一致
+		int shift = 0;
+		foreach (Entry item in moving)
+		{
+			int num = Prefs.Apps.IndexOf(item);
+			if (num >= 0 && num < targetIndex)
+			{
+				shift++;
+			}
+		}
+		int insertAt = Math.Max(0, Math.Min(targetIndex - shift, count - moving.Count));
+		bool same = true;
+		for (int i = 0; i < moving.Count; i++)
+		{
+			if (Prefs.Apps.IndexOf(moving[i]) != insertAt + i)
+			{
+				same = false;
+				break;
+			}
+		}
+		if (same)
+		{
+			return false;
+		}
+		BoardEditState before = BeginBoardEdit();
+		foreach (Entry item in moving)
+		{
+			Prefs.Apps.Remove(item);
+		}
+		for (int i = 0; i < moving.Count; i++)
+		{
+			Prefs.Apps.Insert(insertAt + i, moving[i]);
+		}
+		EndBoardEdit(before, "调整图标顺序");
+		Refresh();
+		Board.Render(animate: true);
+		return true;
+	}
+
 	private void FlushBackupState()
 	{
 		Store.Save(Prefs);
