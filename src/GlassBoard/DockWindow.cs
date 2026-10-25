@@ -383,12 +383,25 @@ public class DockWindow : GlassWindow
 	private bool RegisterKey(HotkeySetting key)
 	{
 		bool flag = Native.RegisterHotKey(source.Handle, key.ActionId, key.Modifiers | 0x4000, key.Key);
+		string combo = key.ActionId + "|" + key.Modifiers + "|" + key.Key;
 		if (!flag)
 		{
-			Store.Log(new Win32Exception(Marshal.GetLastWin32Error(), "RegisterHotKey: " + HotkeyRules.Actions[key.ActionId - 1] + " " + HotkeyRules.Label(key)));
+			// 同一组合只记一条日志：5 秒自动重试期间不再重复刷日志；
+			// 一旦注册成功即清空标记，下次再冲突时重新记录一次。
+			if (!loggedHotkeyFailures.Contains(combo))
+			{
+				loggedHotkeyFailures.Add(combo);
+				Store.Log(new Win32Exception(Marshal.GetLastWin32Error(), "RegisterHotKey: " + HotkeyRules.Actions[key.ActionId - 1] + " " + HotkeyRules.Label(key)));
+			}
+		}
+		else
+		{
+			loggedHotkeyFailures.Remove(combo);
 		}
 		return flag;
 	}
+
+	private static readonly HashSet<string> loggedHotkeyFailures = new HashSet<string>();
 
 	private void DisplayChanged(object s, EventArgs e)
 	{
