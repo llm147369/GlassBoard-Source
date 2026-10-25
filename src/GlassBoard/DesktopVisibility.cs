@@ -22,6 +22,9 @@ public static class DesktopVisibility
 
 	private static bool? iconsHidden;
 
+	// 每个窗口句柄最近一次 SW_HIDE 的时间：限制重试频率，避免与 explorer 反复互相拉扯。
+	private static readonly Dictionary<long, DateTime> lastHide = new Dictionary<long, DateTime>();
+
 	private static readonly DispatcherTimer maintenance;
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -42,6 +45,9 @@ public static class DesktopVisibility
 	[DllImport("user32.dll", SetLastError = true)]
 	private static extern bool ShowWindowAsync(IntPtr h, int cmd);
 
+	[DllImport("user32.dll")]
+	private static extern uint GetWindowThreadProcessId(IntPtr h, out uint processId);
+
 	[DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
 	private static extern int GetWindowLong(IntPtr h, int index);
 
@@ -60,7 +66,7 @@ public static class DesktopVisibility
 		original = new Dictionary<long, ShellState>();
 		maintenance = new DispatcherTimer
 		{
-			Interval = TimeSpan.FromMilliseconds(750.0)
+			Interval = TimeSpan.FromMilliseconds(2000.0)
 		};
 		maintenance.Tick += (object s, EventArgs e) =>
 		{
@@ -226,6 +232,11 @@ public static class DesktopVisibility
 		Remember(list);
 		foreach (IntPtr item in list)
 		{
+			if (hide && ShellBooting(item))
+			{
+				// explorer 正在重启初始化：先跳过，由维护循环在窗口稳定后再隐藏，避免崩溃循环
+				continue;
+			}
 			if (!ShowWindowAsync(item, (!hide) ? 8 : 0))
 			{
 				num++;
@@ -265,6 +276,50 @@ public static class DesktopVisibility
 		return SetHidden(taskbar: false, !DesiredHidden(taskbar: false));
 	}
 
+	// explorer 刚启动的一小段时间里任务栏仍在初始化，此时 SW_HIDE 容易与
+	// comctl32 的 SysListView32 初始化竞争，引发 explorer 崩溃循环（0xc0000005）。
+	private static bool ShellBooting(IntPtr h)
+	{
+		try
+		{
+			GetWindowThreadProcessId(h, out uint pid);
+			if (pid == 0)
+			{
+				return true;
+			}
+			using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById((int)pid);
+			return DateTime.UtcNow - process.StartTime.ToUniversalTime() < TimeSpan.FromSeconds(8.0);
+		}
+		catch
+		{
+			return true;
+		}
+	}
+
+	// 限频 + 启动宽限期：维护循环只对稳定存在的窗口执行隐藏，避免高频拉扯与崩溃循环。
+	private static bool CanHide(IntPtr h)
+	{
+		long key = h.ToInt64();
+		if (ShellBooting(h))
+		{
+			return false;
+		}
+		DateTime utcNow = DateTime.UtcNow;
+		if (lastHide.TryGetValue(key, out DateTime value) && utcNow - value < TimeSpan.FromSeconds(3.0))
+		{
+			return false;
+		}
+		lastHide[key] = utcNow;
+		if (lastHide.Count > 64)
+		{
+			foreach (long item in (from kv in lastHide orderby kv.Value select kv.Key).Take(lastHide.Count - 64).ToList())
+			{
+				lastHide.Remove(item);
+			}
+		}
+		return true;
+	}
+
 	private static void Maintain()
 	{
 		try
@@ -284,7 +339,7 @@ public static class DesktopVisibility
 				Remember(list);
 				foreach (IntPtr item in list)
 				{
-					if (IsWindowVisible(item))
+					if (IsWindowVisible(item) && CanHide(item))
 					{
 						ShowWindowAsync(item, 0);
 					}
