@@ -27,15 +27,15 @@ public static class UpdateNotice
 		content.Children.Add(Card("项目已开源，更新方式如下", new string[]
 		{
 			"源码仓库：https://github.com/llm147369/GlassBoard-Source",
-			"仓库根目录就是编译好的便携版：AI 软件拉取后直接双击根目录的 GlassBoard.exe 即可运行，无需下载发布包，也无需安装编译环境。",
-			"更新时打开豆包（或其他 AI 软件）的单独对话页面，输入作者最新视频里的更新指令并附上仓库地址，让 AI 拉取仓库最新代码覆盖本地，运行根目录的新程序即完成升级。",
-			"覆盖只会替换程序文件，不会影响你的配置数据（配置保存在 %LocalAppData%\\GlassBoard，与项目目录无关）。",
+			"打开豆包，新建一个单独对话，把作者最新视频里的指令发过去，让它拉取一次仓库（根目录就是做好的便携版，双击 GlassBoard.exe 直接运行）。",
+			"拉过一遍之后，以后更新都在那个对话页面里说一声就行，不用再开新页面。",
+			"覆盖只换程序文件，你的配置保存在 %LocalAppData%\\GlassBoard，不会丢。",
 			"覆盖前建议先备份整个项目文件夹，避免自己改过的内容被覆盖丢失。"
 		}, accent, cardBrush, lineBrush));
 		content.Children.Add(Card("在线更新功能（即将上线）", new string[]
 		{
-			"后续版本会加入「在线更新」功能：自动检查新版本、一键下载更新，无需再手动拉取覆盖。",
-			"在线更新上线后，会在这里和 GitHub 仓库说明中同步告知。"
+			"后续版本会加入「在线更新」：自动检查新版本、一键下载更新，就不用再手动拉取覆盖了。",
+			"在线更新上线后，会在这里和 GitHub 仓库说明里同步告知。"
 		}, accent, cardBrush, lineBrush));
 		TabItem item = new TabItem
 		{
