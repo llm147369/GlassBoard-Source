@@ -20,6 +20,10 @@
 
 ## 构建
 
+> **无需编译也能用**：仓库根目录就是编译好的便携版。拉取仓库后直接双击根目录的 `GlassBoard.exe` 即可运行，无需下载发布包，也无需安装 .NET SDK。
+
+如需从源码构建（面向开发者）：
+
 - 目标框架：.NET Framework 4.8（SDK 风格 csproj，WPF + WinForms，LangVersion 14）
 - 依赖：`src\lib\Interop.UIAutomationClient.dll`（已随仓库提供）
 - 嵌入资源：`GlassBoard.Assets.c1.dat`、`c2.dat`、`GlassBoard.MediaBridge.ps1`、`GlassBoard.NativeMediaBridge.ps1`、`GlassBoard\ControlCenter.ps1` 及 `Assets\` 下图片资源
@@ -29,14 +33,9 @@
 dotnet build src\GlassBoard.csproj -c Release
 ```
 
-> **无需编译也能用**：仓库 `release\` 文件夹内已包含编译好的便携版（含全部运行时文件）。拉取仓库后直接双击 `release\GlassBoard.exe` 即可运行，无需下载发布包，也无需安装 .NET SDK。
-
 ## 发布说明
 
-本仓库源码对应 v0.9.18（程序集版本 0.9.18.3）。已编译的便携版在仓库 `release\` 目录（拉取即用），GitHub Release 页面同时提供便携压缩包：
-
-- `release\GlassBoard.exe`：编译好的便携版，直接运行
-- GitHub Release：`GlassBoard-0.9.18.3-portable.zip` 便携压缩包
+本仓库源码对应 v0.9.18（程序集版本 0.9.18.3）。仓库根目录直接存放编译好的便携版（拉取即用，双击 `GlassBoard.exe` 运行）；GitHub Release 页面同时提供便携压缩包 `GlassBoard-0.9.18.3-portable.zip`。源码位于 `src\` 目录，仅供开发者参考与修改。
 
 ## 原作者
 
