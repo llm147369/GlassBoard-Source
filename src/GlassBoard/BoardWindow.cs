@@ -2153,15 +2153,8 @@ public class BoardWindow : GlassWindow
 		return list.ToArray();
 	}
 
-	// 磁贴内容的视觉位置（含滑动动画进行中的位移）
-	private Point TileVisualPos(Border b)
-	{
-		FrameworkElement content = b.Child as FrameworkElement;
-		FrameworkElement measure = content ?? b;
-		return measure.TransformToAncestor(Tiles).Transform(new Point(0.0, 0.0));
-	}
-
-	// 拖动实时让位：其余图标滑开，被拖图标半透明放到目标位置
+	// 拖动实时让位：其余图标即时滑开（纯格网数学，不做视觉树测量），被拖图标半透明放到目标位置。
+	// 位移叠加到磁贴当前的动画位移上，避免拖动中频繁重排产生跳动；落点确认后由 Render 播放收尾动画。
 	private void ApplyLivePreview(string[] paths, int idx)
 	{
 		if (Tiles == null)
@@ -2173,10 +2166,14 @@ public class BoardWindow : GlassWindow
 		{
 			return;
 		}
-		Dictionary<Border, Point> before = new Dictionary<Border, Point>();
-		foreach (Border b in items)
+		int cols = Math.Max(1, Tiles.Columns);
+		int rowCount = Math.Max(1, Tiles.Rows);
+		double cellW = (Tiles.ActualWidth > 0.0 ? Tiles.ActualWidth : Width) / cols;
+		double cellH = (Tiles.ActualHeight > 0.0 ? Tiles.ActualHeight : Height) / rowCount;
+		Dictionary<Border, int> oldIndex = new Dictionary<Border, int>();
+		for (int i = 0; i < items.Count; i++)
 		{
-			before[b] = TileVisualPos(b);
+			oldIndex[items[i]] = i;
 		}
 		List<Border> draggedTiles = new List<Border>();
 		foreach (string p in paths)
@@ -2208,25 +2205,32 @@ public class BoardWindow : GlassWindow
 		};
 		foreach (Border b in order)
 		{
-			Point now = TileVisualPos(b);
-			Point old = before[b];
-			double dx = old.X - now.X;
-			double dy = old.Y - now.Y;
-			if (Math.Abs(dx) > 0.5 || Math.Abs(dy) > 0.5)
+			int from = oldIndex[b];
+			int to = order.IndexOf(b);
+			double dx = ((double)(from % cols) - (to % cols)) * cellW;
+			double dy = ((double)(from / cols) - (to / cols)) * cellH;
+			if (b.Child is FrameworkElement content)
 			{
-				TranslateTransform slide = new TranslateTransform(dx, dy);
-				if (b.Child is FrameworkElement content)
+				TranslateTransform slide = content.RenderTransform as TranslateTransform;
+				if (slide == null || slide.IsFrozen)
 				{
+					slide = new TranslateTransform();
 					content.RenderTransform = slide;
 				}
-				slide.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(160.0))
+				// 叠加未收尾的动画位移，消除重复重排时的跳动
+				slide.X += dx;
+				slide.Y += dy;
+				if (Math.Abs(slide.X) > 0.5 || Math.Abs(slide.Y) > 0.5)
 				{
-					EasingFunction = ease
-				});
-				slide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(160.0))
-				{
-					EasingFunction = ease
-				});
+					slide.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(120.0))
+					{
+						EasingFunction = ease
+					});
+					slide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(120.0))
+					{
+						EasingFunction = ease
+					});
+				}
 			}
 			b.Opacity = (draggedTiles.Contains(b) ? 0.3 : 1.0);
 		}

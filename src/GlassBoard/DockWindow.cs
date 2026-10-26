@@ -723,6 +723,22 @@ public class DockWindow : GlassWindow
 				C.Board.Hide();
 				Native.Computer();
 			});
+			// 回收站：单击打开系统回收站窗口；把文件拖到图标上直接送入回收站（可恢复）
+			AddSystemButton("glassboard://dock/recycle", DockButton("recycle", null, () =>
+			{
+				C.Board.Hide();
+				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
+				{
+					UseShellExecute = true
+				});
+			}, "回收站"), () =>
+			{
+				C.Board.Hide();
+				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
+				{
+					UseShellExecute = true
+				});
+			});
 		}
 		if (dock.ShowControlCenter)
 		{
@@ -1061,6 +1077,28 @@ public class DockWindow : GlassWindow
 			else
 			{
 				element = SystemGlyph("computer", o);
+			}
+		}
+		else if (text == "recycle")
+		{
+			// 回收站：默认直接用系统官方图标；用户右键更换过图标时尊重自定义
+			bool recycleOverridden = (C.Prefs.SystemIconImages != null && C.Prefs.SystemIconImages.ContainsKey("recycle")) || (C.Prefs.SystemIconGlyphs != null && C.Prefs.SystemIconGlyphs.ContainsKey("recycle"));
+			ImageSource official = recycleOverridden ? null : Native.RecycleIcon();
+			if (official != null)
+			{
+				System.Windows.Controls.Image recycleImage = new System.Windows.Controls.Image
+				{
+					Source = official,
+					Width = iconSize,
+					Height = iconSize,
+					Stretch = Stretch.Uniform
+				};
+				RenderOptions.SetBitmapScalingMode(recycleImage, BitmapScalingMode.HighQuality);
+				element = recycleImage;
+			}
+			else
+			{
+				element = SystemGlyph("recycle", o);
 			}
 		}
 		else if (text == "⚙" || text == "control" || text == "power" || text == "wifi")
@@ -1832,7 +1870,7 @@ public class DockWindow : GlassWindow
 					try
 					{
 						string[] files = (e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) ? ((string[])e.Data.GetData(System.Windows.DataFormats.FileDrop)) : null);
-						System.Windows.Controls.Button recycle = ((files == null || files.Length == 0) ? null : Items.Children.OfType<System.Windows.Controls.Button>().FirstOrDefault((System.Windows.Controls.Button b) => string.Equals(ItemKey(b), RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase)));
+						System.Windows.Controls.Button recycle = ((files == null || files.Length == 0) ? null : Items.Children.OfType<System.Windows.Controls.Button>().FirstOrDefault((System.Windows.Controls.Button b) => string.Equals(ItemKey(b), RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase) || string.Equals(ItemKey(b), "glassboard://dock/recycle", StringComparison.OrdinalIgnoreCase)));
 						if (recycle != null)
 						{
 							System.Windows.Point point = e.GetPosition(recycle);
@@ -2201,7 +2239,7 @@ public class DockWindow : GlassWindow
 			return;
 		}
 		e.Handled = true;
-		System.Windows.Controls.Button recycle = ((!e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)) ? null : Items.Children.OfType<System.Windows.Controls.Button>().FirstOrDefault((System.Windows.Controls.Button b) => string.Equals(ItemKey(b), RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase)));
+		System.Windows.Controls.Button recycle = ((!e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)) ? null : Items.Children.OfType<System.Windows.Controls.Button>().FirstOrDefault((System.Windows.Controls.Button b) => string.Equals(ItemKey(b), RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase) || string.Equals(ItemKey(b), "glassboard://dock/recycle", StringComparison.OrdinalIgnoreCase)));
 		if (recycle != null)
 		{
 			System.Windows.Point point = e.GetPosition(recycle);
@@ -2699,6 +2737,7 @@ public class DockWindow : GlassWindow
 		{
 			"glassboard://dock/apps" => "应用面板",
 			"glassboard://dock/computer" => "此电脑",
+			"glassboard://dock/recycle" => "回收站",
 			"glassboard://dock/control" => "控制中心",
 			"glassboard://dock/settings" => "设置",
 			"glassboard://dock/power" => "电源",
@@ -2715,6 +2754,7 @@ public class DockWindow : GlassWindow
 		{
 			"glassboard://dock/apps" => "apps",
 			"glassboard://dock/computer" => "computer",
+			"glassboard://dock/recycle" => "recycle",
 			"glassboard://dock/control" => "control",
 			"glassboard://dock/settings" => "settings",
 			"glassboard://dock/power" => "power",
