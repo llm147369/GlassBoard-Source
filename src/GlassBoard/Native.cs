@@ -157,6 +157,34 @@ public static class Native
 		icons.Clear();
 	}
 
+	private static ImageSource recycleIcon;
+
+	// 回收站图标：SHGetFileInfo 直接解析 GUID 命名空间路径，拿到系统回收站图标
+	public static ImageSource RecycleIcon()
+	{
+		if (recycleIcon != null)
+		{
+			return recycleIcon;
+		}
+		try
+		{
+			SHFILEINFO info;
+			IntPtr hIcon = SHGetFileInfo(RecycleBin.Clsid, 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 256u);
+			if (hIcon != IntPtr.Zero)
+			{
+				BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(hIcon, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
+				bitmap.Freeze();
+				DestroyIcon(hIcon);
+				recycleIcon = bitmap;
+				return bitmap;
+			}
+		}
+		catch
+		{
+		}
+		return null;
+	}
+
 	public static void Computer()
 	{
 		Process.Start(new ProcessStartInfo("explorer.exe", "shell:MyComputerFolder")

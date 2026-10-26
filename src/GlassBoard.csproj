@@ -36,6 +36,7 @@
     <Reference Include="Interop.UIAutomationClient">
       <HintPath>lib\Interop.UIAutomationClient.dll</HintPath>
     </Reference>
+    <Reference Include="Microsoft.VisualBasic" />
     <Reference Include="System.Core" />
     <Reference Include="System.Management" />
     <Reference Include="System.Runtime.Serialization" />

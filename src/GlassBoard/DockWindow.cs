@@ -1822,6 +1822,19 @@ public class DockWindow : GlassWindow
 					e.Effects = System.Windows.DragDropEffects.None;
 					try
 					{
+						string[] files = (e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) ? ((string[])e.Data.GetData(System.Windows.DataFormats.FileDrop)) : null);
+						System.Windows.Controls.Button recycle = ((files == null || files.Length == 0) ? null : Items.Children.OfType<System.Windows.Controls.Button>().FirstOrDefault((System.Windows.Controls.Button b) => string.Equals(ItemKey(b), RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase)));
+						if (recycle != null)
+						{
+							System.Windows.Point point = e.GetPosition(recycle);
+							if (point.X >= 0.0 && point.Y >= 0.0 && point.X <= recycle.ActualWidth && point.Y <= recycle.ActualHeight)
+							{
+								ClearExternalDockDrag();
+								int deleted = C.DeleteToRecycleBin(files);
+								ShowTaskHint((deleted > 0) ? ("已删除 " + deleted + " 项到回收站") : "未找到可删除的文件");
+								return;
+							}
+						}
 						DockDropTarget target = ExternalDockTarget(e.GetPosition(Items).X);
 						ClearExternalDockDrag();
 						DockPinResult dockPinResult = C.PinDockPaths(array, target);
@@ -2179,6 +2192,17 @@ public class DockWindow : GlassWindow
 			return;
 		}
 		e.Handled = true;
+		System.Windows.Controls.Button recycle = ((!e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)) ? null : Items.Children.OfType<System.Windows.Controls.Button>().FirstOrDefault((System.Windows.Controls.Button b) => string.Equals(ItemKey(b), RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase)));
+		if (recycle != null)
+		{
+			System.Windows.Point point = e.GetPosition(recycle);
+			if (point.X >= 0.0 && point.Y >= 0.0 && point.X <= recycle.ActualWidth && point.Y <= recycle.ActualHeight)
+			{
+				e.Effects = System.Windows.DragDropEffects.Move;
+				ShowTaskHint("松手删除到回收站");
+				return;
+			}
+		}
 		e.Effects = System.Windows.DragDropEffects.Copy;
 		if (!externalDockDrag)
 		{

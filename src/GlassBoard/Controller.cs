@@ -155,6 +155,7 @@ public class Controller
 		Board = new BoardWindow(this);
 		Dock = new DockWindow(this);
 		DesktopWatcher.Start(this);
+		EnsureRecycleBin();
 		ApplyShellPreferences();
 		ApplyGlobalStyle();
 		DispatcherTimer memoryTrimTimer = new DispatcherTimer
@@ -507,6 +508,15 @@ public class Controller
 	{
 		try
 		{
+			if (RecycleBin.IsEntry(entry))
+			{
+				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
+				{
+					UseShellExecute = true
+				});
+				Board.CollapseSmooth();
+				return;
+			}
 			if (entry.IsFolder || Directory.Exists(entry.Path) || !RunningWindows.Activate(entry))
 			{
 				// 冷却保护：启动器类入口（汽水音乐等）主程序窗口与入口路径不同，
@@ -623,6 +633,36 @@ public class Controller
 	public void Remove(Entry a, string scope = null)
 	{
 		RemoveMany(new string[1] { a.Path }, scope);
+	}
+
+	// 开机时把回收站入口补进面板；用户手动移除（移除记录仍在）后不再补回
+	private void EnsureRecycleBin()
+	{
+		try
+		{
+			bool exists = Prefs.Apps.Any((Entry a) => RecycleBin.IsEntry(a));
+			bool removed = Prefs.Removed.Any((string r) => string.Equals(r, RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase));
+			if (!exists && !removed)
+			{
+				Prefs.Apps.Add(RecycleBin.Create());
+				if (persistConfiguration)
+				{
+					Save();
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+	}
+
+	// 拖文件到回收站：送入系统回收站（可恢复）
+	public int DeleteToRecycleBin(string[] paths)
+	{
+		int num = RecycleBin.Delete(paths);
+		Board.SetStatus((num > 0) ? ("已删除 " + num + " 项到回收站，可在回收站恢复") : "未找到可删除的文件");
+		return num;
 	}
 
 	public void RemoveMany(IEnumerable<string> paths, string scope = null)

@@ -193,6 +193,14 @@ public static class FeatureUi
 
 	public static ImageSource Icon(Entry entry, bool showShortcutOverlays = false, bool sharper = false)
 	{
+		if (RecycleBin.IsEntry(entry))
+		{
+			ImageSource recycle = Native.RecycleIcon();
+			if (recycle != null)
+			{
+				return recycle;
+			}
+		}
 		if (!string.IsNullOrWhiteSpace(entry.IconPath) && File.Exists(entry.IconPath))
 		{
 			try

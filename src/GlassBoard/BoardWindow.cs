@@ -1999,6 +1999,15 @@ public class BoardWindow : GlassWindow
 		};
 		tile.DragOver += (object s, DragEventArgs e) =>
 		{
+			if (RecycleBin.IsEntry(a))
+			{
+				if (DraggedEntries(e.Data).Length != 0 || e.Data.GetDataPresent(DataFormats.FileDrop))
+				{
+					e.Effects = DragDropEffects.Move;
+					e.Handled = true;
+				}
+				return;
+			}
 			if (DraggedEntries(e.Data).Length != 0)
 			{
 				int idx = Tiles.Children.IndexOf(tile);
@@ -2017,6 +2026,22 @@ public class BoardWindow : GlassWindow
 		};
 		tile.Drop += (object s, DragEventArgs e) =>
 		{
+			if (RecycleBin.IsEntry(a))
+			{
+				e.Handled = true;
+				if (e.Data.GetDataPresent(DataFormats.FileDrop))
+				{
+					C.DeleteToRecycleBin((string[])e.Data.GetData(DataFormats.FileDrop));
+					return;
+				}
+				string[] dropped = DraggedEntries(e.Data);
+				if (dropped.Length != 0 && !dropped.Any((string p) => RecycleBin.IsPath(p)))
+				{
+					// 拖应用入口到回收站 = 从所有分组与 Dock 移除该入口（有确认与撤销）
+					C.RemoveMany(dropped, "全部");
+				}
+				return;
+			}
 			string[] array = DraggedEntries(e.Data);
 			if (array.Length != 0)
 			{
