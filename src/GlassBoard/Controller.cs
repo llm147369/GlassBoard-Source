@@ -182,7 +182,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard v0.9.18.4 · 玻璃启动台",
+			Text = "GlassBoard v0.9.18.5 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -372,8 +372,8 @@ public class Controller
 			}
 			Prefs.LastUpdateCheckUtc = now;
 			Save();
-			string latest = await OnlineUpdate.FetchLatestTagAsync();
-			if (!string.IsNullOrEmpty(latest) && OnlineUpdate.CompareVersion(latest, OnlineUpdate.CurrentVersion()) > 0)
+			string latest = await OnlineUpdate.LatestAvailableTagAsync();
+			if (!string.IsNullOrEmpty(latest))
 			{
 				Tray.ShowBalloonTip(6000, "发现新版本 v" + latest.TrimStart('v', 'V'), "设置 → 通用 → 检查更新，一键升级到最新版。", ToolTipIcon.Info);
 			}
@@ -1254,7 +1254,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard · 个性化与控制 v0.9.18.4",
+				Title = "GlassBoard · 个性化与控制 v0.9.18.5",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,

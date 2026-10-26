@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -33,6 +34,8 @@ public static class OnlineUpdate
 		public string Name;
 		[DataMember(Name = "html_url")]
 		public string HtmlUrl;
+		[DataMember(Name = "published_at")]
+		public string PublishedAt;
 		[DataMember(Name = "assets")]
 		public List<ReleaseAsset> Assets;
 	}
@@ -46,6 +49,8 @@ public static class OnlineUpdate
 		public long Size;
 		[DataMember(Name = "browser_download_url")]
 		public string DownloadUrl;
+		[DataMember(Name = "updated_at")]
+		public string UpdatedAt;
 	}
 
 	public static string CurrentVersion()
@@ -115,6 +120,56 @@ public static class OnlineUpdate
 		return info == null ? "" : (info.TagName ?? "");
 	}
 
+	// 同版本号但远端构建更新（例如同 tag 重新打包了新修复）的判定：
+	// 用 Release 时间戳与本地 exe 文件时间比较（2 分钟余量），弥补纯版本号比较的盲区。
+	public static bool RemoteBuildNewer(ReleaseInfo info, ReleaseAsset asset)
+	{
+		try
+		{
+			string raw = (asset != null && !string.IsNullOrEmpty(asset.UpdatedAt)) ? asset.UpdatedAt : info.PublishedAt;
+			if (string.IsNullOrEmpty(raw))
+			{
+				return false;
+			}
+			DateTimeOffset remote = DateTimeOffset.Parse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
+			string exe = Assembly.GetExecutingAssembly().Location;
+			if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
+			{
+				return false;
+			}
+			DateTime local = File.GetLastWriteTimeUtc(exe);
+			return remote.UtcDateTime > local.AddMinutes(2.0);
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
+	// 返回「有可用更新时的版本号」，无更新返回空串：版本更高，或同版本但远端构建更新。
+	public static async Task<string> LatestAvailableTagAsync()
+	{
+		ReleaseInfo info = await FetchLatestAsync();
+		if (info == null || string.IsNullOrEmpty(info.TagName))
+		{
+			return "";
+		}
+		int cmp = CompareVersion(info.TagName, CurrentVersion());
+		if (cmp > 0)
+		{
+			return info.TagName;
+		}
+		if (cmp == 0)
+		{
+			ReleaseAsset asset = info.Assets == null ? null : info.Assets.FirstOrDefault((ReleaseAsset a) => !string.IsNullOrEmpty(a.DownloadUrl) && a.DownloadUrl.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+			if (RemoteBuildNewer(info, asset))
+			{
+				return info.TagName;
+			}
+		}
+		return "";
+	}
+
 	// 手动检查入口（设置页 / 托盘菜单）：状态栏与进度条实时反馈
 	public static async Task CheckManualAsync(Window owner, TextBlock status = null, ProgressBar bar = null)
 	{
@@ -140,19 +195,24 @@ public static class OnlineUpdate
 				Set("检查失败：无法读取版本信息，请稍后重试。");
 				return;
 			}
-			if (CompareVersion(info.TagName, current) <= 0)
+			ReleaseAsset asset = info.Assets == null ? null : info.Assets.FirstOrDefault((ReleaseAsset a) => !string.IsNullOrEmpty(a.DownloadUrl) && a.DownloadUrl.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+			int cmp = CompareVersion(info.TagName, current);
+			bool sameBuild = (cmp == 0) && RemoteBuildNewer(info, asset);
+			if (cmp < 0 || (cmp == 0 && !sameBuild))
 			{
 				Set("当前版本 v" + current + " 已是最新。");
 				MessageBox.Show(owner, "当前版本 v" + current + " 已是最新版本。", "GlassBoard 在线更新");
 				return;
 			}
 			string tag = info.TagName.TrimStart('v', 'V');
-			if (MessageBox.Show(owner, "发现新版本 v" + tag + "\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？", "GlassBoard 在线更新", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
+			string prompt = (cmp > 0)
+				? ("发现新版本 v" + tag + "\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？")
+				: ("发现 v" + tag + " 的新构建（同版本号，包含最新修复）。\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？");
+			if (MessageBox.Show(owner, prompt, "GlassBoard 在线更新", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
 			{
 				Set("已取消更新，当前版本 v" + current + "。");
 				return;
 			}
-			ReleaseAsset asset = info.Assets == null ? null : info.Assets.FirstOrDefault((ReleaseAsset a) => !string.IsNullOrEmpty(a.DownloadUrl) && a.DownloadUrl.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
 			if (asset == null)
 			{
 				Set("更新失败：发布包中未找到便携包下载地址。");
