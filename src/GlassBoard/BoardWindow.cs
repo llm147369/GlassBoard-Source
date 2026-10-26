@@ -1851,7 +1851,7 @@ public class BoardWindow : GlassWindow
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		grid.Children.Add(stackPanel);
-		ImageSource imageSource = MediaThumb.TileIcon(a, C.Prefs.Dock.ShowShortcutOverlays, LightTheme);
+		ImageSource imageSource = MediaThumb.TileIcon(a, C.Prefs.Dock.ShowShortcutOverlays);
 		if (imageSource != null)
 		{
 			System.Windows.Controls.Image image = new System.Windows.Controls.Image

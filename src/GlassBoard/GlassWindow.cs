@@ -29,6 +29,9 @@ public class GlassWindow : Window
 
 	protected double GlassPercent = 72.0;
 
+	// 软件渲染（RenderCapability.Tier < 2）时整窗阴影/背景模糊极贵，自动降级保证动画流畅
+	private static readonly bool SlowRender = (RenderCapability.Tier >> 16) < 2;
+
 	// 阴影/毛玻璃效果实例复用：每次打开面板不再重建 Effect（重建会强制整窗重新栅格化，造成首帧卡顿）
 	private DropShadowEffect surfaceShadow;
 
@@ -329,7 +332,7 @@ public class GlassWindow : Window
 
 	private void AddBackdrop(BitmapImage bitmapImage)
 	{
-		if (backdropBlur == null)
+		if (!SlowRender && backdropBlur == null)
 		{
 			backdropBlur = new BlurEffect
 			{
@@ -361,7 +364,7 @@ public class GlassWindow : Window
 
 	private void RefreshBackdropStyle()
 	{
-		if (backdropBlur == null)
+		if (!SlowRender && backdropBlur == null)
 		{
 			backdropBlur = new BlurEffect
 			{
@@ -417,7 +420,7 @@ public class GlassWindow : Window
 		}
 		Surface.Background = GlassMaterials.Fill(CurrentMaterial, LightTheme, GlassPercent);
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? System.Windows.Media.Brushes.Transparent : Polish.Line(LightTheme));
-		Surface.Effect = ((GlassPercent == 0.0 || !CurrentMaterial.Shadow) ? null : surfaceShadow);
+		Surface.Effect = ((GlassPercent == 0.0 || !CurrentMaterial.Shadow || SlowRender) ? null : surfaceShadow);
 		foreach (Border item in from b in Root.Children.OfType<Border>()
 			where b.Tag as string == "backdrop"
 			select b)
