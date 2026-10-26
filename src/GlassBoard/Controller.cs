@@ -155,7 +155,7 @@ public class Controller
 		Board = new BoardWindow(this);
 		Dock = new DockWindow(this);
 		DesktopWatcher.Start(this);
-		EnsureRecycleBin();
+		EnsureSystemEntries();
 		ApplyShellPreferences();
 		ApplyGlobalStyle();
 		DispatcherTimer memoryTrimTimer = new DispatcherTimer
@@ -508,6 +508,12 @@ public class Controller
 	{
 		try
 		{
+			if (SystemPlaces.IsComputer(entry))
+			{
+				Native.Computer();
+				Board.CollapseSmooth();
+				return;
+			}
 			if (RecycleBin.IsEntry(entry))
 			{
 				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
@@ -636,24 +642,31 @@ public class Controller
 	}
 
 	// 开机时把回收站入口补进面板；用户手动移除（移除记录仍在）后不再补回
-	private void EnsureRecycleBin()
+	private void EnsureSystemEntries()
 	{
 		try
 		{
-			bool exists = Prefs.Apps.Any((Entry a) => RecycleBin.IsEntry(a));
-			bool removed = Prefs.Removed.Any((string r) => string.Equals(r, RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase));
-			if (!exists && !removed)
-			{
-				Prefs.Apps.Add(RecycleBin.Create());
-				if (persistConfiguration)
-				{
-					Save();
-				}
-			}
+			EnsureOne(RecycleBin.Create(), RecycleBin.Clsid);
+			EnsureOne(SystemPlaces.CreateComputer(), SystemPlaces.ComputerClsid);
 		}
 		catch (Exception ex)
 		{
 			Store.Log(ex);
+		}
+	}
+
+	// 系统入口（回收站/此电脑）默认加入面板；用户手动移除过的不再自动加回
+	private void EnsureOne(Entry entry, string key)
+	{
+		bool exists = Prefs.Apps.Any((Entry a) => string.Equals(a.Path, key, StringComparison.OrdinalIgnoreCase));
+		bool removed = Prefs.Removed.Any((string r) => string.Equals(r, key, StringComparison.OrdinalIgnoreCase));
+		if (!exists && !removed)
+		{
+			Prefs.Apps.Add(entry);
+			if (persistConfiguration)
+			{
+				Save();
+			}
 		}
 	}
 

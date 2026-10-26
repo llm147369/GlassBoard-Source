@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -160,24 +161,57 @@ public static class Native
 	private static ImageSource recycleIcon;
 	private static ImageSource computerIcon;
 
-	// 此电脑图标：SHGetFileInfo 解析「此电脑」命名空间 GUID，拿到系统官方图标
-	public static ImageSource MyComputerIcon()
+	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+	private static extern int ExtractIconEx(string file, int index, out IntPtr large, IntPtr small, int icons);
+
+	// 系统命名空间图标（此电脑/回收站）：SHGetFileInfo 对 "::{GUID}" 命名空间路径经常拿不到图标，
+	// 因此再回退到注册表 DefaultIcon + ExtractIconEx（imageres.dll 系统图标，稳定可靠）。
+	private static ImageSource ShellNamespaceIcon(string clsid)
 	{
-		if (computerIcon != null)
-		{
-			return computerIcon;
-		}
 		try
 		{
 			SHFILEINFO info;
-			IntPtr hIcon = SHGetFileInfo("::{20D04FE0-3AEA-1069-A2D9-08002B30309D}", 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 256u);
+			IntPtr hIcon = SHGetFileInfo(clsid, 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 256u);
 			if (hIcon != IntPtr.Zero)
 			{
 				BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(hIcon, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
 				bitmap.Freeze();
 				DestroyIcon(hIcon);
-				computerIcon = bitmap;
 				return bitmap;
+			}
+		}
+		catch
+		{
+		}
+		try
+		{
+			string guid = clsid.TrimStart(':');
+			using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey("CLSID\\" + guid + "\\DefaultIcon"))
+			{
+				string def = key?.GetValue(null) as string;
+				if (!string.IsNullOrWhiteSpace(def))
+				{
+					int iconIndex = 0;
+					string file = def;
+					int idx = def.LastIndexOf(',');
+					if (idx >= 0 && int.TryParse(def.Substring(idx + 1), out int parsed))
+					{
+						iconIndex = parsed;
+						file = def.Substring(0, idx);
+					}
+					file = Environment.ExpandEnvironmentVariables(file.Trim('"'));
+					if (File.Exists(file))
+					{
+						ExtractIconEx(file, iconIndex, out IntPtr large, IntPtr.Zero, 1);
+						if (large != IntPtr.Zero)
+						{
+							BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(large, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
+							bitmap.Freeze();
+							DestroyIcon(large);
+							return bitmap;
+						}
+					}
+				}
 			}
 		}
 		catch
@@ -186,30 +220,26 @@ public static class Native
 		return null;
 	}
 
-	// 回收站图标：SHGetFileInfo 直接解析 GUID 命名空间路径，拿到系统回收站图标
+	// 此电脑图标：系统官方图标（SHGetFileInfo → 注册表 DefaultIcon 双通道）
+	public static ImageSource MyComputerIcon()
+	{
+		if (computerIcon != null)
+		{
+			return computerIcon;
+		}
+		computerIcon = ShellNamespaceIcon(SystemPlaces.ComputerClsid);
+		return computerIcon;
+	}
+
+	// 回收站图标：系统官方图标（SHGetFileInfo → 注册表 DefaultIcon 双通道）
 	public static ImageSource RecycleIcon()
 	{
 		if (recycleIcon != null)
 		{
 			return recycleIcon;
 		}
-		try
-		{
-			SHFILEINFO info;
-			IntPtr hIcon = SHGetFileInfo(RecycleBin.Clsid, 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 256u);
-			if (hIcon != IntPtr.Zero)
-			{
-				BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(hIcon, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
-				bitmap.Freeze();
-				DestroyIcon(hIcon);
-				recycleIcon = bitmap;
-				return bitmap;
-			}
-		}
-		catch
-		{
-		}
-		return null;
+		recycleIcon = ShellNamespaceIcon(RecycleBin.Clsid);
+		return recycleIcon;
 	}
 
 	public static void Computer()

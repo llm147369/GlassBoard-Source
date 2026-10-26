@@ -201,6 +201,14 @@ public static class FeatureUi
 				return recycle;
 			}
 		}
+		if (SystemPlaces.IsComputer(entry))
+		{
+			ImageSource computer = Native.MyComputerIcon();
+			if (computer != null)
+			{
+				return computer;
+			}
+		}
 		if (!string.IsNullOrWhiteSpace(entry.IconPath) && File.Exists(entry.IconPath))
 		{
 			try
