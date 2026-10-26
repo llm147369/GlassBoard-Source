@@ -108,7 +108,7 @@ public static class UsageGuide
 			}),
 			("快捷键", new string[]
 			{
-				"默认组合：Ctrl+Alt+Space 展开/收起面板；Ctrl+Alt+T 隐藏/显示任务栏；Ctrl+Alt+D 隐藏/显示桌面图标；Ctrl+Alt+A 添加软件；Ctrl+Alt+S 外观设置；Ctrl+Alt+R 恢复任务栏与图标；Ctrl+Alt+H Windows 任务栏自动隐藏。",
+				"默认组合：Ctrl+Alt+Space 展开/收起面板；Ctrl+Alt+T 隐藏/显示任务栏；Ctrl+Alt+E 隐藏/显示桌面图标；Ctrl+Alt+A 添加软件；Ctrl+Alt+S 外观设置；Ctrl+Alt+R 恢复任务栏与图标；Ctrl+Alt+H Windows 任务栏自动隐藏。被占用时程序会自动换用备选按键并在托盘提示。",
 				"修改：设置「快捷键与开关」页，点对应行的「录制」，直接按下想要的组合键即可。",
 				"每行下方会显示注册状态：已注册 / 未注册（被其他程序占用时请换组合）/ 已关闭。",
 				"改动后点窗口右下角「保存快捷键并完成」才生效；「恢复默认快捷键」一键还原。",

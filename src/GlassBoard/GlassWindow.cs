@@ -131,10 +131,13 @@ public class GlassWindow : Window
 			{
 				Store.Log(ex);
 			}
-			// 屏蔽「显示桌面」(Win+D / Win+M) 的最小化广播：Dock 与组件保持可见（与系统任务栏同等待遇）
+			// 屏蔽「显示桌面」的最小化广播：Dock 与组件保持可见（与系统任务栏同等待遇）。
+			// 不校验 lParam：键盘触发（Win+D / Win+M）时 lParam=0，点击任务栏右侧
+			// 「显示桌面」竖条触发时 lParam 为鼠标坐标——两种都要拦，且本窗口没有
+			// 最小化按钮，任何外部 SC_MINIMIZE 都是广播而非用户主动操作。
 			HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wp, IntPtr lp, ref bool handled) =>
 			{
-				if (msg == 274 && ((wp.ToInt64() & 0xFFF0) == 0xF020) && lp == IntPtr.Zero)
+				if (msg == 274 && ((wp.ToInt64() & 0xFFF0) == 0xF020))
 				{
 					handled = true;
 					return IntPtr.Zero;

@@ -1898,7 +1898,7 @@ public class Controller
 			});
 			stackPanel4.Children.Add(new TextBlock
 			{
-				Text = "可点击录制直接按组合键，保存后生效。右侧开关即时操作。\n隐藏开关：开启隐藏，关闭显示；自动开关：Windows 任务栏自动隐藏。\n修改组合时下方会实时探测冲突（可用/被占用）。快捷键在 GlassBoard 后台运行时始终有效：关闭面板不影响，托盘「退出」才失效；组合被其他软件占用时会每 5 秒自动重试，对方释放后自动接管。",
+				Text = "可点击录制直接按组合键，保存后生效。右侧开关即时操作。\n隐藏开关：开启隐藏，关闭显示；自动开关：Windows 任务栏自动隐藏。\n两者互斥：开启其中一个会自动关闭另一个（隐藏任务栏内部使用 Windows 原生自动隐藏机制，彻底隐藏会与动态壁纸冲突导致白屏）。\n修改组合时下方会实时探测冲突（可用/被占用）。快捷键在 GlassBoard 后台运行时始终有效：关闭面板不影响，托盘「退出」才失效；组合被其他软件占用时会每 5 秒自动重试，对方释放后自动接管。",
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				TextWrapping = TextWrapping.Wrap,
 				Margin = new Thickness(0.0, 8.0, 0.0, 18.0)
@@ -2013,14 +2013,9 @@ public class Controller
 					ToggleButton toggleButton = VisibilitySwitch();
 					if (id == 7)
 					{
-						try
-						{
-							toggleButton.IsChecked = TaskbarAutoHide.Enabled;
-						}
-						catch
-						{
-							toggleButton.IsChecked = false;
-						}
+						// 以用户偏好为准（与「隐藏任务栏」互斥），不读运行时 ABS_AUTOHIDE 位：
+						// 隐藏任务栏内部也走 ABS_AUTOHIDE，读位会让两个开关同时显示开启。
+						toggleButton.IsChecked = Prefs.AutoHideTaskbar && !Prefs.HideTaskbar;
 					}
 					else
 					{
@@ -2047,6 +2042,19 @@ public class Controller
 							else
 							{
 								ShellAction(id - 1, true);
+							}
+							// 隐藏任务栏与自动隐藏互斥：开启其一，界面同步关闭另一个开关
+							syncing = true;
+							try
+							{
+								if (switches.TryGetValue((id == 7) ? 2 : 7, out ToggleButton other))
+								{
+									other.IsChecked = false;
+								}
+							}
+							finally
+							{
+								syncing = false;
 							}
 						}
 					};
@@ -2119,7 +2127,8 @@ public class Controller
 					{
 						try
 						{
-							bool enabled2 = TaskbarAutoHide.Enabled;
+							// 与「隐藏任务栏」互斥的偏好状态，而非运行时 ABS_AUTOHIDE 位
+							bool enabled2 = Prefs.AutoHideTaskbar && !Prefs.HideTaskbar;
 							switches[7].IsChecked = enabled2;
 							text2 = text2 + " · 自动隐藏：" + (enabled2 ? "开启" : "关闭");
 						}
