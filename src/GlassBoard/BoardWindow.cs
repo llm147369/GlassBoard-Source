@@ -204,9 +204,15 @@ public class BoardWindow : GlassWindow
 			{
 				idleRelease.Stop();
 			}
-			else if (layout != null)
+			else
 			{
-				idleRelease.Start();
+				// 面板收起（点击磁贴启动 / Esc / 点击外部 / 游戏模式）时立即关闭悬浮预览，
+				// 否则预览弹窗会失去宿主一直留在桌面上
+				CloseMediaPreview();
+				if (layout != null)
+				{
+					idleRelease.Start();
+				}
 			}
 		};
 		idleRelease.Tick += (object s, EventArgs e) =>
@@ -1765,7 +1771,7 @@ public class BoardWindow : GlassWindow
 			Text = entry.Name,
 			FontSize = 13.0,
 			FontWeight = FontWeights.SemiBold,
-			Foreground = Brushes.White,
+			Foreground = LightTheme ? new SolidColorBrush(Color.FromRgb(28, 31, 40)) : Brushes.White,
 			TextTrimming = TextTrimming.CharacterEllipsis
 		});
 		caption.Children.Add(new TextBlock
@@ -1781,8 +1787,8 @@ public class BoardWindow : GlassWindow
 		return new Border
 		{
 			CornerRadius = new CornerRadius(10.0),
-			Background = new SolidColorBrush(Color.FromArgb(247, 32, 35, 45)),
-			BorderBrush = new SolidColorBrush(Color.FromArgb(40, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
+			Background = LightTheme ? new SolidColorBrush(Color.FromArgb(247, 250, 250, 252)) : new SolidColorBrush(Color.FromArgb(247, 32, 35, 45)),
+			BorderBrush = LightTheme ? new SolidColorBrush(Color.FromArgb(48, 0, 0, 0)) : new SolidColorBrush(Color.FromArgb(40, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
 			BorderThickness = new Thickness(1.0),
 			Child = layout,
 			SnapsToDevicePixels = true
