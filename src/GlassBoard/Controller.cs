@@ -3796,14 +3796,6 @@ public class Controller
 	{
 		panel.Children.Add(new TextBlock
 		{
-			Text = "由 森霖sama 制作",
-			Foreground = System.Windows.Media.Brushes.White,
-			FontSize = 14.5,
-			FontWeight = FontWeights.SemiBold,
-			Margin = new Thickness(0.0, 10.0, 0.0, 6.0)
-		});
-		panel.Children.Add(new TextBlock
-		{
 			Text = "谢谢你的支持与陪伴，也谢谢每一次认真反馈。你的鼓励，会帮助我继续打磨 GlassBoard，让桌面更舒服、更好用。",
 			TextWrapping = TextWrapping.Wrap,
 			Foreground = System.Windows.Media.Brushes.LightGray,
