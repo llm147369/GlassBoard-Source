@@ -56,9 +56,6 @@ public static class DesktopVisibility
 
 	private const string ExplorerAdvancedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
 
-	// 每个窗口句柄最近一次 SW_HIDE 的时间：限制重试频率，避免与 explorer 反复互相拉扯。
-	private static readonly Dictionary<long, DateTime> lastHide = new Dictionary<long, DateTime>();
-
 	private static readonly DispatcherTimer maintenance;
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -341,7 +338,9 @@ public static class DesktopVisibility
 		Remember(list);
 		if (taskbar && hide)
 		{
-			// 记录原始 AppBar 状态并加上 ABS_AUTOHIDE：Explorer 释放工作区，全屏不留透明条
+			// 记录原始 AppBar 状态并加上 ABS_AUTOHIDE：Explorer 释放工作区，全屏不留透明条。
+			// 注意：绝不 SW_HIDE Shell_TrayWnd——Win8+ 壁纸层由该窗口绘制，
+			// 隐藏它会杀死壁纸（与 Wallpaper Engine 等动态壁纸冲突，表现为背景全白）。
 			try
 			{
 				if (originalAppBarState == null)
@@ -371,18 +370,18 @@ public static class DesktopVisibility
 				originalHideIcons = ReadHideIcons() ?? 0;
 			}
 			WriteHideIcons(hide ? 1 : 0);
-		}
-		foreach (IntPtr item in list)
-		{
-			if (hide && ShellBooting(item))
+			foreach (IntPtr item in list)
 			{
-				// explorer 正在重启初始化：先跳过，由维护循环在窗口稳定后再隐藏，避免崩溃循环
-				continue;
-			}
-			if (!ShowWindowAsync(item, (!hide) ? 8 : 0))
-			{
-				num++;
-				Store.Log(new Win32Exception(Marshal.GetLastWin32Error(), "无法切换 " + Class(item)));
+				if (hide && ShellBooting(item))
+				{
+					// explorer 正在重启初始化：先跳过，由维护循环在窗口稳定后再隐藏，避免崩溃循环
+					continue;
+				}
+				if (!ShowWindowAsync(item, (!hide) ? 8 : 0))
+				{
+					num++;
+					Store.Log(new Win32Exception(Marshal.GetLastWin32Error(), "无法切换 " + Class(item)));
+				}
 			}
 		}
 		if (taskbar)
@@ -418,7 +417,7 @@ public static class DesktopVisibility
 		return SetHidden(taskbar: false, !DesiredHidden(taskbar: false));
 	}
 
-	// explorer 刚启动的一小段时间里任务栏仍在初始化，此时 SW_HIDE 容易与
+	// explorer 刚启动的一小段时间里桌面图标列表仍在初始化，此时 SW_HIDE 容易与
 	// comctl32 的 SysListView32 初始化竞争，引发 explorer 崩溃循环（0xc0000005）。
 	private static bool ShellBooting(IntPtr h)
 	{
@@ -438,30 +437,6 @@ public static class DesktopVisibility
 		}
 	}
 
-	// 限频 + 启动宽限期：维护循环只对稳定存在的窗口执行隐藏，避免高频拉扯与崩溃循环。
-	private static bool CanHide(IntPtr h)
-	{
-		long key = h.ToInt64();
-		if (ShellBooting(h))
-		{
-			return false;
-		}
-		DateTime utcNow = DateTime.UtcNow;
-		if (lastHide.TryGetValue(key, out DateTime value) && utcNow - value < TimeSpan.FromSeconds(3.0))
-		{
-			return false;
-		}
-		lastHide[key] = utcNow;
-		if (lastHide.Count > 64)
-		{
-			foreach (long item in (from kv in lastHide orderby kv.Value select kv.Key).Take(lastHide.Count - 64).ToList())
-			{
-				lastHide.Remove(item);
-			}
-		}
-		return true;
-	}
-
 	private static void Maintain()
 	{
 		try
@@ -474,7 +449,9 @@ public static class DesktopVisibility
 			}
 			if (taskbarHidden == true)
 			{
-				// explorer 重启/其他软件改动后可能清掉 ABS_AUTOHIDE：重新断言，保持工作区全屏
+				// explorer 重启/其他软件改动后可能清掉 ABS_AUTOHIDE：重新断言，保持工作区全屏。
+				// 不再触碰 Shell_TrayWnd 窗口本身——Win8+ 壁纸层由它绘制，
+				// SW_HIDE 会杀死壁纸（与 Wallpaper Engine 冲突，表现为背景全白）。
 				try
 				{
 					if (originalAppBarState.HasValue && (AppBarState() & 1u) == 0)
@@ -485,18 +462,6 @@ public static class DesktopVisibility
 				catch (Exception ex)
 				{
 					Store.Log(ex);
-				}
-				List<IntPtr> list = Taskbars();
-				if (list.Count > 0)
-				{
-					Remember(list);
-					foreach (IntPtr item in list)
-					{
-						if (IsWindowVisible(item) && CanHide(item))
-						{
-							ShowWindowAsync(item, 0);
-						}
-					}
 				}
 			}
 		}
