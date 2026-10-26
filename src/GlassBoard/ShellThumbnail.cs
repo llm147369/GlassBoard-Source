@@ -47,7 +47,7 @@ public static class ShellThumbnail
 
 	private static ImageSource Fetch(string path, int size)
 	{
-		if (!File.Exists(path))
+		if (!File.Exists(path) && !path.StartsWith("::", StringComparison.Ordinal))
 		{
 			return null;
 		}
@@ -82,7 +82,19 @@ public static class ShellThumbnail
 		{
 			return hit;
 		}
+		// 永久磁盘缓存：提取一次，后续启动直接加载
+		string cacheName = IconDiskCache.Name(key + "|" + IconDiskCache.FileFingerprint(path));
+		ImageSource diskHit = IconDiskCache.Load(cacheName);
+		if (diskHit != null)
+		{
+			cache[key] = diskHit;
+			return diskHit;
+		}
 		ImageSource src = Fetch(path, size);
+		if (src is BitmapSource srcBitmap)
+		{
+			IconDiskCache.Save(cacheName, srcBitmap);
+		}
 		if (cache.Count > 160)
 		{
 			cache.Clear();
@@ -186,7 +198,7 @@ public static class MediaThumb
 		if (string.Equals(ext, ".svg", StringComparison.OrdinalIgnoreCase))
 		{
 			string png = SvgRaster(entry.Path);
-			ImageSource svg = ((png == null) ? null : LoadFile(png, 192));
+			ImageSource svg = ((png == null) ? null : LoadFile(png, 256));
 			if (svg != null)
 			{
 				return IconNormalizer.Normalize(svg);
@@ -194,7 +206,7 @@ public static class MediaThumb
 		}
 		else if (IsImage(entry.Path) || IsVideo(entry.Path))
 		{
-			ImageSource thumb = ShellThumbnail.Get(entry.Path, 192);
+			ImageSource thumb = ShellThumbnail.Get(entry.Path, 256);
 			if (thumb != null)
 			{
 				return IconNormalizer.Normalize(thumb);

@@ -1461,7 +1461,7 @@ public class DockWindow : GlassWindow
 					bitmapImage.BeginInit();
 					bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
 					bitmapImage.UriSource = new Uri(imagePath);
-					bitmapImage.DecodePixelWidth = 128;
+					bitmapImage.DecodePixelWidth = 256;
 					bitmapImage.EndInit();
 					bitmapImage.Freeze();
 					cachedImage = bitmapImage;

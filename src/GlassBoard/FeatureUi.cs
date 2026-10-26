@@ -180,7 +180,7 @@ public static class FeatureUi
 		bitmapImage.BeginInit();
 		bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
 		bitmapImage.UriSource = new Uri(path);
-		bitmapImage.DecodePixelWidth = 128;
+		bitmapImage.DecodePixelWidth = 256;
 		bitmapImage.EndInit();
 		bitmapImage.Freeze();
 		PngBitmapEncoder pngBitmapEncoder = new PngBitmapEncoder();
@@ -218,7 +218,7 @@ public static class FeatureUi
 					bitmapImage.BeginInit();
 					bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
 					bitmapImage.UriSource = new Uri(entry.IconPath);
-					bitmapImage.DecodePixelWidth = 128;
+					bitmapImage.DecodePixelWidth = 256;
 					bitmapImage.EndInit();
 					bitmapImage.Freeze();
 					customIconCache.Put(key, bitmapImage);

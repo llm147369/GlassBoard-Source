@@ -64,12 +64,12 @@ namespace GlassBoard
 				}
 				else
 				{
-					// 矢量图标（DrawingImage 等）先栅格化到 96×96 再走统一流程
-					RenderTargetBitmap raster = new RenderTargetBitmap(96, 96, 96.0, 96.0, PixelFormats.Pbgra32);
+					// 矢量图标（DrawingImage 等）先栅格化到 256×256 再走统一流程（保证放大不糊）
+					RenderTargetBitmap raster = new RenderTargetBitmap(256, 256, 96.0, 96.0, PixelFormats.Pbgra32);
 					DrawingVisual visual = new DrawingVisual();
 					using (DrawingContext dc = visual.RenderOpen())
 					{
-						dc.DrawImage(source, new Rect(0.0, 0.0, 96.0, 96.0));
+						dc.DrawImage(source, new Rect(0.0, 0.0, 256.0, 256.0));
 					}
 					raster.Render(visual);
 					src = raster;
