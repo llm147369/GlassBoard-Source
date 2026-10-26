@@ -4,7 +4,7 @@
     "AutoDesktopImport": true,
     "AutoGameMode": false,
     "AutoGrouping": true,
-    "AutoHideTaskbar": false,
+    "AutoHideTaskbar": true,
     "BoardDismissOnDeactivate": true,
     "BoardHideFolders": false,
     "BoardHideGroups": true,
@@ -95,7 +95,7 @@
     },
     "Groups": [],
     "HideDesktopIcons": true,
-    "HideTaskbar": true,
+    "HideTaskbar": false,
     "Hotkeys": [
         {
             "ActionId": 1,
