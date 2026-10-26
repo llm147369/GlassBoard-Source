@@ -32,7 +32,7 @@ public class MaterialOptions
 
 	public void Normalize()
 	{
-		Kind = Math.Max(0, Math.Min(3, Kind));
+		Kind = Math.Max(0, Math.Min(4, Kind));
 		Gloss = LayoutRules.Clamp(Gloss, 0.0, 1.0, 0.15);
 		Grain = LayoutRules.Clamp(Grain, 0.0, 1.0, 0.0);
 		if (!Regex.IsMatch(Tint ?? "", "^#[a-fA-F0-9]{6}$"))

@@ -692,6 +692,7 @@ public class DockWindow : GlassWindow
 		MotionEnabled = dock.MotionEnabled;
 		MotionLevel = dock.MotionLevel;
 		ConfigureGlass(dock);
+		SetGlassMode(C.Prefs.DockGlass);
 		Topmost = dock.AlwaysOnTop || dock.AutoHide || boardPinDragging;
 		revealSerial++;
 		BeginAnimation(Window.TopProperty, null);

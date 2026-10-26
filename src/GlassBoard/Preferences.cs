@@ -95,6 +95,19 @@ public class Preferences
 	[DataMember]
 	public bool BoardHideFolders;
 
+	// 玻璃拟态：总开关 + 三个界面独立开关（开启后按玻璃拟态配方渲染，基础材质保持不变）
+	[DataMember]
+	public bool Glassmorphism;
+
+	[DataMember]
+	public bool BoardGlass;
+
+	[DataMember]
+	public bool DockGlass;
+
+	[DataMember]
+	public bool WidgetsGlass;
+
 	[DataMember]
 	public bool GameMode;
 

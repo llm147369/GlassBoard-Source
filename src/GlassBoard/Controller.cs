@@ -182,7 +182,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard v0.9.18.6 · 玻璃启动台",
+			Text = "GlassBoard v0.9.18.7 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1317,7 +1317,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard · 个性化与控制 v0.9.18.6",
+				Title = "GlassBoard · 个性化与控制 v0.9.18.7",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -1604,6 +1604,37 @@ public class Controller
 			{
 				Prefs.Light = light;
 				live();
+			});
+			func3(stackPanel2, "开启玻璃拟态（面板 / Dock / 组件统一应用）", Prefs.Glassmorphism, (bool glass) =>
+			{
+				Prefs.Glassmorphism = glass;
+				Prefs.BoardGlass = (Prefs.DockGlass = (Prefs.WidgetsGlass = glass));
+				ApplyGlassModes();
+			});
+			func3(stackPanel2, "玻璃拟态 · 应用面板", Prefs.BoardGlass, (bool glass) =>
+			{
+				Prefs.BoardGlass = glass;
+				Prefs.Glassmorphism = (Prefs.BoardGlass && Prefs.DockGlass && Prefs.WidgetsGlass);
+				ApplyGlassModes();
+			});
+			func3(stackPanel2, "玻璃拟态 · Dock 栏", Prefs.DockGlass, (bool glass) =>
+			{
+				Prefs.DockGlass = glass;
+				Prefs.Glassmorphism = (Prefs.BoardGlass && Prefs.DockGlass && Prefs.WidgetsGlass);
+				ApplyGlassModes();
+			});
+			func3(stackPanel2, "玻璃拟态 · 桌面组件", Prefs.WidgetsGlass, (bool glass) =>
+			{
+				Prefs.WidgetsGlass = glass;
+				Prefs.Glassmorphism = (Prefs.BoardGlass && Prefs.DockGlass && Prefs.WidgetsGlass);
+				ApplyGlassModes();
+			});
+			stackPanel2.Children.Add(new TextBlock
+			{
+				Text = "玻璃拟态 = 磨砂背景模糊 + 半透明渐变 + 高光描边。Win10 / Win11 通用（不依赖系统 Acrylic）；动态壁纸（小红车等）下背景为最近一次快照；软件渲染环境自动降级为清透玻璃，保证动画流畅。",
+				TextWrapping = TextWrapping.Wrap,
+				Foreground = System.Windows.Media.Brushes.LightGray,
+				Margin = new Thickness(0.0, 2.0, 0.0, 8.0)
 			});
 			func4(stackPanel2, "大面板尺寸", new string[3] { "舒适 · 中号", "宽阔 · 大号", "铺满 · 全屏" }, Prefs.PanelSize, (int panelSize) =>
 			{
@@ -3500,6 +3531,18 @@ public class Controller
 			Text = "游戏模式期间玻璃窗口完全隐藏，避免触碰底边误唤醒。右键系统托盘可退出；自动模式离开全屏后恢复 Dock 和组件。组件配置不关闭或清空。",
 			TextWrapping = TextWrapping.Wrap
 		});
+	}
+
+	// 玻璃拟态三界面独立开关的即时应用（材质保持不变，仅叠加玻璃配方）
+	private void ApplyGlassModes()
+	{
+		Board.SetGlassMode(Prefs.BoardGlass);
+		Dock.SetGlassMode(Prefs.DockGlass);
+		foreach (WidgetWindow w in widgets.SnapshotWindows)
+		{
+			w.SetGlassMode(Prefs.WidgetsGlass);
+		}
+		Save();
 	}
 
 	private void BuildMaterialEditor(StackPanel panel, string title, MaterialOptions options, Action changed)

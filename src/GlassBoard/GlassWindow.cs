@@ -49,6 +49,43 @@ public class GlassWindow : Window
 
 	protected bool MotionEnabled = true;
 
+	// 玻璃拟态：开启后 EffectiveMaterial() 返回玻璃配方（Kind 4），基础材质保持原样可随时关闭还原
+	protected bool GlassActive;
+
+	private readonly MaterialOptions glassEffective = new MaterialOptions();
+
+	/// <summary>切换玻璃拟态（面板 / Dock / 组件可独立开关；切换立即重绘且只重算一次材质）</summary>
+	public void SetGlassMode(bool on)
+	{
+		if (GlassActive == on)
+		{
+			return;
+		}
+		GlassActive = on;
+		SetGlassOpacity(GlassPercent);
+		RefreshBackdropStyle();
+	}
+
+	private MaterialOptions EffectiveMaterial()
+	{
+		if (!GlassActive)
+		{
+			return CurrentMaterial;
+		}
+		glassEffective.Kind = 4;
+		glassEffective.Tint = CurrentMaterial.Tint;
+		glassEffective.Gloss = Math.Max(0.35, CurrentMaterial.Gloss);
+		glassEffective.Grain = Math.Max(0.05, CurrentMaterial.Grain);
+		glassEffective.Shadow = true;
+		return glassEffective;
+	}
+
+	// 背景快照的可见度：玻璃拟态下背景模糊是主角，调到近全透；普通材质维持原值
+	private double BackdropVisibility()
+	{
+		return (EffectiveMaterial().Kind == 4) ? ((LightTheme ? 0.94 : 0.86)) : ((LightTheme ? 0.8 : 0.66));
+	}
+
 	// 主动隐藏的通行证：游戏模式等主动 Hide() 前先置位；外部广播（显示桌面等）引发的
 	// WM_SHOWWINDOW(hide) 没有通行证一律拦截，防止 Dock/组件被系统藏掉。
 	internal bool ExternalHideAllowed;
@@ -71,15 +108,21 @@ public class GlassWindow : Window
 	{
 		get
 		{
-			if (CurrentMaterial.Kind != 1)
+			MaterialOptions effective = EffectiveMaterial();
+			if (effective.Kind == 1)
 			{
-				if (CurrentMaterial.Kind != 2)
-				{
-					return BlurRadius;
-				}
+				return BlurRadius * 0.25;
+			}
+			if (effective.Kind == 2)
+			{
 				return Math.Min(40.0, BlurRadius * 1.3);
 			}
-			return BlurRadius * 0.25;
+			if (effective.Kind == 4)
+			{
+				// 玻璃拟态：更强的磨砂（上限 46，超出部分被 WPF 自动收敛，不影响性能模型）
+				return Math.Min(46.0, BlurRadius * 1.35);
+			}
+			return BlurRadius;
 		}
 	}
 
@@ -348,7 +391,7 @@ public class GlassWindow : Window
 			{
 				Stretch = Stretch.Fill
 			},
-			Opacity = (LightTheme ? 0.8 : 0.66)
+			Opacity = BackdropVisibility()
 		};
 		border.Clip = new RectangleGeometry(new Rect(0.0, 0.0, Width - 28.0, Height - 28.0), Surface.CornerRadius.TopLeft, Surface.CornerRadius.TopLeft);
 		border.Effect = backdropBlur;
@@ -381,7 +424,7 @@ public class GlassWindow : Window
 			{
 				border.Clip = clip;
 				border.CornerRadius = Surface.CornerRadius;
-				border.Opacity = (LightTheme ? 0.8 : 0.66);
+				border.Opacity = BackdropVisibility();
 				border.Effect = backdropBlur;
 			}
 		}
@@ -400,7 +443,8 @@ public class GlassWindow : Window
 	public void SetGlassOpacity(double percent)
 	{
 		GlassPercent = LayoutRules.GlassOpacity(percent);
-		string sig = (LightTheme ? 1 : 0) + "|" + CurrentMaterial.Kind + "|" + CurrentMaterial.Gloss + "|" + CurrentMaterial.Grain + "|" + CurrentMaterial.Tint + "|" + CurrentMaterial.Shadow;
+		MaterialOptions effective = EffectiveMaterial();
+		string sig = (LightTheme ? 1 : 0) + "|" + effective.Kind + "|" + effective.Gloss + "|" + effective.Grain + "|" + effective.Tint + "|" + effective.Shadow;
 		if (glassApplied && sig == materialSig && Math.Abs(GlassPercent - lastGlassPercent) < 0.001)
 		{
 			return;
@@ -418,9 +462,9 @@ public class GlassWindow : Window
 				Color = Colors.Black
 			};
 		}
-		Surface.Background = GlassMaterials.Fill(CurrentMaterial, LightTheme, GlassPercent);
+		Surface.Background = GlassMaterials.Fill(effective, LightTheme, GlassPercent);
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? System.Windows.Media.Brushes.Transparent : Polish.Line(LightTheme));
-		Surface.Effect = ((GlassPercent == 0.0 || !CurrentMaterial.Shadow || SlowRender) ? null : surfaceShadow);
+		Surface.Effect = ((GlassPercent == 0.0 || !effective.Shadow || SlowRender) ? null : surfaceShadow);
 		foreach (Border item in from b in Root.Children.OfType<Border>()
 			where b.Tag as string == "backdrop"
 			select b)
@@ -440,15 +484,15 @@ public class GlassWindow : Window
 		border.CornerRadius = Surface.CornerRadius;
 		Grid grid = (Grid)(border.Child = new Grid());
 		border.Opacity = GlassPercent / 100.0;
-		if (CurrentMaterial.Gloss > 0.0)
+		if (effective.Gloss > 0.0)
 		{
 			grid.Children.Add(new Border
 			{
 				CornerRadius = Surface.CornerRadius,
-				Background = new LinearGradientBrush(System.Windows.Media.Color.FromArgb((byte)Math.Round(CurrentMaterial.Gloss * 90.0), byte.MaxValue, byte.MaxValue, byte.MaxValue), Colors.Transparent, 90.0)
+				Background = new LinearGradientBrush(System.Windows.Media.Color.FromArgb((byte)Math.Round(effective.Gloss * 90.0), byte.MaxValue, byte.MaxValue, byte.MaxValue), Colors.Transparent, 90.0)
 			});
 		}
-		if (CurrentMaterial.Grain > 0.0)
+		if (effective.Grain > 0.0)
 		{
 			grid.Children.Add(new Border
 			{
@@ -459,7 +503,7 @@ public class GlassWindow : Window
 					ViewportUnits = BrushMappingMode.Absolute,
 					Viewport = new Rect(0.0, 0.0, 32.0, 32.0)
 				},
-				Opacity = CurrentMaterial.Grain
+				Opacity = effective.Grain
 			});
 		}
 	}

@@ -689,6 +689,7 @@ public sealed class WidgetWindow : GlassWindow
 		MotionEnabled = M.C.Prefs.Dock.MotionEnabled;
 		MotionLevel = M.C.Prefs.Dock.MotionLevel;
 		ConfigureGlass(M.C.Prefs.Dock, widgets.Material);
+		SetGlassMode(M.C.Prefs.WidgetsGlass);
 		GlassPercent = (BareShell ? 0.0 : WidgetSizing.Background(widgets, widgets.Position(PanelId)));
 		Topmost = widgets.Topmost;
 		moveGrip.Visibility = ((BareShell || widgets.Locked || Kinds.SequenceEqual(new string[1] { "clock" })) ? Visibility.Collapsed : Visibility.Visible);

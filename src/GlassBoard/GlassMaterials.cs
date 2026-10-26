@@ -24,6 +24,18 @@ public static class GlassMaterials
 			color = (Color)ColorConverter.ConvertFromString(options.Tint);
 		}
 		color.A = (byte)Math.Round(percent * 255.0 / 100.0);
+		if (options.Kind == 4)
+		{
+			// 玻璃拟态：低饱和半透明 + 左上→右下通透渐变。磨砂感由背景模糊承载，
+			// 顶部高光与细纹理由 Gloss/Grain 层叠加，1px 高光描边保证玻璃轮廓。
+			double alpha = percent * 255.0 / 100.0;
+			Color glassBase = (light ? Color.FromRgb(240, 244, 252) : Color.FromRgb(16, 19, 27));
+			Color topColor = glassBase;
+			topColor.A = (byte)Math.Round(alpha * (light ? 0.34 : 0.42));
+			Color bottomColor = glassBase;
+			bottomColor.A = (byte)Math.Round(alpha * (light ? 0.5 : 0.62));
+			return new LinearGradientBrush(topColor, bottomColor, 70.0);
+		}
 		if (options.Kind != 3 && options.Kind != 1)
 		{
 			return new SolidColorBrush(color);

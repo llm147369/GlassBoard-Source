@@ -634,6 +634,7 @@ public class BoardWindow : GlassWindow
 			MotionEnabled = C.Prefs.Dock.MotionEnabled;
 			MotionLevel = C.Prefs.Dock.MotionLevel;
 			ConfigureGlass(C.Prefs.Dock, C.Prefs.BoardMaterial);
+			SetGlassMode(C.Prefs.BoardGlass);
 			GlassPercent = C.Prefs.OpacityPercent ?? 72.0;
 			Polish.Apply(this, LightTheme);
 			BuildForSize();
