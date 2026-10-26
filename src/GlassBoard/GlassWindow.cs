@@ -29,6 +29,21 @@ public class GlassWindow : Window
 
 	protected double GlassPercent = 72.0;
 
+	// 阴影/毛玻璃效果实例复用：每次打开面板不再重建 Effect（重建会强制整窗重新栅格化，造成首帧卡顿）
+	private DropShadowEffect surfaceShadow;
+
+	private System.Windows.Media.Effects.BlurEffect backdropBlur;
+
+	private BitmapImage cachedBackdrop;
+
+	private string backdropKey = "";
+
+	private string materialSig = "";
+
+	private double lastGlassPercent = -1.0;
+
+	private bool glassApplied;
+
 	protected bool MotionEnabled = true;
 
 	// 主动隐藏的通行证：游戏模式等主动 Hide() 前先置位；外部广播（显示桌面等）引发的
@@ -115,13 +130,14 @@ public class GlassWindow : Window
 		Root.Margin = new Thickness(14.0);
 		Surface.CornerRadius = new CornerRadius(radius);
 		Surface.BorderThickness = new Thickness(1.0);
-		Surface.Effect = new DropShadowEffect
+		surfaceShadow = new DropShadowEffect
 		{
 			BlurRadius = 25.0,
 			ShadowDepth = 7.0,
 			Opacity = 0.28,
 			Color = Colors.Black
 		};
+		Surface.Effect = surfaceShadow;
 		Root.Children.Add(Surface);
 		Root.Children.Add(ContentGrid);
 		SourceInitialized += (object s, EventArgs e) =>
@@ -267,6 +283,12 @@ public class GlassWindow : Window
 		{
 			return;
 		}
+		string key = (int)Math.Round(Left) + "_" + (int)Math.Round(Top) + "_" + (int)Math.Round(Width) + "_" + (int)Math.Round(Height) + "_" + (LightTheme ? 1 : 0);
+		if (cachedBackdrop != null && backdropKey == key)
+		{
+			AddBackdrop(cachedBackdrop);
+			return;
+		}
 		try
 		{
 			Matrix matrix = Matrix.Identity;
@@ -295,30 +317,9 @@ public class GlassWindow : Window
 			bitmapImage.StreamSource = memoryStream;
 			bitmapImage.EndInit();
 			bitmapImage.Freeze();
-			Border border = new Border
-			{
-				Tag = "backdrop",
-				CornerRadius = Surface.CornerRadius,
-				Background = new ImageBrush(bitmapImage)
-				{
-					Stretch = Stretch.Fill
-				},
-				Opacity = (light ? 0.8 : 0.66)
-			};
-			border.Clip = new RectangleGeometry(new Rect(0.0, 0.0, Width - 28.0, Height - 28.0), Surface.CornerRadius.TopLeft, Surface.CornerRadius.TopLeft);
-			border.Effect = new BlurEffect
-			{
-				Radius = MaterialBlur,
-				RenderingBias = RenderingBias.Performance
-			};
-			Border element = new Border
-			{
-				Tag = "backdrop",
-				Clip = border.Clip,
-				Child = border,
-				Opacity = GlassPercent / 100.0
-			};
-			Root.Children.Insert(0, element);
+			cachedBackdrop = bitmapImage;
+			backdropKey = key;
+			AddBackdrop(cachedBackdrop);
 		}
 		catch (Exception ex)
 		{
@@ -326,8 +327,48 @@ public class GlassWindow : Window
 		}
 	}
 
+	private void AddBackdrop(BitmapImage bitmapImage)
+	{
+		if (backdropBlur == null)
+		{
+			backdropBlur = new BlurEffect
+			{
+				Radius = MaterialBlur,
+				RenderingBias = RenderingBias.Performance
+			};
+		}
+		Border border = new Border
+		{
+			Tag = "backdrop",
+			CornerRadius = Surface.CornerRadius,
+			Background = new ImageBrush(bitmapImage)
+			{
+				Stretch = Stretch.Fill
+			},
+			Opacity = (LightTheme ? 0.8 : 0.66)
+		};
+		border.Clip = new RectangleGeometry(new Rect(0.0, 0.0, Width - 28.0, Height - 28.0), Surface.CornerRadius.TopLeft, Surface.CornerRadius.TopLeft);
+		border.Effect = backdropBlur;
+		Border element = new Border
+		{
+			Tag = "backdrop",
+			Clip = border.Clip,
+			Child = border,
+			Opacity = GlassPercent / 100.0
+		};
+		Root.Children.Insert(0, element);
+	}
+
 	private void RefreshBackdropStyle()
 	{
+		if (backdropBlur == null)
+		{
+			backdropBlur = new BlurEffect
+			{
+				Radius = MaterialBlur,
+				RenderingBias = RenderingBias.Performance
+			};
+		}
 		foreach (Border item in from b in Root.Children.OfType<Border>()
 			where b.Tag as string == "backdrop"
 			select b)
@@ -338,11 +379,7 @@ public class GlassWindow : Window
 				border.Clip = clip;
 				border.CornerRadius = Surface.CornerRadius;
 				border.Opacity = (LightTheme ? 0.8 : 0.66);
-				border.Effect = new BlurEffect
-				{
-					Radius = MaterialBlur,
-					RenderingBias = RenderingBias.Performance
-				};
+				border.Effect = backdropBlur;
 			}
 		}
 	}
@@ -360,15 +397,27 @@ public class GlassWindow : Window
 	public void SetGlassOpacity(double percent)
 	{
 		GlassPercent = LayoutRules.GlassOpacity(percent);
+		string sig = (LightTheme ? 1 : 0) + "|" + CurrentMaterial.Kind + "|" + CurrentMaterial.Gloss + "|" + CurrentMaterial.Grain + "|" + CurrentMaterial.Tint + "|" + CurrentMaterial.Shadow;
+		if (glassApplied && sig == materialSig && Math.Abs(GlassPercent - lastGlassPercent) < 0.001)
+		{
+			return;
+		}
+		lastGlassPercent = GlassPercent;
+		materialSig = sig;
+		glassApplied = true;
+		if (surfaceShadow == null)
+		{
+			surfaceShadow = new DropShadowEffect
+			{
+				BlurRadius = 25.0,
+				ShadowDepth = 7.0,
+				Opacity = 0.28,
+				Color = Colors.Black
+			};
+		}
 		Surface.Background = GlassMaterials.Fill(CurrentMaterial, LightTheme, GlassPercent);
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? System.Windows.Media.Brushes.Transparent : Polish.Line(LightTheme));
-		Surface.Effect = ((GlassPercent == 0.0 || !CurrentMaterial.Shadow) ? null : new DropShadowEffect
-		{
-			BlurRadius = 25.0,
-			ShadowDepth = 7.0,
-			Opacity = 0.28,
-			Color = Colors.Black
-		});
+		Surface.Effect = ((GlassPercent == 0.0 || !CurrentMaterial.Shadow) ? null : surfaceShadow);
 		foreach (Border item in from b in Root.Children.OfType<Border>()
 			where b.Tag as string == "backdrop"
 			select b)

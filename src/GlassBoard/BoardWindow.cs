@@ -110,6 +110,7 @@ public class BoardWindow : GlassWindow
 	private Thumb resizeGrip;
 
 	private int visibilitySerial;
+	private DispatcherTimer trimTimer;
 
 	private WrapPanel folderBar;
 
@@ -498,25 +499,10 @@ public class BoardWindow : GlassWindow
 			return;
 		}
 		int serial = ++visibilitySerial;
-		Action trimMemory = delegate
-		{
-			Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)(() =>
-			{
-				try
-				{
-					GC.Collect(2, GCCollectionMode.Optimized, false);
-					Native.TrimWorkingSet();
-				}
-				catch (Exception ex)
-				{
-					Store.Log(ex);
-				}
-			}));
-		};
+		ScheduleTrim();
 		if (!MotionEnabled)
 		{
 			Hide();
-			trimMemory();
 			return;
 		}
 		DoubleAnimation fade = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(110.0))
@@ -531,10 +517,36 @@ public class BoardWindow : GlassWindow
 			if (serial == visibilitySerial)
 			{
 				Hide();
-				trimMemory();
 			}
 		};
 		BeginAnimation(UIElement.OpacityProperty, fade);
+	}
+
+	// 折叠后延迟 3 秒再整理内存：避免刚收起又打开时 GC/TrimWorkingSet 卡住首帧
+	private void ScheduleTrim()
+	{
+		if (trimTimer == null)
+		{
+			trimTimer = new DispatcherTimer
+			{
+				Interval = TimeSpan.FromSeconds(3.0)
+			};
+			trimTimer.Tick += (object s, EventArgs e) =>
+			{
+				trimTimer.Stop();
+				try
+				{
+					GC.Collect(2, GCCollectionMode.Optimized, false);
+					Native.TrimWorkingSet();
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
+			};
+		}
+		trimTimer.Stop();
+		trimTimer.Start();
 	}
 
 	internal bool ReleaseHiddenView()
@@ -583,6 +595,10 @@ public class BoardWindow : GlassWindow
 	public void Open()
 	{
 		idleRelease.Stop();
+		if (trimTimer != null)
+		{
+			trimTimer.Stop();
+		}
 		preparingView = true;
 		try
 		{
