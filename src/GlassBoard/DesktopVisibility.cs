@@ -22,6 +22,11 @@ public static class DesktopVisibility
 
 	private static bool? iconsHidden;
 
+	// 隐藏桌面图标时的原注册表 HideIcons 值：退出/崩溃恢复时还原。
+	private static int? originalHideIcons;
+
+	private const string ExplorerAdvancedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
+
 	// 每个窗口句柄最近一次 SW_HIDE 的时间：限制重试频率，避免与 explorer 反复互相拉扯。
 	private static readonly Dictionary<long, DateTime> lastHide = new Dictionary<long, DateTime>();
 
@@ -59,6 +64,29 @@ public static class DesktopVisibility
 
 	[DllImport("user32.dll")]
 	private static extern bool EnumChildWindows(IntPtr parent, EnumCallback callback, IntPtr data);
+
+	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+	private static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, string lParam, uint flags, uint timeout, out IntPtr result);
+
+	// 桌面图标走 Explorer 原生开关（HideIcons 注册表值 + 广播 WM_SETTINGCHANGE）：
+	// Explorer 自己负责隐藏/显示，窗口层不再反复 SW_HIDE，彻底消除图标闪烁。
+	private static int? ReadHideIcons()
+	{
+		using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(ExplorerAdvancedKey))
+		{
+			object value = key?.GetValue("HideIcons");
+			return (value is int num) ? new int?(num) : null;
+		}
+	}
+
+	private static void WriteHideIcons(int value)
+	{
+		using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(ExplorerAdvancedKey))
+		{
+			key.SetValue("HideIcons", value, Microsoft.Win32.RegistryValueKind.DWord);
+		}
+		SendMessageTimeout(new IntPtr(0xFFFF), 26u, IntPtr.Zero, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 2u, 2000u, out IntPtr _);
+	}
 
 	static DesktopVisibility()
 	{
@@ -169,7 +197,8 @@ public static class DesktopVisibility
 				{
 					Handle = handle.ToInt64(),
 					ClassName = Class(handle),
-					Visible = ((GetWindowLong(handle, -16) & 0x10000000) != 0)
+					Visible = ((GetWindowLong(handle, -16) & 0x10000000) != 0),
+					HideIcons = originalHideIcons
 				};
 				flag = true;
 			}
@@ -230,6 +259,15 @@ public static class DesktopVisibility
 		}
 		int num = 0;
 		Remember(list);
+		if (!taskbar)
+		{
+			// 桌面图标：写 Explorer 原生 HideIcons 开关（首次记录原值，退出/崩溃恢复时还原）
+			if (originalHideIcons == null)
+			{
+				originalHideIcons = ReadHideIcons() ?? 0;
+			}
+			WriteHideIcons(hide ? 1 : 0);
+		}
 		foreach (IntPtr item in list)
 		{
 			if (hide && ShellBooting(item))
@@ -324,24 +362,24 @@ public static class DesktopVisibility
 	{
 		try
 		{
-			bool[] array = new bool[2] { true, false };
-			foreach (bool flag in array)
+			// 桌面图标已由 Explorer 原生 HideIcons 负责，这里只做状态对齐：
+			// 若用户在桌面右键菜单手动改回显示，重新写回隐藏值即可，不触碰任何窗口，不会闪烁。
+			if (iconsHidden == true && (ReadHideIcons() ?? 0) != 1)
 			{
-				if ((flag ? taskbarHidden : iconsHidden) != true)
+				WriteHideIcons(1);
+			}
+			if (taskbarHidden == true)
+			{
+				List<IntPtr> list = Taskbars();
+				if (list.Count > 0)
 				{
-					continue;
-				}
-				List<IntPtr> list = (flag ? Taskbars() : IconLists());
-				if (list.Count == 0)
-				{
-					continue;
-				}
-				Remember(list);
-				foreach (IntPtr item in list)
-				{
-					if (IsWindowVisible(item) && CanHide(item))
+					Remember(list);
+					foreach (IntPtr item in list)
 					{
-						ShowWindowAsync(item, 0);
+						if (IsWindowVisible(item) && CanHide(item))
+						{
+							ShowWindowAsync(item, 0);
+						}
 					}
 				}
 			}
@@ -363,6 +401,17 @@ public static class DesktopVisibility
 		{
 			foreach (ShellState item in (List<ShellState>)new DataContractJsonSerializer(typeof(List<ShellState>)).ReadObject((Stream)stream))
 			{
+				if (item.HideIcons.HasValue)
+				{
+					WriteHideIcons(item.HideIcons.Value);
+					break;
+				}
+			}
+		}
+		using (FileStream stream2 = File.OpenRead(RecoveryFile))
+		{
+			foreach (ShellState item in (List<ShellState>)new DataContractJsonSerializer(typeof(List<ShellState>)).ReadObject((Stream)stream2))
+			{
 				if (MatchesSaved(item))
 				{
 					ShowWindow(new IntPtr(item.Handle), item.Visible ? 8 : 0);
@@ -377,6 +426,11 @@ public static class DesktopVisibility
 		maintenance.Stop();
 		taskbarHidden = null;
 		iconsHidden = null;
+		if (originalHideIcons.HasValue)
+		{
+			WriteHideIcons(originalHideIcons.Value);
+			originalHideIcons = null;
+		}
 		foreach (ShellState value in original.Values)
 		{
 			if (MatchesSaved(value))
@@ -396,6 +450,11 @@ public static class DesktopVisibility
 		maintenance.Stop();
 		taskbarHidden = false;
 		iconsHidden = false;
+		if (originalHideIcons.HasValue)
+		{
+			WriteHideIcons(originalHideIcons.Value);
+			originalHideIcons = null;
+		}
 		IntPtr[] array = Taskbars().Concat(DesktopLists()).ToArray();
 		for (int i = 0; i < array.Length; i++)
 		{

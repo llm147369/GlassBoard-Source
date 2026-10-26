@@ -274,7 +274,40 @@ public class DockWindow : GlassWindow
 			{
 				Store.Trace("HOTKEY registered id=" + k2.ActionId + " " + HotkeyRules.Label(k2) + " active=" + hotkeys.Active.Count);
 			}
-			if (list.Count > 0)
+			// 出厂组合被其他程序占用时自动改用备选按键：用户拿到手即有可用快捷键，
+			// 无需手动进设置改（用户自定义过的组合保持原样，交给下方重试机制）。
+			uint[] fallbackKeys = new uint[18] { 69u, 66u, 71u, 75u, 74u, 78u, 89u, 80u, 81u, 85u, 76u, 86u, 77u, 73u, 79u, 90u, 88u, 87u };
+			bool changed = false;
+			foreach (HotkeySetting k in C.Prefs.Hotkeys)
+			{
+				if (!k.Enabled || !IsStock(k) || hotkeys.Active.Any((HotkeySetting a) => a.ActionId == k.ActionId))
+				{
+					continue;
+				}
+				foreach (uint vk in fallbackKeys)
+				{
+					if (C.Prefs.Hotkeys.Any((HotkeySetting h) => h.Enabled && h.ActionId != k.ActionId && h.Modifiers == k.Modifiers && h.Key == vk))
+					{
+						continue;
+					}
+					HotkeySetting candidate = k.Copy();
+					candidate.Key = vk;
+					if (RegisterKey(candidate))
+					{
+						k.Key = vk;
+						hotkeys.Active.Add(candidate.Copy());
+						changed = true;
+						Store.Trace("HOTKEY auto-fallback id=" + k.ActionId + " -> " + HotkeyRules.Label(candidate));
+						TrayWarning(HotkeyRules.Actions[k.ActionId - 1] + " 默认组合 " + HotkeyRules.Label(HotkeyRules.Defaults()[k.ActionId - 1]) + " 被占用，已自动改用 " + HotkeyRules.Label(candidate) + "（可在设置中修改）");
+						break;
+					}
+				}
+			}
+			if (changed)
+			{
+				Store.Save(C.Prefs);
+			}
+			if (C.Prefs.Hotkeys.Any((HotkeySetting k) => k.Enabled && !hotkeys.Active.Any((HotkeySetting a) => a.ActionId == k.ActionId)))
 			{
 				// 开机启动时其他程序可能尚未就绪占用组合键，持续自动重试直到全部注册成功
 				//（不设次数上限：占用者无论多晚释放，都会自动接管，无需手动重新注册）。
@@ -313,7 +346,9 @@ public class DockWindow : GlassWindow
 					}
 				};
 				retry.Start();
-				TrayWarning(string.Join("、", list));
+				TrayWarning(string.Join("、", (from k in C.Prefs.Hotkeys
+					where k.Enabled && !hotkeys.Active.Any((HotkeySetting a) => a.ActionId == k.ActionId)
+					select HotkeyRules.Actions[k.ActionId - 1] + "（" + HotkeyRules.Label(k) + "）").ToList()));
 			}
 		};
 		System.Windows.Controls.ContextMenu contextMenu = MenuTheme.Create(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
@@ -402,6 +437,32 @@ public class DockWindow : GlassWindow
 	}
 
 	private static readonly HashSet<string> loggedHotkeyFailures = new HashSet<string>();
+
+	// 判断组合是否为出厂默认（含旧版默认 Ctrl+Alt+D）：
+	// 出厂组合冲突时自动改用备选按键；用户自定义过的组合保持原样交给重试机制。
+	private static bool IsStock(HotkeySetting k)
+	{
+		uint key = k.Key;
+		switch (k.ActionId)
+		{
+			case 1:
+				return key == 32u && k.Modifiers == 3u;
+			case 2:
+				return key == 84u && k.Modifiers == 6u;
+			case 3:
+				return (key == 68u || key == 69u) && k.Modifiers == 3u;
+			case 4:
+				return key == 65u && k.Modifiers == 3u;
+			case 5:
+				return key == 83u && k.Modifiers == 3u;
+			case 6:
+				return key == 82u && k.Modifiers == 3u;
+			case 7:
+				return key == 72u && k.Modifiers == 3u;
+			default:
+				return false;
+		}
+	}
 
 	private void DisplayChanged(object s, EventArgs e)
 	{
