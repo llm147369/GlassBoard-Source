@@ -191,26 +191,54 @@ public static class Native
 				string def = key?.GetValue(null) as string;
 				if (!string.IsNullOrWhiteSpace(def))
 				{
-					int iconIndex = 0;
-					string file = def;
-					int idx = def.LastIndexOf(',');
-					if (idx >= 0 && int.TryParse(def.Substring(idx + 1), out int parsed))
+					BitmapSource fromDef = IconFromDefaultIconString(def);
+					if (fromDef != null)
 					{
-						iconIndex = parsed;
-						file = def.Substring(0, idx);
+						return fromDef;
 					}
-					file = Environment.ExpandEnvironmentVariables(file.Trim('"'));
-					if (File.Exists(file))
-					{
-						ExtractIconEx(file, iconIndex, out IntPtr large, IntPtr.Zero, 1);
-						if (large != IntPtr.Zero)
-						{
-							BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(large, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
-							bitmap.Freeze();
-							DestroyIcon(large);
-							return bitmap;
-						}
-					}
+				}
+			}
+			// 最终兜底：Win10/11 桌面原生图标固定在 imageres.dll 里，
+			// 此电脑 = -109（回收站满 = -55；注册表键缺失时走这里，保证永远是桌面原生图标）
+			string known = (clsid == SystemPlaces.ComputerClsid) ? "imageres.dll,-109" : ((clsid == RecycleBin.Clsid) ? "imageres.dll,-55" : null);
+			if (known != null)
+			{
+				BitmapSource fromKnown = IconFromDefaultIconString(known);
+				if (fromKnown != null)
+				{
+					return fromKnown;
+				}
+			}
+		}
+		catch
+		{
+		}
+		return null;
+	}
+
+	// "路径,索引" 形式的 DefaultIcon 字符串 → 图标位图（支持 -N 资源 ID 与逗号索引）
+	private static BitmapSource IconFromDefaultIconString(string def)
+	{
+		try
+		{
+			int iconIndex = 0;
+			string file = def;
+			int idx = def.LastIndexOf(',');
+			if (idx >= 0 && int.TryParse(def.Substring(idx + 1), out int parsed))
+			{
+				iconIndex = parsed;
+				file = def.Substring(0, idx);
+			}
+			file = Environment.ExpandEnvironmentVariables(file.Trim('"'));
+			if (File.Exists(file))
+			{
+				ExtractIconEx(file, iconIndex, out IntPtr large, IntPtr.Zero, 1);
+				if (large != IntPtr.Zero)
+				{
+					BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(large, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
+					bitmap.Freeze();
+					DestroyIcon(large);
+					return bitmap;
 				}
 			}
 		}

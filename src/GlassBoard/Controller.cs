@@ -208,6 +208,11 @@ public class Controller
 			Toggle(force: true);
 			Import();
 		}
+		else
+		{
+			// 已导入过的老用户：每次启动补收桌面新增的文件夹/图片/文档（已存在的跳过，已移除的不再加回）
+			SyncDesktop();
+		}
 		ApplyGameMode();
 	}
 
@@ -622,7 +627,8 @@ public class Controller
 				IsFolder = Directory.Exists(path)
 			};
 			LaunchInfoService.Enrich(entry2);
-			if (manual || (LaunchInfoService.Primary(entry2) && !RemovalRules.Blocked(Prefs, entry2) && !Prefs.Apps.Any((Entry a) => RemovalRules.Same(a, entry2))))
+			// 非手动导入（桌面读取）也收录文件夹与文档/媒体文件——桌面文件夹、图片等都能进面板
+			if (manual || ((LaunchInfoService.Primary(entry2) || entry2.IsFolder || DocumentRules.Supported(entry2.Path)) && !RemovalRules.Blocked(Prefs, entry2) && !Prefs.Apps.Any((Entry a) => RemovalRules.Same(a, entry2))))
 			{
 				if (manual)
 				{
@@ -918,8 +924,65 @@ public class Controller
 		}
 	}
 
-	public System.Windows.Controls.ContextMenu Menu(Entry a, string scope = "全部", string tint = "", int opacityPercent = 100)
+	// 每次启动补收桌面新增的文件夹 / 图片 / 文档（幂等：已存在跳过、已移除的不再加回）
+	private async void SyncDesktop()
 	{
+		if (importing)
+		{
+			return;
+		}
+		importing = true;
+		try
+		{
+			string[] paths = await Task.Run(() =>
+			{
+				List<string> collected = new List<string>();
+				string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+				string commonDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+				foreach (string root in new string[2] { desktop, commonDesktop }.Where((string r) => !string.IsNullOrWhiteSpace(r)).Distinct(StringComparer.OrdinalIgnoreCase))
+				{
+					if (!Directory.Exists(root))
+					{
+						continue;
+					}
+					foreach (string child in Directory.GetFileSystemEntries(root))
+					{
+						try
+						{
+							string ext = Path.GetExtension(child).ToLowerInvariant();
+							if (ext == ".lnk" || ext == ".url" || ext == ".appref-ms")
+							{
+								continue;
+							}
+							if (Directory.Exists(child) || (File.Exists(child) && DocumentRules.Supported(child)))
+							{
+								collected.Add(child);
+							}
+						}
+						catch
+						{
+						}
+					}
+				}
+				return collected.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+			});
+			if (ShuttingDown)
+			{
+				return;
+			}
+			Add(paths, manual: false);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+		finally
+		{
+			importing = false;
+		}
+	}
+
+	public System.Windows.Controls.ContextMenu Menu(Entry a, string scope = "全部", string tint = "", int opacityPercent = 100)	{
 		System.Windows.Controls.ContextMenu menu = MenuTheme.Create(Prefs.Light, Prefs.Dock.Accent, tint, opacityPercent);
 		Action<string, Action> action = (string title, Action action2) =>
 		{
