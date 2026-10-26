@@ -193,23 +193,16 @@ public static class FeatureUi
 
 	public static ImageSource Icon(Entry entry, bool showShortcutOverlays = false, bool sharper = false)
 	{
+		ImageSource result = null;
 		if (RecycleBin.IsEntry(entry))
 		{
-			ImageSource recycle = Native.RecycleIcon();
-			if (recycle != null)
-			{
-				return recycle;
-			}
+			result = Native.RecycleIcon();
 		}
-		if (SystemPlaces.IsComputer(entry))
+		else if (SystemPlaces.IsComputer(entry))
 		{
-			ImageSource computer = Native.MyComputerIcon();
-			if (computer != null)
-			{
-				return computer;
-			}
+			result = Native.MyComputerIcon();
 		}
-		if (!string.IsNullOrWhiteSpace(entry.IconPath) && File.Exists(entry.IconPath))
+		else if (!string.IsNullOrWhiteSpace(entry.IconPath) && File.Exists(entry.IconPath))
 		{
 			try
 			{
@@ -217,33 +210,35 @@ public static class FeatureUi
 				string key = fileInfo.FullName + "/" + fileInfo.Length + "/" + fileInfo.LastWriteTimeUtc.Ticks;
 				if (customIconCache.TryGet(key, out var value))
 				{
-					return value;
+					result = value;
 				}
-				BitmapImage bitmapImage = new BitmapImage();
-				bitmapImage.BeginInit();
-				bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
-				bitmapImage.UriSource = new Uri(entry.IconPath);
-				bitmapImage.DecodePixelWidth = 128;
-				bitmapImage.EndInit();
-				bitmapImage.Freeze();
-				customIconCache.Put(key, bitmapImage);
-				return bitmapImage;
+				else
+				{
+					BitmapImage bitmapImage = new BitmapImage();
+					bitmapImage.BeginInit();
+					bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
+					bitmapImage.UriSource = new Uri(entry.IconPath);
+					bitmapImage.DecodePixelWidth = 128;
+					bitmapImage.EndInit();
+					bitmapImage.Freeze();
+					customIconCache.Put(key, bitmapImage);
+					result = bitmapImage;
+				}
 			}
 			catch
 			{
 			}
 		}
-		ImageSource imageSource = Native.Icon(entry.Path, showShortcutOverlays, sharper);
-		if (imageSource != null)
+		if (result == null)
 		{
-			return imageSource;
+			result = Native.Icon(entry.Path, showShortcutOverlays, sharper);
 		}
-		if (entry.IsFolder || Directory.Exists(entry.Path))
+		if (result == null && (entry.IsFolder || Directory.Exists(entry.Path)))
 		{
 			DrawingImage drawingImage = new DrawingImage(new GeometryDrawing(new SolidColorBrush(Color.FromRgb(240, 191, 77)), new Pen(new SolidColorBrush(Color.FromRgb(204, 149, 45)), 1.0), Geometry.Parse("M 2,5 L 8,5 L 10,7 L 18,7 L 18,17 L 2,17 Z")));
 			drawingImage.Freeze();
-			return drawingImage;
+			result = drawingImage;
 		}
-		return null;
+		return IconNormalizer.Normalize(result);
 	}
 }
