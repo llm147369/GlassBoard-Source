@@ -1702,8 +1702,7 @@ public sealed class WidgetWindow : GlassWindow
 			TextWrapping = TextWrapping.Wrap,
 			VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
 			FontSize = 14.0,
-			ToolTip = "随手记下想法，内容自动保存",
-			Background = Polish.Color(LightTheme ? "#72FFF6D8" : "#703E3B35")
+			ToolTip = "随手记下想法，内容自动保存"
 		};
 		parent.Children.Add(noteBody);
 		noteTitle.TextChanged += (object s, TextChangedEventArgs e) =>
