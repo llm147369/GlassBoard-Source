@@ -54,6 +54,9 @@ public static class DesktopVisibility
 	// 隐藏任务栏时记录的 AppBar 原始状态：恢复时还原工作区占用。
 	private static uint? originalAppBarState;
 
+	// 任务栏窗口隐藏节流：explorer 重启重建窗口时避免高频拉扯（comctl32 崩溃循环防护）。
+	private static readonly Dictionary<long, DateTime> lastHide = new Dictionary<long, DateTime>();
+
 	private const string ExplorerAdvancedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
 
 	private static readonly DispatcherTimer maintenance;
@@ -339,8 +342,6 @@ public static class DesktopVisibility
 		if (taskbar && hide)
 		{
 			// 记录原始 AppBar 状态并加上 ABS_AUTOHIDE：Explorer 释放工作区，全屏不留透明条。
-			// 注意：绝不 SW_HIDE Shell_TrayWnd——Win8+ 壁纸层由该窗口绘制，
-			// 隐藏它会杀死壁纸（与 Wallpaper Engine 等动态壁纸冲突，表现为背景全白）。
 			try
 			{
 				if (originalAppBarState == null)
@@ -357,10 +358,32 @@ public static class DesktopVisibility
 			{
 				Store.Log(ex);
 			}
+			// 彻底隐藏任务栏窗口（悬停不弹出）。Win8+ 壁纸层由 Shell_TrayWnd 绘制，
+			// 若与 Wallpaper Engine 等动态壁纸冲突出现白屏，请改用「自动隐藏」。
+			foreach (IntPtr item in list)
+			{
+				if (ShellBooting(item) || !ThrottledHide(item))
+				{
+					// explorer 正在重启初始化或刚隐藏过：由维护循环稍后处理，避免崩溃循环
+					continue;
+				}
+				if (!ShowWindowAsync(item, 0))
+				{
+					num++;
+					Store.Log(new Win32Exception(Marshal.GetLastWin32Error(), "无法隐藏 " + Class(item)));
+				}
+			}
 		}
 		else if (taskbar)
 		{
 			RestoreAppBarState();
+			foreach (IntPtr item in list)
+			{
+				if (!IsWindowVisible(item))
+				{
+					ShowWindowAsync(item, 8);
+				}
+			}
 		}
 		if (!taskbar)
 		{
@@ -437,6 +460,24 @@ public static class DesktopVisibility
 		}
 	}
 
+	// 单窗口隐藏节流（3 秒），避免 explorer 反复重建时高频 ShowWindowAsync。
+	private static bool ThrottledHide(IntPtr h)
+	{
+		long key = h.ToInt64();
+		DateTime utcNow = DateTime.UtcNow;
+		if (lastHide.TryGetValue(key, out DateTime value) && utcNow - value < TimeSpan.FromSeconds(3.0))
+		{
+			return false;
+		}
+		lastHide[key] = utcNow;
+		if (lastHide.Count > 64)
+		{
+			long oldest = lastHide.OrderBy((KeyValuePair<long, DateTime> pair) => pair.Value).First().Key;
+			lastHide.Remove(oldest);
+		}
+		return true;
+	}
+
 	private static void Maintain()
 	{
 		try
@@ -450,8 +491,6 @@ public static class DesktopVisibility
 			if (taskbarHidden == true)
 			{
 				// explorer 重启/其他软件改动后可能清掉 ABS_AUTOHIDE：重新断言，保持工作区全屏。
-				// 不再触碰 Shell_TrayWnd 窗口本身——Win8+ 壁纸层由它绘制，
-				// SW_HIDE 会杀死壁纸（与 Wallpaper Engine 冲突，表现为背景全白）。
 				try
 				{
 					if (originalAppBarState.HasValue && (AppBarState() & 1u) == 0)
@@ -462,6 +501,14 @@ public static class DesktopVisibility
 				catch (Exception ex)
 				{
 					Store.Log(ex);
+				}
+				// 任务栏窗口被 explorer 重建为可见时重新隐藏（带启动宽限与节流）。
+				foreach (IntPtr item in Taskbars())
+				{
+					if (IsWindowVisible(item) && !ShellBooting(item) && ThrottledHide(item))
+					{
+						ShowWindowAsync(item, 0);
+					}
 				}
 			}
 		}

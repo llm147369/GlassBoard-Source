@@ -182,7 +182,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard v0.9.18.5 · 玻璃启动台",
+			Text = "GlassBoard v0.9.18.6 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1254,7 +1254,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard · 个性化与控制 v0.9.18.5",
+				Title = "GlassBoard · 个性化与控制 v0.9.18.6",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -1898,7 +1898,7 @@ public class Controller
 			});
 			stackPanel4.Children.Add(new TextBlock
 			{
-				Text = "可点击录制直接按组合键，保存后生效。右侧开关即时操作。\n隐藏开关：开启隐藏，关闭显示；自动开关：Windows 任务栏自动隐藏。\n两者互斥：开启其中一个会自动关闭另一个（隐藏任务栏内部使用 Windows 原生自动隐藏机制，彻底隐藏会与动态壁纸冲突导致白屏）。\n修改组合时下方会实时探测冲突（可用/被占用）。快捷键在 GlassBoard 后台运行时始终有效：关闭面板不影响，托盘「退出」才失效；组合被其他软件占用时会每 5 秒自动重试，对方释放后自动接管。",
+				Text = "可点击录制直接按组合键，保存后生效。右侧开关即时操作。\n隐藏开关：开启彻底隐藏任务栏，关闭显示；自动开关：Windows 任务栏自动隐藏（悬停底部边缘弹出）。\n两者互斥：开启其中一个会自动关闭另一个。注意：彻底隐藏任务栏窗口与 Wallpaper Engine 等动态壁纸可能冲突（表现为背景白屏），如遇白屏请改用自动隐藏。\n修改组合时下方会实时探测冲突（可用/被占用）。快捷键在 GlassBoard 后台运行时始终有效：关闭面板不影响，托盘「退出」才失效；组合被其他软件占用时会每 5 秒自动重试，对方释放后自动接管。",
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				TextWrapping = TextWrapping.Wrap,
 				Margin = new Thickness(0.0, 8.0, 0.0, 18.0)
@@ -3369,7 +3369,7 @@ public class Controller
 		if (flag)
 		{
 			Board.Hide();
-			Dock.Hide();
+			Dock.HideWithConsent();
 			if (widgets != null)
 			{
 				widgets.SetVisible(visible: false);

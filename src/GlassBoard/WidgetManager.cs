@@ -196,7 +196,7 @@ public sealed class WidgetManager : IDisposable
 			}
 			else
 			{
-				value.Hide();
+				value.HideWithConsent();
 			}
 		}
 		if (visible && Music != null)
@@ -286,7 +286,7 @@ public sealed class WidgetManager : IDisposable
 				value3.UpdateOptions(item.Value);
 				if (C.GlassSuppressed)
 				{
-					value3.Hide();
+					value3.HideWithConsent();
 				}
 				else if (!value3.IsVisible)
 				{

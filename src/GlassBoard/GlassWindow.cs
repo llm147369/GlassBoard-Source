@@ -31,6 +31,16 @@ public class GlassWindow : Window
 
 	protected bool MotionEnabled = true;
 
+	// 主动隐藏的通行证：游戏模式等主动 Hide() 前先置位；外部广播（显示桌面等）引发的
+	// WM_SHOWWINDOW(hide) 没有通行证一律拦截，防止 Dock/组件被系统藏掉。
+	internal bool ExternalHideAllowed;
+
+	internal void HideWithConsent()
+	{
+		ExternalHideAllowed = true;
+		Hide();
+	}
+
 	protected double MotionLevel = 1.0;
 
 	protected double BlurRadius = 18.0;
@@ -142,6 +152,21 @@ public class GlassWindow : Window
 					handled = true;
 					return IntPtr.Zero;
 				}
+				// 拦截外部隐藏：显示桌面若以 ShowWindow(SW_HIDE) 方式收起工具窗口
+				// （toolwindow 不参与最小化流程），会在 WM_SHOWWINDOW(wParam=0) 出现。
+				// 只有带通行证的主动 Hide()（游戏模式等）放行，其余一律拦下。
+				if ((this is DockWindow || this is WidgetWindow) && msg == 24 && wp == IntPtr.Zero)
+				{
+					if (ExternalHideAllowed)
+					{
+						ExternalHideAllowed = false;
+					}
+					else
+					{
+						handled = true;
+						return IntPtr.Zero;
+					}
+				}
 				if (this is WidgetWindow widget && msg == 22 && wp != IntPtr.Zero)
 				{
 					widget.MarkSessionEnding();
@@ -151,8 +176,10 @@ public class GlassWindow : Window
 		};
 		StateChanged += (object s, EventArgs e) =>
 		{
-			// 兜底：若显示桌面仍以其他途径最小化本窗口，立即还原（Dock/组件无最小化需求）
-			if (WindowState == WindowState.Minimized && IsVisible)
+			// 兜底：若显示桌面仍以其他途径最小化本窗口，立即还原（Dock/组件无最小化需求）。
+			// 注意不能加 IsVisible 判断——WPF 中最小化状态的窗口 IsVisible 恒为 false，
+			// 加了该条件这段兜底就是死代码（正是此前 Win+D 仍然失效的原因）。
+			if (WindowState == WindowState.Minimized)
 			{
 				WindowState = WindowState.Normal;
 			}
