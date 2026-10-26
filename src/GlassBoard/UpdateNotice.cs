@@ -28,7 +28,7 @@ public static class UpdateNotice
 		{
 			"源码仓库：https://github.com/llm147369/GlassBoard-Source",
 			"仓库根目录就是编译好的便携版：AI 软件拉取后直接双击根目录的 GlassBoard.exe 即可运行，无需下载发布包，也无需安装编译环境。",
-			"更新时用 AI 软件（如豆包、Codex、Cursor、Claude Code 等）拉取仓库最新代码覆盖本地，运行根目录的新程序即完成升级。",
+			"更新时打开豆包（或其他 AI 软件）的单独对话页面，输入作者最新视频里的更新指令并附上仓库地址，让 AI 拉取仓库最新代码覆盖本地，运行根目录的新程序即完成升级。",
 			"覆盖只会替换程序文件，不会影响你的配置数据（配置保存在 %LocalAppData%\\GlassBoard，与项目目录无关）。",
 			"覆盖前建议先备份整个项目文件夹，避免自己改过的内容被覆盖丢失。"
 		}, accent, cardBrush, lineBrush));
