@@ -1,6 +1,7 @@
 GlassBoard v0.9.18.3 便携版
 
 【运行】解压后双击 GlassBoard.exe 即可，无需安装。
+【桌面快捷方式】右键 GlassBoard.exe → 发送到 → 桌面快捷方式，即可从桌面启动（也可让 AI 帮忙创建）。
 【首次启动】会询问是否导入推荐配置（DefaultConfig.json），仅导入外观与布局，不影响已有设置。
 【配置数据】保存在 %LocalAppData%\GlassBoard，删除本目录不会丢配置。
 
