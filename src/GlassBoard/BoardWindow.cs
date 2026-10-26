@@ -2037,8 +2037,14 @@ public class BoardWindow : GlassWindow
 				string[] dropped = DraggedEntries(e.Data);
 				if (dropped.Length != 0 && !dropped.Any((string p) => RecycleBin.IsPath(p)))
 				{
-					// 拖应用入口到回收站 = 从所有分组与 Dock 移除该入口（有确认与撤销）
-					C.RemoveMany(dropped, "全部");
+					// 拖应用入口到回收站 = 把入口指向的真实文件/文件夹送入系统回收站（可恢复），
+					// 与文件拖入行为一致，不再做自定义确认/撤销。
+					string[] real = (from p in dropped
+						let a = C.Prefs.Apps.FirstOrDefault((Entry x) => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase))
+						where a != null && !string.IsNullOrEmpty(a.Path)
+						&& !a.Path.Contains("://") && !a.Path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase) && !a.Path.StartsWith("ms-", StringComparison.OrdinalIgnoreCase)
+						select a.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+					C.DeleteToRecycleBin(real);
 				}
 				return;
 			}

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +26,9 @@ public class BatchAddWindow : Window
 
 	private readonly List<AddCandidate> candidates = new List<AddCandidate>();
 
+	// 搜索过滤后的可见候选（未过滤时与 candidates 相同）
+	private readonly List<AddCandidate> visible = new List<AddCandidate>();
+
 	private System.Windows.Controls.ListBox list;
 
 	private TextBlock status;
@@ -36,6 +40,8 @@ public class BatchAddWindow : Window
 	private System.Windows.Controls.CheckBox recursive;
 
 	private System.Windows.Controls.CheckBox launchOnly;
+
+	private System.Windows.Controls.TextBox filter;
 
 	private bool busy;
 
@@ -78,7 +84,7 @@ public class BatchAddWindow : Window
 		});
 		stackPanel.Children.Add(new TextBlock
 		{
-			Text = "添加位置：" + targetGroup + " · 选择来源并勾选，已有入口会自动去重。",
+			Text = "添加位置：" + targetGroup + " · 选择来源并勾选，已有入口会自动去重。也可以直接把文件或文件夹拖进这个窗口。",
 			Foreground = Brushes.LightGray,
 			Margin = new Thickness(0.0, 0.0, 0.0, 12.0)
 		});
@@ -126,6 +132,20 @@ public class BatchAddWindow : Window
 			Margin = new Thickness(0.0, 0.0, 0.0, 10.0)
 		};
 		stackPanel.Children.Add(launchOnly);
+		filter = new System.Windows.Controls.TextBox
+		{
+			Margin = new Thickness(0.0, 0.0, 0.0, 8.0),
+			Padding = new Thickness(8.0, 6.0, 8.0, 6.0),
+			Background = new SolidColorBrush(Color.FromRgb(25, 27, 34)),
+			Foreground = Brushes.White,
+			BorderBrush = new SolidColorBrush(Color.FromRgb(58, 62, 76)),
+			ToolTip = "输入关键词过滤列表（按名称或路径）"
+		};
+		filter.TextChanged += (object s, TextChangedEventArgs e) =>
+		{
+			ApplyFilter();
+		};
+		stackPanel.Children.Add(filter);
 		list = new System.Windows.Controls.ListBox
 		{
 			Background = new SolidColorBrush(Color.FromRgb(25, 27, 34)),
@@ -194,8 +214,12 @@ public class BatchAddWindow : Window
 			int num = C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, targetGroup));
 			C.Add(paths, manual: true, targetGroup);
 			C.Board.ClearSearch();
-			C.Board.SetStatus("已添加 " + (C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, targetGroup)) - num) + " 个入口");
-			Close();
+			int added = C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, targetGroup)) - num;
+			C.Board.SetStatus("已添加 " + added + " 个入口");
+			// 已添加的从列表移除，窗口保留，可继续添加其他来源
+			candidates.RemoveAll((AddCandidate c) => c.Selected);
+			ApplyFilter();
+			status.Text = "已添加 " + added + " 个入口，可继续选择其他文件或文件夹。";
 		});
 		add.IsEnabled = false;
 		wrapPanel.Children.Add(add);
@@ -203,6 +227,46 @@ public class BatchAddWindow : Window
 		{
 			Close();
 		}));
+		// 拖拽支持：文件 → 候选列表；文件夹 → 按「包含子文件夹」设置扫描
+		AllowDrop = true;
+		DragOver += (object s, System.Windows.DragEventArgs e) =>
+		{
+			e.Effects = (e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) ? System.Windows.DragDropEffects.Copy : System.Windows.DragDropEffects.None);
+			e.Handled = true;
+		};
+		Drop += (object s, System.Windows.DragEventArgs e) =>
+		{
+			if (busy || !e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
+			{
+				return;
+			}
+			string[] paths = (string[])e.Data.GetData(System.Windows.DataFormats.FileDrop);
+			if (paths == null || paths.Length == 0)
+			{
+				return;
+			}
+			List<string> files = new List<string>();
+			List<string> dirs = new List<string>();
+			foreach (string path in paths)
+			{
+				if (Directory.Exists(path))
+				{
+					dirs.Add(path);
+				}
+				else if (File.Exists(path))
+				{
+					files.Add(path);
+				}
+			}
+			if (files.Count > 0)
+			{
+				Merge(files);
+			}
+			if (dirs.Count > 0)
+			{
+				Scan(dirs.ToArray(), recursive.IsChecked == true);
+			}
+		};
 		Closed += (object s, EventArgs e) =>
 		{
 			closed = true;
@@ -230,7 +294,7 @@ public class BatchAddWindow : Window
 			return;
 		}
 		changing = true;
-		foreach (AddCandidate candidate in candidates)
+		foreach (AddCandidate candidate in visible)
 		{
 			candidate.Selected = value;
 		}
@@ -238,14 +302,32 @@ public class BatchAddWindow : Window
 		UpdateCount();
 	}
 
+	// 按搜索框内容过滤可见列表（名称或路径包含关键词，忽略大小写）
+	private void ApplyFilter()
+	{
+		string query = filter?.Text ?? "";
+		visible.Clear();
+		if (string.IsNullOrWhiteSpace(query))
+		{
+			visible.AddRange(candidates);
+		}
+		else
+		{
+			visible.AddRange(candidates.Where((AddCandidate c) => c.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 || c.Path.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0));
+		}
+		list.ItemsSource = null;
+		list.ItemsSource = visible;
+		UpdateCount();
+	}
+
 	private void UpdateCount()
 	{
-		int num = candidates.Count((AddCandidate x) => x.Selected);
+		int num = visible.Count((AddCandidate x) => x.Selected);
 		add.Content = "添加已选（" + num + "）";
 		add.IsEnabled = !busy && num > 0;
 		if (!busy)
 		{
-			status.Text = "共 " + candidates.Count + " 个新入口 · 已选 " + num + " 个";
+			status.Text = "共 " + visible.Count + " 个入口 · 已选 " + num + " 个" + (string.IsNullOrWhiteSpace(filter?.Text) ? "" : "（已按关键词过滤）");
 		}
 	}
 
@@ -272,9 +354,7 @@ public class BatchAddWindow : Window
 			candidates.Add(addCandidate);
 		}
 		candidates.Sort((AddCandidate a, AddCandidate b) => StringComparer.CurrentCultureIgnoreCase.Compare(a.Name, b.Name));
-		list.ItemsSource = null;
-		list.ItemsSource = candidates;
-		UpdateCount();
+		ApplyFilter();
 	}
 
 	private void PickFiles()

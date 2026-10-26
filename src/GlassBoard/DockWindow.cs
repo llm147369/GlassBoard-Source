@@ -712,28 +712,16 @@ public class DockWindow : GlassWindow
 		});
 		if (dock.ShowComputer)
 		{
-			// 此电脑与普通图标一致：点击激活/恢复已打开的资源管理器窗口，
-			// 窗口在前台时再点最小化；没有任何资源管理器窗口时才新开"此电脑"。
+			// 此电脑：直接打开系统官方「此电脑」（explorer shell:MyComputerFolder），
+			// 不做激活/最小化切换，行为与任务栏固定图标一致。
 			AddSystemButton("glassboard://dock/computer", DockButton("computer", null, () =>
 			{
 				C.Board.Hide();
-				if (!RunningWindows.Activate(new Entry
-				{
-					Path = "C:\\Windows\\explorer.exe"
-				}))
-				{
-					Native.Computer();
-				}
+				Native.Computer();
 			}, "此电脑"), () =>
 			{
 				C.Board.Hide();
-				if (!RunningWindows.Activate(new Entry
-				{
-					Path = "C:\\Windows\\explorer.exe"
-				}))
-				{
-					Native.Computer();
-				}
+				Native.Computer();
 			});
 		}
 		if (dock.ShowControlCenter)
@@ -1053,15 +1041,36 @@ public class DockWindow : GlassWindow
 				}
 			}
 		}
-		else if (text == "computer" || text == "⚙" || text == "control" || text == "power" || text == "wifi")
+		else if (text == "computer")
+		{
+			// 此电脑：默认直接用系统官方图标；用户右键更换过图标时尊重自定义
+			bool computerOverridden = (C.Prefs.SystemIconImages != null && C.Prefs.SystemIconImages.ContainsKey("computer")) || (C.Prefs.SystemIconGlyphs != null && C.Prefs.SystemIconGlyphs.ContainsKey("computer"));
+			ImageSource official = computerOverridden ? null : Native.MyComputerIcon();
+			if (official != null)
+			{
+				System.Windows.Controls.Image computerImage = new System.Windows.Controls.Image
+				{
+					Source = official,
+					Width = iconSize,
+					Height = iconSize,
+					Stretch = Stretch.Uniform
+				};
+				RenderOptions.SetBitmapScalingMode(computerImage, BitmapScalingMode.HighQuality);
+				element = computerImage;
+			}
+			else
+			{
+				element = SystemGlyph("computer", o);
+			}
+		}
+		else if (text == "⚙" || text == "control" || text == "power" || text == "wifi")
 		{
 			element = SystemGlyph(text switch
 			{
 				"⚙" => "settings", 
 				"control" => "control", 
 				"power" => "power", 
-				"wifi" => "wifi", 
-				_ => "computer", 
+				_ => "wifi", 
 			}, o);
 		}
 		else if (icon == null)

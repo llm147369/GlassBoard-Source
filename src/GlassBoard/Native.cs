@@ -158,6 +158,33 @@ public static class Native
 	}
 
 	private static ImageSource recycleIcon;
+	private static ImageSource computerIcon;
+
+	// 此电脑图标：SHGetFileInfo 解析「此电脑」命名空间 GUID，拿到系统官方图标
+	public static ImageSource MyComputerIcon()
+	{
+		if (computerIcon != null)
+		{
+			return computerIcon;
+		}
+		try
+		{
+			SHFILEINFO info;
+			IntPtr hIcon = SHGetFileInfo("::{20D04FE0-3AEA-1069-A2D9-08002B30309D}", 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 256u);
+			if (hIcon != IntPtr.Zero)
+			{
+				BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(hIcon, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
+				bitmap.Freeze();
+				DestroyIcon(hIcon);
+				computerIcon = bitmap;
+				return bitmap;
+			}
+		}
+		catch
+		{
+		}
+		return null;
+	}
 
 	// 回收站图标：SHGetFileInfo 直接解析 GUID 命名空间路径，拿到系统回收站图标
 	public static ImageSource RecycleIcon()
