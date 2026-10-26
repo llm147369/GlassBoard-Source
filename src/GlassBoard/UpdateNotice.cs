@@ -32,10 +32,11 @@ public static class UpdateNotice
 			"覆盖只会替换程序文件，不会影响你的配置数据（配置保存在 %LocalAppData%\\GlassBoard，与项目目录无关）。",
 			"覆盖前建议先备份整个项目文件夹，避免自己改过的内容被覆盖丢失。"
 		}, accent, cardBrush, lineBrush));
-		content.Children.Add(Card("在线更新功能（即将上线）", new string[]
+		content.Children.Add(Card("在线更新已上线", new string[]
 		{
-			"后续版本会加入「在线更新」功能：自动检查新版本、一键下载更新，无需再手动拉取覆盖。",
-			"在线更新上线后，会在这里和 GitHub 仓库说明中同步告知。"
+			"程序每次启动会自动检查新版本（每天最多一次），发现新版本会在托盘气泡提醒。",
+			"更新入口：设置 → 通用 → 检查更新，一键下载并自动重启升级；托盘菜单里也有「检查更新」。",
+			"更新只替换程序文件，配置与自定义图标不受影响。"
 		}, accent, cardBrush, lineBrush));
 		TabItem item = new TabItem
 		{

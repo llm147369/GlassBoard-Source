@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -186,6 +187,7 @@ public class Controller
 			Visible = true
 		};
 		RefreshTrayMenu();
+		TryAutoUpdate();
 		Tray.DoubleClick += (object s, EventArgs e) =>
 		{
 			Toggle(force: true);
@@ -345,6 +347,10 @@ public class Controller
 				UseShellExecute = true
 			});
 		});
+		contextMenuStrip2.Items.Add("检查更新", null, async (object s, EventArgs e) =>
+		{
+			await OnlineUpdate.CheckManualAsync(null);
+		});
 		contextMenuStrip2.Items.Add(new ToolStripSeparator());
 		contextMenuStrip2.Items.Add("退出 GlassBoard", null, (object s, EventArgs e) =>
 		{
@@ -352,6 +358,29 @@ public class Controller
 		});
 		Tray.ContextMenuStrip = contextMenuStrip2;
 		contextMenuStrip?.Dispose();
+	}
+
+	// 启动后自动检查更新（每天最多一次）；发现新版本只托盘提醒，下载由用户触发
+	private async void TryAutoUpdate()
+	{
+		try
+		{
+			long now = DateTime.UtcNow.ToFileTimeUtc();
+			if (now - Prefs.LastUpdateCheckUtc < 864000000000L)
+			{
+				return;
+			}
+			Prefs.LastUpdateCheckUtc = now;
+			Save();
+			string latest = await OnlineUpdate.FetchLatestTagAsync();
+			if (!string.IsNullOrEmpty(latest) && OnlineUpdate.CompareVersion(latest, OnlineUpdate.CurrentVersion()) > 0)
+			{
+				Tray.ShowBalloonTip(6000, "发现新版本 v" + latest.TrimStart('v', 'V'), "设置 → 通用 → 检查更新，一键升级到最新版。", ToolTipIcon.Info);
+			}
+		}
+		catch
+		{
+		}
 	}
 
 	public void Save()
@@ -787,6 +816,25 @@ public class Controller
 		}
 	}
 
+	// 桌面图标排序权重：软件/快捷方式最前 → 文件夹 → 文档与媒体 → 其他文件
+	private static int ImportRank(string path)
+	{
+		string ext = Path.GetExtension(path).ToLowerInvariant();
+		if (ext == ".lnk" || ext == ".url" || ext == ".appref-ms" || ext == ".exe" || ext == ".bat" || ext == ".cmd")
+		{
+			return 0;
+		}
+		if (Directory.Exists(path))
+		{
+			return 1;
+		}
+		if (DocumentRules.Supported(path))
+		{
+			return 2;
+		}
+		return 3;
+	}
+
 	public async void Import()
 	{
 		if (importing)
@@ -797,7 +845,8 @@ public class Controller
 		Board.SetStatus("正在读取桌面…");
 		try
 		{
-			// 首次导入只读桌面：快捷方式（.lnk/.url/.appref-ms）、文件夹与普通文件，全部按桌面原样收录
+			// 首次导入只读桌面：快捷方式（.lnk/.url/.appref-ms）、文件夹与普通文件全部收录，
+			// 排序 = 软件/快捷方式 → 文件夹 → 文档与媒体 → 其他文件，组内按中文拼音排序。
 			string[] paths = await Task.Run(() =>
 			{
 				List<string> collected = new List<string>();
@@ -831,7 +880,10 @@ public class Controller
 						}
 					}
 				}
-				return collected.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy((string p) => Path.GetFileNameWithoutExtension(p), StringComparer.CurrentCultureIgnoreCase).ToArray();
+				return collected.Distinct(StringComparer.OrdinalIgnoreCase)
+					.OrderBy((string p) => ImportRank(p))
+					.ThenBy((string p) => Path.GetFileNameWithoutExtension(p), StringComparer.Create(new CultureInfo("zh-CN"), ignoreCase: true))
+					.ToArray();
 			});
 			if (ShuttingDown)
 			{
@@ -2469,6 +2521,35 @@ public class Controller
 			{
 				RecoverHistoricalEntries(w);
 			}));
+			stackPanel6.Children.Add(new TextBlock
+			{
+				Text = "在线更新",
+				FontSize = 18.0,
+				Margin = new Thickness(0.0, 22.0, 0.0, 10.0)
+			});
+			TextBlock updateStatus = new TextBlock
+			{
+				Text = "当前版本 v" + OnlineUpdate.CurrentVersion() + " · 更新只替换程序文件，配置与自定义图标不受影响。",
+				TextWrapping = TextWrapping.Wrap,
+				Foreground = System.Windows.Media.Brushes.LightGray
+			};
+			System.Windows.Controls.ProgressBar updateProgress = new System.Windows.Controls.ProgressBar
+			{
+				Height = 6.0,
+				Maximum = 100.0,
+				Visibility = Visibility.Collapsed
+			};
+			WrapPanel updateRow = new WrapPanel
+			{
+				Margin = new Thickness(0.0, 12.0, 0.0, 6.0)
+			};
+			updateRow.Children.Add(FeatureUi.Button("检查更新", async () =>
+			{
+				await OnlineUpdate.CheckManualAsync(w, updateStatus, updateProgress);
+			}));
+			stackPanel6.Children.Add(updateRow);
+			stackPanel6.Children.Add(updateProgress);
+			stackPanel6.Children.Add(updateStatus);
 			stackPanel6.Children.Add(new TextBlock
 			{
 				Text = "完整备份与恢复",
