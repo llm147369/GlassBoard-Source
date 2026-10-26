@@ -178,8 +178,9 @@ public static class MediaThumb
 		return ((png == null) ? null : LoadFile(png, width));
 	}
 
-	// 磁贴图标：图片/视频直接显示内容缩略图，其余文件沿用原有图标逻辑；统一经 IconNormalizer 规范化视觉尺寸
-	public static ImageSource TileIcon(Entry entry, bool showShortcutOverlays)
+	// 磁贴图标：图片/视频直接显示内容缩略图，其余文件沿用原有图标逻辑；
+	// 全部套上 Apple Dock 式圆角底板，视觉尺寸完全等同。
+	public static ImageSource TileIcon(Entry entry, bool showShortcutOverlays, bool lightTheme)
 	{
 		string ext = Path.GetExtension(entry.Path);
 		if (string.Equals(ext, ".svg", StringComparison.OrdinalIgnoreCase))
@@ -188,7 +189,7 @@ public static class MediaThumb
 			ImageSource svg = ((png == null) ? null : LoadFile(png, 192));
 			if (svg != null)
 			{
-				return IconNormalizer.Normalize(svg);
+				return IconNormalizer.WithPlate(svg, lightTheme);
 			}
 		}
 		else if (IsImage(entry.Path) || IsVideo(entry.Path))
@@ -196,9 +197,9 @@ public static class MediaThumb
 			ImageSource thumb = ShellThumbnail.Get(entry.Path, 192);
 			if (thumb != null)
 			{
-				return IconNormalizer.Normalize(thumb);
+				return IconNormalizer.WithPlate(thumb, lightTheme);
 			}
 		}
-		return FeatureUi.Icon(entry, showShortcutOverlays, true);
+		return IconNormalizer.WithPlate(FeatureUi.Icon(entry, showShortcutOverlays, true), lightTheme);
 	}
 }
