@@ -47,7 +47,13 @@ public static class ShellThumbnail
 
 	private static ImageSource Fetch(string path, int size)
 	{
-		if (!File.Exists(path) && !path.StartsWith("::", StringComparison.Ordinal))
+		if (path.StartsWith("::", StringComparison.Ordinal))
+		{
+			// SHCreateItemFromParsingName 不接受 "::{GUID}" 命名空间路径（抛 E_INVALIDARG），
+			// 此类图标走 Native.ShellNamespaceIcon 的注册表/固定资源通道。
+			return null;
+		}
+		if (!File.Exists(path))
 		{
 			return null;
 		}

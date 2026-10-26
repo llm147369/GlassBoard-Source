@@ -213,26 +213,34 @@ public static class Native
 	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
 	private static extern int ExtractIconEx(string file, int index, out IntPtr large, IntPtr small, int icons);
 
-	// 系统命名空间图标（此电脑/回收站）：SHGetFileInfo 对 "::{GUID}" 命名空间路径经常拿不到图标，
-	// 因此再回退到注册表 DefaultIcon + ExtractIconEx（imageres.dll 系统图标，稳定可靠）。
+	// 按指定尺寸（256×256）精确提取图标资源（负索引 = 资源 ID，如 imageres.dll,-109）
+	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+	private static extern int PrivateExtractIcons(string file, int index, int cx, int cy, out IntPtr hicon, IntPtr piconid, int nIcons, int flags);
+
+	// 系统命名空间图标（此电脑/回收站）：注册表 DefaultIcon（缺失时用 imageres.dll 固定资源），
+	// PrivateExtractIcons 按 256×256 精确提取（与 Explorer 桌面图标同源、同清晰度）。
 	private static ImageSource ShellNamespaceIcon(string clsid)
 	{
-		// 首选：命名空间路径直取 256px 图标（IShellItemImageFactory，Explorer 同款通道）
-		ImageSource shellThumb = ShellThumbnail.Get(clsid, 256);
-		if (shellThumb != null)
-		{
-			return shellThumb;
-		}
 		try
 		{
-			SHFILEINFO info;
-			IntPtr hIcon = SHGetFileInfo(clsid, 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 256u);
-			if (hIcon != IntPtr.Zero)
+			string guid = clsid.TrimStart(':');
+			string def = null;
+			using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey("CLSID\\" + guid + "\\DefaultIcon"))
 			{
-				BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(hIcon, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
-				bitmap.Freeze();
-				DestroyIcon(hIcon);
-				return bitmap;
+				def = key?.GetValue(null) as string;
+			}
+			// Win10/11 上「此电脑」的 DefaultIcon 键经常不存在 → 固定 imageres.dll 资源兜底
+			if (string.IsNullOrWhiteSpace(def))
+			{
+				def = ((clsid == SystemPlaces.ComputerClsid) ? "imageres.dll,-109" : ((clsid == RecycleBin.Clsid) ? "imageres.dll,-55" : null));
+			}
+			if (!string.IsNullOrWhiteSpace(def))
+			{
+				BitmapSource fromDef = IconFromDefaultIconString(def);
+				if (fromDef != null)
+				{
+					return fromDef;
+				}
 			}
 		}
 		catch
@@ -240,29 +248,14 @@ public static class Native
 		}
 		try
 		{
-			string guid = clsid.TrimStart(':');
-			using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey("CLSID\\" + guid + "\\DefaultIcon"))
+			SHFILEINFO info;
+			IntPtr hIcon = SHGetFileInfo(clsid, 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 256u);
+			if (hIcon != IntPtr.Zero)
 			{
-				string def = key?.GetValue(null) as string;
-				if (!string.IsNullOrWhiteSpace(def))
-				{
-					BitmapSource fromDef = IconFromDefaultIconString(def);
-					if (fromDef != null)
-					{
-						return fromDef;
-					}
-				}
-			}
-			// 最终兜底：Win10/11 桌面原生图标固定在 imageres.dll 里，
-			// 此电脑 = -109（回收站满 = -55；注册表键缺失时走这里，保证永远是桌面原生图标）
-			string known = (clsid == SystemPlaces.ComputerClsid) ? "imageres.dll,-109" : ((clsid == RecycleBin.Clsid) ? "imageres.dll,-55" : null);
-			if (known != null)
-			{
-				BitmapSource fromKnown = IconFromDefaultIconString(known);
-				if (fromKnown != null)
-				{
-					return fromKnown;
-				}
+				BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(hIcon, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(256, 256));
+				bitmap.Freeze();
+				DestroyIcon(hIcon);
+				return bitmap;
 			}
 		}
 		catch
@@ -287,10 +280,18 @@ public static class Native
 			file = Environment.ExpandEnvironmentVariables(file.Trim('"'));
 			if (File.Exists(file))
 			{
-				ExtractIconEx(file, iconIndex, out IntPtr large, IntPtr.Zero, 1);
-				if (large != IntPtr.Zero)
+				IntPtr large;
+				// 首选 256×256 精确提取（负索引 = 资源 ID）；失败回退 ExtractIconEx
+				if (PrivateExtractIcons(file, iconIndex, 256, 256, out large, IntPtr.Zero, 1, 0) > 0 && large != IntPtr.Zero)
 				{
-					BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(large, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(64, 64));
+					BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(large, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(256, 256));
+					bitmap.Freeze();
+					DestroyIcon(large);
+					return bitmap;
+				}
+				if (ExtractIconEx(file, iconIndex, out large, IntPtr.Zero, 1) > 0 && large != IntPtr.Zero)
+				{
+					BitmapSource bitmap = Imaging.CreateBitmapSourceFromHIcon(large, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(256, 256));
 					bitmap.Freeze();
 					DestroyIcon(large);
 					return bitmap;
