@@ -14,6 +14,32 @@ public static class DesktopVisibility
 {
 	private delegate bool EnumCallback(IntPtr h, IntPtr data);
 
+	private struct RECT
+	{
+		public int Left;
+
+		public int Top;
+
+		public int Right;
+
+		public int Bottom;
+	}
+
+	private struct APPBARDATA
+	{
+		public uint Size;
+
+		public IntPtr Window;
+
+		public uint Message;
+
+		public uint Edge;
+
+		public RECT Rect;
+
+		public IntPtr Param;
+	}
+
 	private static readonly string RecoveryFile;
 
 	private static Dictionary<long, ShellState> original;
@@ -24,6 +50,9 @@ public static class DesktopVisibility
 
 	// 隐藏桌面图标时的原注册表 HideIcons 值：退出/崩溃恢复时还原。
 	private static int? originalHideIcons;
+
+	// 隐藏任务栏时记录的 AppBar 原始状态：恢复时还原工作区占用。
+	private static uint? originalAppBarState;
 
 	private const string ExplorerAdvancedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
 
@@ -68,6 +97,9 @@ public static class DesktopVisibility
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	private static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, string lParam, uint flags, uint timeout, out IntPtr result);
 
+	[DllImport("shell32.dll")]
+	private static extern UIntPtr SHAppBarMessage(uint message, ref APPBARDATA data);
+
 	// 桌面图标走 Explorer 原生开关（HideIcons 注册表值 + 广播 WM_SETTINGCHANGE）：
 	// Explorer 自己负责隐藏/显示，窗口层不再反复 SW_HIDE，彻底消除图标闪烁。
 	private static int? ReadHideIcons()
@@ -107,6 +139,53 @@ public static class DesktopVisibility
 		StringBuilder stringBuilder = new StringBuilder(256);
 		GetClassName(h, stringBuilder, 256);
 		return stringBuilder.ToString();
+	}
+
+	// —— AppBar 状态：ABS_AUTOHIDE(0x1) 让 Explorer 释放任务栏占用的屏幕工作区 ——
+	// 单纯 SW_HIDE 任务栏窗口并不会释放工作区：全屏/最大化应用仍按“任务栏高度”留空，
+	// 底部出现一条透明任务栏位置。给 AppBar 加上 ABS_AUTOHIDE 后 Explorer 才会广播全屏工作区。
+	private static APPBARDATA AppBarData()
+	{
+		APPBARDATA result = new APPBARDATA
+		{
+			Size = (uint)Marshal.SizeOf(typeof(APPBARDATA)),
+			Window = FindWindow("Shell_TrayWnd", null)
+		};
+		if (result.Window == IntPtr.Zero)
+		{
+			throw new InvalidOperationException("未找到 Windows 任务栏");
+		}
+		return result;
+	}
+
+	private static uint AppBarState()
+	{
+		APPBARDATA data = AppBarData();
+		return (uint)SHAppBarMessage(4u, ref data).ToUInt64();
+	}
+
+	private static void ApplyAppBarState(uint state)
+	{
+		APPBARDATA data = AppBarData();
+		data.Param = new IntPtr(state);
+		SHAppBarMessage(10u, ref data);
+	}
+
+	// 还原隐藏前记录的 AppBar 状态（含 ABS_AUTOHIDE 位），恢复任务栏工作区占用
+	private static void RestoreAppBarState()
+	{
+		if (originalAppBarState.HasValue)
+		{
+			try
+			{
+				ApplyAppBarState(originalAppBarState.Value);
+			}
+			catch (Exception ex)
+			{
+				Store.Log(ex);
+			}
+			originalAppBarState = null;
+		}
 	}
 
 	private static List<IntPtr> Taskbars()
@@ -198,7 +277,8 @@ public static class DesktopVisibility
 					Handle = handle.ToInt64(),
 					ClassName = Class(handle),
 					Visible = ((GetWindowLong(handle, -16) & 0x10000000) != 0),
-					HideIcons = originalHideIcons
+					HideIcons = originalHideIcons,
+					AppBarState = originalAppBarState
 				};
 				flag = true;
 			}
@@ -259,6 +339,30 @@ public static class DesktopVisibility
 		}
 		int num = 0;
 		Remember(list);
+		if (taskbar && hide)
+		{
+			// 记录原始 AppBar 状态并加上 ABS_AUTOHIDE：Explorer 释放工作区，全屏不留透明条
+			try
+			{
+				if (originalAppBarState == null)
+				{
+					originalAppBarState = AppBarState();
+				}
+				uint state = originalAppBarState.Value;
+				if ((state & 1u) == 0)
+				{
+					ApplyAppBarState(state | 1u);
+				}
+			}
+			catch (Exception ex)
+			{
+				Store.Log(ex);
+			}
+		}
+		else if (taskbar)
+		{
+			RestoreAppBarState();
+		}
 		if (!taskbar)
 		{
 			// 桌面图标：写 Explorer 原生 HideIcons 开关（首次记录原值，退出/崩溃恢复时还原）
@@ -370,6 +474,18 @@ public static class DesktopVisibility
 			}
 			if (taskbarHidden == true)
 			{
+				// explorer 重启/其他软件改动后可能清掉 ABS_AUTOHIDE：重新断言，保持工作区全屏
+				try
+				{
+					if (originalAppBarState.HasValue && (AppBarState() & 1u) == 0)
+					{
+						ApplyAppBarState(originalAppBarState.Value | 1u);
+					}
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
 				List<IntPtr> list = Taskbars();
 				if (list.Count > 0)
 				{
@@ -401,6 +517,24 @@ public static class DesktopVisibility
 		{
 			foreach (ShellState item in (List<ShellState>)new DataContractJsonSerializer(typeof(List<ShellState>)).ReadObject((Stream)stream))
 			{
+				if (item.AppBarState.HasValue)
+				{
+					try
+					{
+						ApplyAppBarState(item.AppBarState.Value);
+					}
+					catch (Exception ex)
+					{
+						Store.Log(ex);
+					}
+					break;
+				}
+			}
+		}
+		using (FileStream stream = File.OpenRead(RecoveryFile))
+		{
+			foreach (ShellState item in (List<ShellState>)new DataContractJsonSerializer(typeof(List<ShellState>)).ReadObject((Stream)stream))
+			{
 				if (item.HideIcons.HasValue)
 				{
 					WriteHideIcons(item.HideIcons.Value);
@@ -426,6 +560,7 @@ public static class DesktopVisibility
 		maintenance.Stop();
 		taskbarHidden = null;
 		iconsHidden = null;
+		RestoreAppBarState();
 		if (originalHideIcons.HasValue)
 		{
 			WriteHideIcons(originalHideIcons.Value);
@@ -450,6 +585,7 @@ public static class DesktopVisibility
 		maintenance.Stop();
 		taskbarHidden = false;
 		iconsHidden = false;
+		RestoreAppBarState();
 		if (originalHideIcons.HasValue)
 		{
 			WriteHideIcons(originalHideIcons.Value);
