@@ -295,7 +295,16 @@ public class GlassWindow : Window
 		try
 		{
 			Matrix matrix = Matrix.Identity;
-			new WindowInteropHelper(this).EnsureHandle();
+			try
+			{
+				new WindowInteropHelper(this).EnsureHandle();
+			}
+			catch (InvalidOperationException)
+			{
+				// 窗口已被 Close()：WPF 禁止为已关闭窗口重建句柄，直接放弃本次背景捕获。
+				// （控制中心/小组件关闭后仍可能有刷新路径触发 Backdrop，属正常竞态。）
+				return;
+			}
 			PresentationSource presentationSource = PresentationSource.FromVisual(this);
 			if (presentationSource != null)
 			{
