@@ -18,7 +18,8 @@ internal static class IconDiskCache
 	{
 		using (SHA1 sha = SHA1.Create())
 		{
-			byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(key.ToLowerInvariant()));
+			// v2 前缀：升级提取尺寸/通道后旧缓存自动失效（重新提取，不读旧的低清 PNG）
+			byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes("v2|" + key.ToLowerInvariant()));
 			StringBuilder sb = new StringBuilder(hash.Length * 2);
 			foreach (byte b in hash)
 			{
