@@ -182,7 +182,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard v0.9.19.0 · 玻璃启动台",
+			Text = "GlassBoard v0.9.19.1 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1099,6 +1099,20 @@ public class Controller
 	public System.Windows.Controls.ContextMenu DockMenu(Entry a)
 	{
 		System.Windows.Controls.ContextMenu menu = MenuTheme.Create(Prefs.Light, Prefs.Dock.Accent, Prefs.Dock.Material.Tint, (int)Prefs.Dock.OpacityPercent);
+		// 菜单内容在 Opened 时用后台维护的窗口快照填充——构建全程零 Shell 调用、零同步扫描，右键即开不卡顿
+		menu.Opened += (object s, RoutedEventArgs e) =>
+		{
+			Stopwatch timer = Stopwatch.StartNew();
+			FillDockMenu(menu, a);
+			timer.Stop();
+			Store.Trace("DOCKMENU fill ms=" + timer.ElapsedMilliseconds + " entry=" + a.Name);
+		};
+		return menu;
+	}
+
+	private void FillDockMenu(System.Windows.Controls.ContextMenu menu, Entry a)
+	{
+		menu.Items.Clear();
 		void add(string title, Action action2)
 		{
 			System.Windows.Controls.MenuItem item = new System.Windows.Controls.MenuItem
@@ -1112,10 +1126,46 @@ public class Controller
 			};
 			menu.Items.Add(item);
 		}
-		add("打开", () =>
+
+		// 菜单来源按运行状态区分：运行中 → 任务栏式窗口菜单置顶；未运行 → 启动与管理菜单。
+		// 文件/快捷方式的 Shell 菜单（管理员运行等）只作为最底部的懒加载子菜单，不再冒充任务栏菜单。
+		List<RunningWindow> list = RunningWindows.For(a);
+		if (list.Count > 0)
 		{
-			Launch(a);
-		});
+			// —— 任务栏式窗口区（置顶）：一窗一行，行内有 还原/最小化/最大化/关闭 子菜单 ——
+			foreach (RunningWindow item in list)
+			{
+				RunningWindow window = item;
+				System.Windows.Controls.MenuItem menuItem = new System.Windows.Controls.MenuItem
+				{
+					Header = WindowLabel(window),
+					ToolTip = window.Title
+				};
+				menuItem.Click += (object ss, RoutedEventArgs ee) =>
+				{
+					menu.IsOpen = false;
+					RunningWindows.ActivateHandle(window.Handle);
+				};
+				FillWindowOps(menuItem, window);
+				menu.Items.Add(menuItem);
+			}
+			add("关闭所有窗口", () =>
+			{
+				RunningWindows.CloseAll(a);
+			});
+			menu.Items.Add(new Separator());
+			add("打开新窗口", () =>
+			{
+				NewInstance(a);
+			});
+		}
+		else
+		{
+			add("打开", () =>
+			{
+				Launch(a);
+			});
+		}
 		if (!a.IsFolder && !Directory.Exists(a.Path))
 		{
 			add("打开文件所在位置", () =>
@@ -1141,22 +1191,6 @@ public class Controller
 				}
 			});
 		}
-		add("系统右键菜单（管理员运行等）", () =>
-		{
-			Dock.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
-			{
-				ShellContextMenu.ShowAtCursor(a.Path, Dock);
-			}));
-		});
-		menu.Items.Add(new Separator());
-		add("向前移动", () =>
-		{
-			StepDock(a.Path, -1);
-		});
-		add("向后移动", () =>
-		{
-			StepDock(a.Path, 1);
-		});
 		menu.Items.Add(new Separator());
 		System.Windows.Controls.MenuItem addNew = new System.Windows.Controls.MenuItem
 		{
@@ -1190,7 +1224,157 @@ public class Controller
 		{
 			Pin(a);
 		});
-		return menu;
+
+		// —— 文件菜单（管理员运行 / 属性 / 杀软扫描等）：懒加载子菜单，位于最底部，与任务栏式菜单严格区分 ——
+		System.Windows.Controls.MenuItem shell = new System.Windows.Controls.MenuItem
+		{
+			Header = "文件菜单（管理员运行等）"
+		};
+		shell.Items.Add(new System.Windows.Controls.MenuItem
+		{
+			Header = "正在加载…",
+			IsEnabled = false
+		});
+		shell.SubmenuOpened += (object s, RoutedEventArgs e) =>
+		{
+			if (shell.Tag != null)
+			{
+				return;
+			}
+			shell.Tag = true;
+			LoadShellMenu(shell, a.Path);
+		};
+		menu.Items.Add(shell);
+	}
+
+	// 任务栏式「打开新窗口」：绕过激活逻辑，直接启动一个新实例。
+	private void NewInstance(Entry entry)
+	{
+		try
+		{
+			Process process = Process.Start(new ProcessStartInfo(entry.Path)
+			{
+				UseShellExecute = true
+			});
+			if (process != null)
+			{
+				try
+				{
+					RunningWindows.NoteLaunch(entry.Path, process.Id, process.ProcessName);
+				}
+				catch
+				{
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			System.Windows.MessageBox.Show("无法打开「" + entry.Name + "」。\n入口可能已移动或卸载。\n\n" + ex.Message, "GlassBoard");
+		}
+	}
+
+	// 给窗口菜单项挂 还原/最小化/最大化/关闭 子菜单（含快捷键提示样式：纯状态判定，无重活）
+	private static void FillWindowOps(System.Windows.Controls.MenuItem menuItem, RunningWindow window)
+	{
+		void op(string title, Action action2)
+		{
+			System.Windows.Controls.MenuItem item = new System.Windows.Controls.MenuItem
+			{
+				Header = title
+			};
+			item.Click += (object s, RoutedEventArgs e) =>
+			{
+				action2();
+			};
+			menuItem.Items.Add(item);
+		}
+		if (RunningWindows.IsMinimized(window.Handle))
+		{
+			op("还原", () => RunningWindows.Restore(window.Handle));
+		}
+		else
+		{
+			op("最小化", () => RunningWindows.Minimize(window.Handle));
+		}
+		if (RunningWindows.IsMaximized(window.Handle))
+		{
+			op("还原", () => RunningWindows.Restore(window.Handle));
+		}
+		else
+		{
+			op("最大化", () => RunningWindows.Maximize(window.Handle));
+		}
+		op("关闭窗口", () => RunningWindows.Close(window.Handle));
+	}
+
+	// 首次展开「系统右键菜单」时后台构建原生菜单模型，完成后无缝替换占位项
+	private void LoadShellMenu(System.Windows.Controls.MenuItem shell, string path)
+	{
+		Stopwatch timer = Stopwatch.StartNew();
+		IntPtr hwnd = new WindowInteropHelper(Dock).Handle;
+		ShellContextMenu.BuildAsync(path, delegate(List<ShellMenuEntry> model)
+		{
+			timer.Stop();
+			Store.Trace("SHELLMENU ready ms=" + timer.ElapsedMilliseconds + " items=" + model.Count + " path=" + path);
+			Dock.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+			{
+				if (!shell.IsSubmenuOpen)
+				{
+					return;
+				}
+				shell.Items.Clear();
+				foreach (ShellMenuEntry item in model)
+				{
+					shell.Items.Add(RenderShellEntry(item, path, hwnd));
+				}
+			}));
+		}, delegate
+		{
+			timer.Stop();
+			Store.Trace("SHELLMENU failed ms=" + timer.ElapsedMilliseconds + " path=" + path);
+			Dock.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+			{
+				if (!shell.IsSubmenuOpen)
+				{
+					return;
+				}
+				shell.Items.Clear();
+				shell.Items.Add(new System.Windows.Controls.MenuItem
+				{
+					Header = "原生菜单不可用",
+					IsEnabled = false
+				});
+			}));
+		});
+	}
+
+	// 原生菜单模型 → WPF 菜单项（递归子菜单；命令在宿主线程执行）
+	private static System.Windows.Controls.Control RenderShellEntry(ShellMenuEntry item, string path, IntPtr hwnd)
+	{
+		if (item.Separator)
+		{
+			return new Separator();
+		}
+		System.Windows.Controls.MenuItem menuItem = new System.Windows.Controls.MenuItem
+		{
+			Header = item.Text,
+			IsEnabled = !item.Disabled,
+			IsCheckable = item.Checked,
+			IsChecked = item.Checked
+		};
+		if (item.Sub != null && item.Sub.Count > 0)
+		{
+			foreach (ShellMenuEntry sub in item.Sub)
+			{
+				menuItem.Items.Add(RenderShellEntry(sub, path, hwnd));
+			}
+		}
+		menuItem.Click += (object s, RoutedEventArgs e) =>
+		{
+			menuItem.IsEnabled = false;
+			ShellContextMenu.InvokeAsync(path, item.Id, hwnd);
+		};
+		return menuItem;
 	}
 
 	internal static ToggleButton VisibilitySwitch()
@@ -1317,7 +1501,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard · 个性化与控制 v0.9.19.0",
+				Title = "GlassBoard · 个性化与控制 v0.9.19.1",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -4774,63 +4958,86 @@ public class Controller
 		menu.Items.Add(associate);
 		menu.Opened += (object s, RoutedEventArgs e) =>
 		{
-			RunningWindows.Scan();
-			opened.Items.Clear();
-			associate.Items.Clear();
-			List<RunningWindow> list = RunningWindows.For(entry);
-			opened.IsEnabled = list.Count > 0;
-			foreach (RunningWindow item in list)
+			// 用后台维护的窗口快照填充（无同步扫描）；随后异步增量刷新，完成后再重填一次
+			Stopwatch timer = Stopwatch.StartNew();
+			FillWindowMenu(opened, associate, entry);
+			timer.Stop();
+			Store.Trace("DOCKMENU windows ms=" + timer.ElapsedMilliseconds + " entry=" + entry.Name);
+			RunningWindows.RefreshAsync(delegate
 			{
-				RunningWindow selected = item;
-				System.Windows.Controls.MenuItem menuItem = new System.Windows.Controls.MenuItem
+				if (!menu.IsOpen)
 				{
-					Header = WindowLabel(selected),
-					ToolTip = selected.Title
-				};
-				menuItem.Click += (object ss, RoutedEventArgs ee) =>
+					return;
+				}
+				menu.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
 				{
-					RunningWindows.ActivateHandle(selected.Handle);
-				};
-				opened.Items.Add(menuItem);
-			}
-			List<RunningWindow> list2 = RunningWindows.Snapshot();
-			associate.IsEnabled = list2.Count > 0 || !string.IsNullOrEmpty(entry.WindowTarget);
-			foreach (RunningWindow item2 in list2)
-			{
-				RunningWindow selected2 = item2;
-				System.Windows.Controls.MenuItem menuItem2 = new System.Windows.Controls.MenuItem
-				{
-					Header = WindowLabel(selected2),
-					ToolTip = selected2.Path,
-					IsCheckable = true,
-					IsChecked = string.Equals(entry.WindowTarget, selected2.Path, StringComparison.OrdinalIgnoreCase)
-				};
-				menuItem2.Click += (object ss, RoutedEventArgs ee) =>
-				{
-					BoardEditState before = BeginBoardEdit();
-					entry.WindowTarget = selected2.Path;
-					EndBoardEdit(before, "关联 Dock 窗口");
-					Refresh();
-				};
-				associate.Items.Add(menuItem2);
-			}
-			if (!string.IsNullOrEmpty(entry.WindowTarget))
-			{
-				associate.Items.Add(new Separator());
-				System.Windows.Controls.MenuItem menuItem3 = new System.Windows.Controls.MenuItem
-				{
-					Header = "取消手动关联"
-				};
-				menuItem3.Click += (object ss, RoutedEventArgs ee) =>
-				{
-					BoardEditState before = BeginBoardEdit();
-					entry.WindowTarget = null;
-					EndBoardEdit(before, "取消 Dock 窗口关联");
-					Refresh();
-				};
-				associate.Items.Add(menuItem3);
-			}
+					if (menu.IsOpen)
+					{
+						FillWindowMenu(opened, associate, entry);
+					}
+				}));
+			});
 		};
+	}
+
+	private void FillWindowMenu(System.Windows.Controls.MenuItem opened, System.Windows.Controls.MenuItem associate, Entry entry)
+	{
+		opened.Items.Clear();
+		associate.Items.Clear();
+		List<RunningWindow> list = RunningWindows.For(entry);
+		opened.IsEnabled = list.Count > 0;
+		foreach (RunningWindow item in list)
+		{
+			RunningWindow selected = item;
+			System.Windows.Controls.MenuItem menuItem = new System.Windows.Controls.MenuItem
+			{
+				Header = WindowLabel(selected),
+				ToolTip = selected.Title
+			};
+			menuItem.Click += (object ss, RoutedEventArgs ee) =>
+			{
+				RunningWindows.ActivateHandle(selected.Handle);
+			};
+			FillWindowOps(menuItem, selected);
+			opened.Items.Add(menuItem);
+		}
+		List<RunningWindow> list2 = RunningWindows.Snapshot();
+		associate.IsEnabled = list2.Count > 0 || !string.IsNullOrEmpty(entry.WindowTarget);
+		foreach (RunningWindow item2 in list2)
+		{
+			RunningWindow selected2 = item2;
+			System.Windows.Controls.MenuItem menuItem2 = new System.Windows.Controls.MenuItem
+			{
+				Header = WindowLabel(selected2),
+				ToolTip = selected2.Path,
+				IsCheckable = true,
+				IsChecked = string.Equals(entry.WindowTarget, selected2.Path, StringComparison.OrdinalIgnoreCase)
+			};
+			menuItem2.Click += (object ss, RoutedEventArgs ee) =>
+			{
+				BoardEditState before = BeginBoardEdit();
+				entry.WindowTarget = selected2.Path;
+				EndBoardEdit(before, "关联 Dock 窗口");
+				Refresh();
+			};
+			associate.Items.Add(menuItem2);
+		}
+		if (!string.IsNullOrEmpty(entry.WindowTarget))
+		{
+			associate.Items.Add(new Separator());
+			System.Windows.Controls.MenuItem menuItem3 = new System.Windows.Controls.MenuItem
+			{
+				Header = "取消手动关联"
+			};
+			menuItem3.Click += (object ss, RoutedEventArgs ee) =>
+			{
+				BoardEditState before = BeginBoardEdit();
+				entry.WindowTarget = null;
+				EndBoardEdit(before, "取消 Dock 窗口关联");
+				Refresh();
+			};
+			associate.Items.Add(menuItem3);
+		}
 	}
 
 	private static string WindowLabel(RunningWindow window)

@@ -52,6 +52,41 @@ public static class RunningWindows
 
 	private static readonly BoundedCache<string, long> last = new BoundedCache<string, long>(192, StringComparer.OrdinalIgnoreCase);
 
+	// —— 进程元数据缓存：路径 / AppUserModelID 按 pid 缓存，避免每次窗口枚举都 OpenProcess ——
+	private struct ProcessMeta
+	{
+		public string Path;
+
+		public string Aumid;
+
+		public int Tick;
+	}
+
+	private static readonly Dictionary<uint, ProcessMeta> pidMeta = new Dictionary<uint, ProcessMeta>();
+
+	private const int PidMetaTtlMs = 15000;
+
+	// —— 后台窗口索引：windows / background / trayWindows 由后台线程维护，UI 线程只读锁内快照 ——
+	private static readonly object scanGate = new object();
+
+	private static readonly List<RunningWindow> trayWindows = new List<RunningWindow>();
+
+	private static int windowsScanTick = int.MinValue;
+
+	private static int processesScanTick = int.MinValue;
+
+	private static int trayScanTick = int.MinValue;
+
+	private static int trayInFlight;
+
+	private static bool maintenanceStarted;
+
+	private const int WindowsFreshMs = 1200;
+
+	private const int ProcessesFreshMs = 4000;
+
+	private const int TrayFreshMs = 8000;
+
 	[DllImport("user32.dll")]
 	private static extern bool EnumWindows(Callback callback, IntPtr value);
 
@@ -81,6 +116,9 @@ public static class RunningWindows
 
 	[DllImport("user32.dll")]
 	private static extern bool IsIconic(IntPtr window);
+
+	[DllImport("user32.dll")]
+	private static extern bool IsZoomed(IntPtr window);
 
 	[DllImport("user32.dll")]
 	private static extern IntPtr GetWindow(IntPtr window, uint command);
@@ -279,6 +317,9 @@ public static class RunningWindows
 	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 	private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref int length);
 
+	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	private static extern int GetApplicationUserModelId(IntPtr process, ref uint length, StringBuilder name);
+
 	[DllImport("kernel32.dll")]
 	private static extern bool CloseHandle(IntPtr handle);
 
@@ -338,6 +379,13 @@ public static class RunningWindows
 
 	public static string ProcessPath(uint id)
 	{
+		lock (pidMeta)
+		{
+			if (pidMeta.TryGetValue(id, out var meta) && Environment.TickCount - meta.Tick >= 0 && Environment.TickCount - meta.Tick < PidMetaTtlMs)
+			{
+				return meta.Path;
+			}
+		}
 		IntPtr intPtr = OpenProcess(4096u, inherit: false, id);
 		if (intPtr == IntPtr.Zero)
 		{
@@ -360,7 +408,19 @@ public static class RunningWindows
 					return null;
 				}
 			}
-			return WindowActivationRules.NormalizePath(stringBuilder.ToString());
+			string path = WindowActivationRules.NormalizePath(stringBuilder.ToString());
+			lock (pidMeta)
+			{
+				if (!pidMeta.TryGetValue(id, out var meta))
+				{
+					meta = default(ProcessMeta);
+				}
+				meta.Path = path;
+				meta.Aumid = AumidOf(intPtr);
+				meta.Tick = Environment.TickCount;
+				pidMeta[id] = meta;
+			}
+			return path;
 		}
 		finally
 		{
@@ -368,10 +428,135 @@ public static class RunningWindows
 		}
 	}
 
+	// 进程 AppUserModelID（Win8+ 打包应用/设置 AppID；失败返回空串）。仅由 ProcessPath 填充缓存。
+	private static string AumidOf(IntPtr process)
+	{
+		try
+		{
+			uint length = 256u;
+			StringBuilder builder = new StringBuilder((int)length);
+			if (GetApplicationUserModelId(process, ref length, builder) == 0)
+			{
+				return builder.ToString();
+			}
+		}
+		catch
+		{
+		}
+		return "";
+	}
+
+	// 只读访问：AUMID 由后台扫描经 ProcessPath 填充缓存，调用方不触发任何新查询。
+	public static string Aumid(uint pid)
+	{
+		lock (pidMeta)
+		{
+			if (pidMeta.TryGetValue(pid, out var meta))
+			{
+				return meta.Aumid ?? "";
+			}
+		}
+		return "";
+	}
+
 	public static void Scan()
 	{
-		windows.Clear();
-		background.Clear();
+		Stopwatch timer = Stopwatch.StartNew();
+		int tick = Environment.TickCount;
+		lock (scanGate)
+		{
+			if (tick - windowsScanTick >= 0 && tick - windowsScanTick < WindowsFreshMs)
+			{
+				return; // 1.2 秒内的重复调用直接吃缓存（右键菜单 / 点击 / 刷新共用）
+			}
+		}
+		ScanWindowsCore();
+		lock (scanGate)
+		{
+			if (tick - processesScanTick < 0 || tick - processesScanTick >= ProcessesFreshMs)
+			{
+				ScanProcessesCore();
+			}
+		}
+		timer.Stop();
+		if (timer.ElapsedMilliseconds > 60)
+		{
+			Store.Trace("SCAN slow ms=" + timer.ElapsedMilliseconds);
+		}
+	}
+
+	// —— 后台维护：2.5 秒一拍的窗口索引刷新，UI 线程永不参与窗口枚举 ——
+	public static void StartMaintenance()
+	{
+		lock (scanGate)
+		{
+			if (maintenanceStarted)
+			{
+				return;
+			}
+			maintenanceStarted = true;
+		}
+		Thread thread = new Thread(() =>
+		{
+			while (true)
+			{
+				try
+				{
+					Thread.Sleep(2500);
+					RefreshCore();
+				}
+				catch
+				{
+				}
+			}
+		});
+		thread.IsBackground = true;
+		thread.Name = "glassboard-windowindex";
+		thread.Start();
+	}
+
+	// 异步刷新窗口索引（onDone 在后台线程回调，调用方自行 marshal 回 UI）。
+	public static void RefreshAsync(Action onDone = null)
+	{
+		ThreadPool.QueueUserWorkItem(delegate
+		{
+			try
+			{
+				RefreshCore();
+			}
+			catch (Exception ex)
+			{
+				Store.Trace("REFRESH error " + ex.Message);
+			}
+			onDone?.Invoke();
+		});
+	}
+
+	private static void RefreshCore()
+	{
+		int tick = Environment.TickCount;
+		bool doWindows;
+		bool doProcesses;
+		lock (scanGate)
+		{
+			doWindows = tick - windowsScanTick < 0 || tick - windowsScanTick >= WindowsFreshMs / 2;
+			doProcesses = tick - processesScanTick < 0 || tick - processesScanTick >= ProcessesFreshMs;
+		}
+		if (doWindows)
+		{
+			ScanWindowsCore();
+		}
+		if (doProcesses)
+		{
+			ScanProcessesCore();
+		}
+		KickTrayRefresh();
+	}
+
+	// 第一遍：可见窗口枚举（原 Scan 主体；与托盘窗口合并后整体换入）。
+	private static void ScanWindowsCore()
+	{
+		List<RunningWindow> next = new List<RunningWindow>();
 		Dictionary<uint, string> byPid = new Dictionary<uint, string>();
 		int own = Process.GetCurrentProcess().Id;
 		EnumWindows((IntPtr handle, IntPtr value) =>
@@ -431,17 +616,83 @@ public static class RunningWindows
 			{
 				return true;
 			}
-			windows.Add(new RunningWindow
+			next.Add(new RunningWindow
 			{
 				Handle = handle,
 				ProcessId = id,
 				Path = value3,
-				Title = stringBuilder.ToString()
+				Title = stringBuilder.ToString(),
+				AppUserModelId = Aumid(id)
 			});
 			return true;
 		}, IntPtr.Zero);
-		ScanTray(byPid, own);
-		ScanProcesses(byPid, own);
+		List<RunningWindow> tray;
+		lock (scanGate)
+		{
+			tray = trayWindows.ToList();
+			windowsScanTick = Environment.TickCount;
+		}
+		MergeTrayIntoWindows(next, tray);
+		lock (scanGate)
+		{
+			windows.Clear();
+			windows.AddRange(next);
+		}
+		KickTrayRefresh();
+	}
+
+	// 托盘窗口合并进窗口列表（同 pid 去重，不覆盖可见窗口）。
+	private static void MergeTrayIntoWindows(List<RunningWindow> into, List<RunningWindow> tray)
+	{
+		HashSet<uint> taken = new HashSet<uint>(into.Select((RunningWindow w) => w.ProcessId));
+		foreach (RunningWindow w in tray)
+		{
+			if (taken.Add(w.ProcessId))
+			{
+				into.Add(w);
+			}
+		}
+	}
+
+	// 托盘隐藏窗口单独后台扫描（8 秒节流 + 单飞限制；绝不占 UI 线程）。
+	private static void KickTrayRefresh()
+	{
+		int tick = Environment.TickCount;
+		lock (scanGate)
+		{
+			if (tick - trayScanTick >= 0 && tick - trayScanTick < TrayFreshMs)
+			{
+				return;
+			}
+			if (trayInFlight > 0)
+			{
+				return;
+			}
+			trayInFlight++;
+		}
+		ThreadPool.QueueUserWorkItem(delegate
+		{
+			try
+			{
+				ScanTrayCore();
+				lock (scanGate)
+				{
+					trayScanTick = Environment.TickCount;
+				}
+				MergeTrayIntoWindows();
+			}
+			catch (Exception ex)
+			{
+				Store.Trace("TRAY_SCAN error " + ex.Message);
+			}
+			finally
+			{
+				lock (scanGate)
+				{
+					trayInFlight--;
+				}
+			}
+		});
 	}
 
 	// 附属/运行时进程名（Windows 自带、框架运行时、内嵌解释器——永远不进运行列表）。
@@ -481,10 +732,12 @@ public static class RunningWindows
 	}
 
 	// 第三遍：无任何窗口但在运行的软件（仅用户会话，排除服务/更新器/辅助进程）。
-	private static void ScanProcesses(Dictionary<uint, string> byPid, int own)
+	private static void ScanProcessesCore()
 	{
+		List<RunningWindow> next = new List<RunningWindow>();
+		List<RunningWindow> current = Snapshot();
 		HashSet<string> havePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-		foreach (RunningWindow w in windows)
+		foreach (RunningWindow w in current)
 		{
 			if (!string.IsNullOrEmpty(w.Path))
 			{
@@ -506,7 +759,7 @@ public static class RunningWindows
 		{
 			try
 			{
-				if (process.Id == own || process.SessionId != session)
+				if (process.Id == ownPid || process.SessionId != session)
 				{
 					continue;
 				}
@@ -532,34 +785,20 @@ public static class RunningWindows
 				{
 					continue;
 				}
-				if (!byPid.TryGetValue((uint)process.Id, out var path))
-				{
-					try
-					{
-						path = ProcessPath((uint)process.Id);
-					}
-					catch
-					{
-						path = null;
-					}
-					if (path == null)
-					{
-						continue;
-					}
-					byPid[(uint)process.Id] = path;
-				}
+				string path = ProcessPath((uint)process.Id);
 				if (string.IsNullOrEmpty(path) || havePaths.Contains(path) || IsSystemArea(path))
 				{
 					continue;
 				}
 				havePaths.Add(path);
-				background.Add(new RunningWindow
+				next.Add(new RunningWindow
 				{
 					Handle = IntPtr.Zero,
 					ProcessId = (uint)process.Id,
 					Path = path,
 					Title = processName,
-					Tray = true
+					Tray = true,
+					AppUserModelId = Aumid((uint)process.Id)
 				});
 			}
 			catch
@@ -570,15 +809,23 @@ public static class RunningWindows
 				process.Dispose();
 			}
 		}
+		lock (scanGate)
+		{
+			background.Clear();
+			background.AddRange(next);
+			processesScanTick = Environment.TickCount;
+		}
 	}
 
 	// 第二遍：隐藏窗口——只收"系统托盘里真实存在的应用"（窗口标题/进程名与托盘图标名匹配），其余隐藏辅助窗口一律不收。
-	private static void ScanTray(Dictionary<uint, string> byPid, int own)
+	private static void ScanTrayCore()
 	{
+		List<RunningWindow> found = new List<RunningWindow>();
 		List<string> tray = TrayNames();
 		string windowsDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
 		HashSet<uint> taken = new HashSet<uint>();
-		foreach (RunningWindow w in windows)
+		List<RunningWindow> current = Snapshot();
+		foreach (RunningWindow w in current)
 		{
 			taken.Add(w.ProcessId);
 		}
@@ -610,21 +857,18 @@ public static class RunningWindows
 			{
 			}
 			GetWindowThreadProcessId(handle, out var id);
-			if (id == own || id == 0u || taken.Contains(id))
+			if (id == ownPid || id == 0u || taken.Contains(id))
 			{
 				return true;
 			}
-			if (!byPid.TryGetValue(id, out var value3))
+			string value3;
+			try
 			{
-				try
-				{
-					value3 = ProcessPath(id);
-				}
-				catch
-				{
-					value3 = null;
-				}
-				byPid[id] = value3;
+				value3 = ProcessPath(id);
+			}
+			catch
+			{
+				value3 = null;
 			}
 			if (string.IsNullOrEmpty(value3))
 			{
@@ -657,16 +901,43 @@ public static class RunningWindows
 				return true;
 			}
 			taken.Add(id);
-			windows.Add(new RunningWindow
+			found.Add(new RunningWindow
 			{
 				Handle = handle,
 				ProcessId = id,
 				Path = value3,
 				Title = title,
-				Tray = true
+				Tray = true,
+				AppUserModelId = Aumid(id)
 			});
 			return true;
 		}, IntPtr.Zero);
+		lock (scanGate)
+		{
+			trayWindows.Clear();
+			trayWindows.AddRange(found);
+		}
+	}
+
+	// 托盘扫描完成后把托盘窗口合并进主窗口列表（同 pid 去重）。
+	private static void MergeTrayIntoWindows()
+	{
+		List<RunningWindow> tray;
+		lock (scanGate)
+		{
+			tray = trayWindows.ToList();
+		}
+		lock (scanGate)
+		{
+			HashSet<uint> taken = new HashSet<uint>(windows.Select((RunningWindow w) => w.ProcessId));
+			foreach (RunningWindow w in tray)
+			{
+				if (taken.Add(w.ProcessId))
+				{
+					windows.Add(w);
+				}
+			}
+		}
 	}
 
 	// 窗口标题/进程名与任一托盘图标名互含即视为托盘应用（双向 Contains，忽略大小写）。
@@ -993,7 +1264,7 @@ public static class RunningWindows
 				fallbackNames.Add(fileNameWithoutExtension);
 			}
 		}
-		return (from w in windows
+		return (from w in Snapshot()
 			where !string.IsNullOrEmpty(w.Path) && (paths.Contains(w.Path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(w.Path)))
 			orderby w.Handle.ToInt64()
 			select w).ToList();
@@ -1001,13 +1272,19 @@ public static class RunningWindows
 
 	public static List<RunningWindow> Snapshot()
 	{
-		return windows.ToList();
+		lock (scanGate)
+		{
+			return windows.ToList();
+		}
 	}
 
 	// 运行菜单专用：可见/托盘窗口 + 无窗口在运行的软件（不含服务进程）。
 	public static List<RunningWindow> SnapshotWithBackground()
 	{
-		return windows.Concat(background).ToList();
+		lock (scanGate)
+		{
+			return windows.Concat(background).ToList();
+		}
 	}
 
 	public static bool IsRunning(Entry entry)
@@ -1141,6 +1418,42 @@ public static class RunningWindows
 	public static bool IsForeground(IntPtr handle)
 	{
 		return EffectiveForeground() == handle;
+	}
+
+	// —— 任务栏式窗口操作（右键菜单用）：全部 O(1) 状态判定 + 单条 Win32 调用 ——
+	public static bool IsMinimized(IntPtr handle)
+	{
+		return IsWindow(handle) && IsIconic(handle);
+	}
+
+	public static bool IsMaximized(IntPtr handle)
+	{
+		return IsWindow(handle) && IsZoomed(handle);
+	}
+
+	public static void Restore(IntPtr handle)
+	{
+		if (IsWindow(handle))
+		{
+			ShowWindowAsync(handle, 9);
+		}
+	}
+
+	public static void Maximize(IntPtr handle)
+	{
+		if (IsWindow(handle))
+		{
+			ShowWindowAsync(handle, 3);
+		}
+	}
+
+	// 任务栏式「关闭所有窗口」：逐个发 WM_CLOSE，优雅关闭优先。
+	public static void CloseAll(Entry entry)
+	{
+		foreach (RunningWindow w in For(entry))
+		{
+			Close(w.Handle);
+		}
 	}
 
 	// 再点 Dock 图标时把前台窗口最小化（任务栏式切换；进程保留，再点恢复）。
@@ -1306,7 +1619,7 @@ public static class RunningWindows
 		{
 			return new List<RunningWindow>();
 		}
-		return (from w in windows
+		return (from w in Snapshot()
 			where pids.Contains((int)w.ProcessId)
 			orderby w.Handle.ToInt64()
 			select w).ToList();

@@ -19,11 +19,27 @@ namespace GlassBoard;
 
 // 在线更新：读取 GitHub Release 最新版本，下载便携包解压，
 // 写入重启脚本（等待本进程退出 → 覆盖程序文件 → 重新启动）完成原地升级。
+// 网络回退：api.github.com / github.com 直连失败时自动切换国内可达的加速镜像，
+// 让无法访问 GitHub 的用户也能检查与下载更新。
 public static class OnlineUpdate
 {
 	private const string RepoOwner = "llm147369";
 	private const string RepoName = "GlassBoard-Source";
-	private const string LatestApi = "https://api.github.com/repos/" + RepoOwner + "/" + RepoName + "/releases/latest";
+	private const string ApiPath = "repos/" + RepoOwner + "/" + RepoName + "/releases/latest";
+	private const string LatestApi = "https://api.github.com/" + ApiPath;
+	private const string ReleasePage = "https://github.com/" + RepoOwner + "/" + RepoName + "/releases/latest";
+
+	// 前缀式加速镜像：任意 github.com / api.github.com 地址拼在其后即可代理。
+	// 按顺序尝试，全部失败才算检查失败。
+	private static readonly string[] Mirrors = new string[3]
+	{
+		"https://ghfast.top/",
+		"https://gh-proxy.com/",
+		"https://ghproxy.net/"
+	};
+
+	// 最近一次成功的下载基址（""=直连，"https://ghfast.top/" 等），下次下载优先复用
+	private static string lastWorkingBase = "";
 
 	[DataContract]
 	public sealed class ReleaseInfo
@@ -89,28 +105,58 @@ public static class OnlineUpdate
 		return parts;
 	}
 
-	private static HttpClient Client()
+	private static HttpClient Client(int timeoutSeconds = 25)
 	{
 		ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
 		HttpClient client = new HttpClient
 		{
-			Timeout = TimeSpan.FromSeconds(25)
+			Timeout = TimeSpan.FromSeconds(timeoutSeconds)
 		};
 		client.DefaultRequestHeaders.UserAgent.ParseAdd("GlassBoard-Updater/1.0");
 		client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 		return client;
 	}
 
+	// 检查版本 API 的候选地址：直连优先，失败后逐个尝试镜像
+	private static IEnumerable<string> ApiCandidates()
+	{
+		yield return LatestApi;
+		foreach (string mirror in Mirrors)
+		{
+			yield return mirror + LatestApi;
+		}
+	}
+
 	public static async Task<ReleaseInfo> FetchLatestAsync()
 	{
-		using (HttpClient client = Client())
+		Exception lastError = null;
+		foreach (string url in ApiCandidates())
 		{
-			string json = await client.GetStringAsync(LatestApi);
-			using (MemoryStream stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
+			try
 			{
-				return (ReleaseInfo)new DataContractJsonSerializer(typeof(ReleaseInfo)).ReadObject(stream);
+				// API 只取一个小 JSON：12 秒快速失败，尽快切下一个镜像
+				using (HttpClient client = Client(12))
+				{
+					string json = await client.GetStringAsync(url);
+					using (MemoryStream stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
+					{
+						ReleaseInfo info = (ReleaseInfo)new DataContractJsonSerializer(typeof(ReleaseInfo)).ReadObject(stream);
+						if (info == null || string.IsNullOrEmpty(info.TagName))
+						{
+							continue;
+						}
+						// 记录本次成功用的基址，下载时优先复用（直连成功记 ""）
+						lastWorkingBase = url.StartsWith(LatestApi, StringComparison.Ordinal) ? "" : url.Substring(0, url.IndexOf(LatestApi, StringComparison.Ordinal));
+						return info;
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				lastError = ex;
 			}
 		}
+		throw new Exception("无法连接 GitHub 更新服务，网络可能受限。", lastError);
 	}
 
 	// 启动自动检查只取最新版本号
@@ -245,33 +291,79 @@ public static class OnlineUpdate
 		{
 			Store.Log(new Exception("在线更新失败", ex));
 			Set("更新失败：" + ex.Message);
-			MessageBox.Show(owner, "更新失败：" + ex.Message + "\n\n可以稍后重试，或到 GitHub Release 手动下载便携包覆盖。", "GlassBoard 在线更新");
+			MessageBox.Show(owner, "更新失败：" + ex.Message + "\n\n网络受限时可打开以下链接手动下载便携包，解压覆盖即可：\n" + ReleasePage, "GlassBoard 在线更新");
+		}
+	}
+
+	// 下载候选地址：上次成功的基址优先，其次直连，最后逐个镜像
+	private static IEnumerable<string> DownloadCandidates(ReleaseAsset asset)
+	{
+		HashSet<string> tried = new HashSet<string>(StringComparer.Ordinal);
+		if (!string.IsNullOrEmpty(lastWorkingBase))
+		{
+			tried.Add(lastWorkingBase + asset.DownloadUrl);
+			yield return lastWorkingBase + asset.DownloadUrl;
+		}
+		if (!tried.Contains(asset.DownloadUrl))
+		{
+			tried.Add(asset.DownloadUrl);
+			yield return asset.DownloadUrl;
+		}
+		foreach (string mirror in Mirrors)
+		{
+			string candidate = mirror + asset.DownloadUrl;
+			if (tried.Add(candidate))
+			{
+				yield return candidate;
+			}
 		}
 	}
 
 	private static async Task DownloadAsync(ReleaseAsset asset, string dest, Action<long, long> onProgress)
 	{
-		using (HttpClient client = Client())
+		Exception lastError = null;
+		foreach (string url in DownloadCandidates(asset))
 		{
-			using (HttpResponseMessage response = await client.GetAsync(asset.DownloadUrl, HttpCompletionOption.ResponseHeadersRead))
+			try
 			{
-				response.EnsureSuccessStatusCode();
-				long total = response.Content.Headers.ContentLength ?? asset.Size;
-				using (Stream source = await response.Content.ReadAsStreamAsync())
-				using (FileStream target = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
+				using (HttpClient client = Client(90))
+				using (HttpResponseMessage response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
 				{
-					byte[] buffer = new byte[65536];
-					long done = 0L;
-					int read;
-					while ((read = await source.ReadAsync(buffer, 0, buffer.Length)) > 0)
+					response.EnsureSuccessStatusCode();
+					long total = response.Content.Headers.ContentLength ?? asset.Size;
+					using (Stream source = await response.Content.ReadAsStreamAsync())
+					using (FileStream target = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
 					{
-						await target.WriteAsync(buffer, 0, read);
-						done += read;
-						onProgress?.Invoke(done, total);
+						byte[] buffer = new byte[65536];
+						long done = 0L;
+						int read;
+						while ((read = await source.ReadAsync(buffer, 0, buffer.Length)) > 0)
+						{
+							await target.WriteAsync(buffer, 0, read);
+							done += read;
+							onProgress?.Invoke(done, total);
+						}
 					}
+				}
+				return;
+			}
+			catch (Exception ex)
+			{
+				// 该地址失败（断流/超时/网络受限）→ 尝试下一个镜像
+				lastError = ex;
+				try
+				{
+					if (File.Exists(dest))
+					{
+						File.Delete(dest);
+					}
+				}
+				catch
+				{
 				}
 			}
 		}
+		throw new Exception("下载更新包失败，网络可能受限。", lastError);
 	}
 
 	// 写入重启脚本：等待本进程退出 → robocopy 覆盖程序文件 → 重新启动。
@@ -279,6 +371,18 @@ public static class OnlineUpdate
 	private static void InstallAndRestart(string extractedDir)
 	{
 		string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/');
+		// 目录不可写（Program Files 等）：robocopy 覆盖会静默失败，直接引导手动更新
+		try
+		{
+			string probe = Path.Combine(appDir, "GlassBoard-write-test.tmp");
+			File.WriteAllText(probe, "1");
+			File.Delete(probe);
+		}
+		catch
+		{
+			MessageBox.Show("程序目录不可写（可能需要管理员权限），无法自动覆盖程序文件。\n\n请以管理员身份运行 GlassBoard 后重试，或手动下载便携包覆盖：\n" + ReleasePage, "GlassBoard 在线更新");
+			return;
+		}
 		if (File.Exists(Path.Combine(appDir, "DefaultConfig.json")) || File.Exists(Path.Combine(appDir, "DefaultConfig.json.done")))
 		{
 			string packagedConfig = Path.Combine(extractedDir, "DefaultConfig.json");

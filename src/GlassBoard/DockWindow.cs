@@ -133,6 +133,10 @@ public class DockWindow : GlassWindow
 
 	private bool dockIconDragging;
 
+	// 图标按下（点击/拖拽判定）期间冻结悬停动画：Mouse.Capture 会让按钮收到 MouseLeave，
+	// 松手释放捕获又触发 MouseEnter——若不冻结，每次点击图标都会先落下再弹起（“跳动”）。
+	private bool dockPressActive;
+
 	private bool dockPointerPreviousBusy;
 
 	private DockPointerGesture dockPointer;
@@ -200,6 +204,7 @@ public class DockWindow : GlassWindow
 		InitializeBackgroundMove();
 		InitTaskDock();
 		RunningWindows.InitForegroundTracking();
+		RunningWindows.StartMaintenance();
 		moveGrip = new Thumb
 		{
 			Width = 42.0,
@@ -1209,6 +1214,11 @@ public class DockWindow : GlassWindow
 		double zoomTarget = 1.0;
 		Action<bool> animate = (bool hover) =>
 		{
+			if (dockPressActive)
+			{
+				// 按下/点击期间冻结悬停动画，点击图标不再“跳动”
+				return;
+			}
 			zoomTarget = (hover ? Math.Min(1.6, 1.0 + (o.Zoom - 1.0) * MotionLevel) : 1.0);
 			if (MotionEnabled)
 			{
@@ -2637,6 +2647,46 @@ public class DockWindow : GlassWindow
 					close();
 					KillTask(selected);
 				};
+				// —— 任务栏式窗口切换：单窗口直接项，多窗口给「切换窗口」子菜单 ——
+				if (selected.Windows.Count == 1)
+				{
+					RunningWindow single = selected.Windows[0];
+					System.Windows.Controls.MenuItem showItem = new System.Windows.Controls.MenuItem
+					{
+						Header = "显示窗口",
+						ToolTip = single.Title
+					};
+					showItem.Click += (object ss, RoutedEventArgs ee) =>
+					{
+						close();
+						RunningWindows.ActivateHandle(single.Handle);
+					};
+					rowMenu.Items.Add(showItem);
+				}
+				else if (selected.Windows.Count > 1)
+				{
+					System.Windows.Controls.MenuItem switchItem = new System.Windows.Controls.MenuItem
+					{
+						Header = "切换窗口"
+					};
+					foreach (RunningWindow w in selected.Windows)
+					{
+						RunningWindow captured = w;
+						string label = string.IsNullOrWhiteSpace(w.Title) ? "（无标题）" : ((w.Title.Length > 28) ? (w.Title.Substring(0, 28) + "…") : w.Title);
+						System.Windows.Controls.MenuItem one = new System.Windows.Controls.MenuItem
+						{
+							Header = label,
+							ToolTip = w.Title
+						};
+						one.Click += (object ss, RoutedEventArgs ee) =>
+						{
+							close();
+							RunningWindows.ActivateHandle(captured.Handle);
+						};
+						switchItem.Items.Add(one);
+					}
+					rowMenu.Items.Add(switchItem);
+				}
 				rowMenu.Items.Add(openItem);
 				rowMenu.Items.Add(quitItem);
 				row.ContextMenu = rowMenu;
@@ -3742,8 +3792,10 @@ public class DockWindow : GlassWindow
 			return false;
 		}
 		beforeDrag?.Invoke();
+		dockPressActive = true;
 		if (!Mouse.Capture(this, CaptureMode.Element))
 		{
+			dockPressActive = false;
 			Store.Trace("DOCK pointer capture failed");
 			return false;
 		}
@@ -3833,6 +3885,7 @@ public class DockWindow : GlassWindow
 		dockPointerClick = null;
 		dockPointerOwner = null;
 		dockIconDragging = false;
+		dockPressActive = false;
 		dockPointerWatch.Stop();
 		C.Board.ModalBusy = dockPointerPreviousBusy;
 		try
