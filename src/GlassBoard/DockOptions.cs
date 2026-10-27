@@ -48,7 +48,12 @@ public class DockOptions
 	public int ComputerStyle;
 
 	[DataMember]
-	public bool ShowComputer = true;
+	public bool ShowComputer = false;
+
+	// 收纳整合总开关：开启后此电脑/设置/电源/网络入口从 Dock 收起（收进应用面板与控制中心），
+	// 关闭后各独立开关照常生效
+	[DataMember]
+	public bool Consolidate = true;
 
 	[DataMember]
 	public bool ShowLabels;
@@ -84,7 +89,7 @@ public class DockOptions
 	public bool ShowRunningList = true;
 
 	[DataMember]
-	public bool ShowSettings = true;
+	public bool ShowSettings = false;
 
 	[DataMember]
 	public List<string> ItemOrder = new List<string>();
@@ -128,12 +133,13 @@ public class DockOptions
 		Accent = 0;
 		MaxPinned = 9;
 		ComputerStyle = 0;
-		ShowComputer = true;
+		ShowComputer = false;
+		Consolidate = true;
 		ShowLabels = false;
 		ShowSeparator = true;
 		AlwaysOnTop = false;
 		MotionEnabled = true;
-		ShowSettings = true;
+		ShowSettings = false;
 		ShowControlCenter = true;
 		ShowRunningList = true;
 		IconPack = 0;
@@ -189,9 +195,19 @@ public class DockOptions
 		ComputerStyle = Math.Max(0, Math.Min(1, ComputerStyle));
 	}
 
+	public int SystemCount()
+	{
+		if (Consolidate)
+		{
+			// 收纳开启：Dock 上只剩应用面板 + 控制中心 + 运行列表
+			return 1 + (ShowControlCenter ? 1 : 0) + (ShowRunningList ? 1 : 0);
+		}
+		return 1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 1 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0);
+	}
+
 	public int VisiblePinned(double availableWidth, int count)
 	{
-		int num = 1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 1 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0);
+		int num = SystemCount();
 		double num2 = IconSize + 16.0 + Spacing;
 		int val = Math.Max(0, (int)Math.Floor((availableWidth - 28.0 - Spacing - (double)(ShowSeparator ? 17 : 0)) / num2) - num);
 		return Math.Min(count, Math.Min(MaxPinned, val));
@@ -205,6 +221,6 @@ public class DockOptions
 
 	public double WidthFor(int pinnedCount)
 	{
-		return 28.0 + Spacing + (double)(1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 1 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0) + pinnedCount) * (IconSize + 16.0 + Spacing) + (double)(ShowSeparator ? 17 : 0);
+		return 28.0 + Spacing + (double)(SystemCount() + pinnedCount) * (IconSize + 16.0 + Spacing) + (double)(ShowSeparator ? 17 : 0);
 	}
 }

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Windows;
 using System.Windows.Controls;
@@ -77,7 +79,6 @@ public class ControlCenterWindow : GlassWindow
 	private System.Windows.Media.Brush lineBrush;
 
 	// 控件
-	private StackPanel body;
 	private Border wifiTile;
 	private Border btTile;
 	private ContentControl wifiIconHost;
@@ -91,6 +92,7 @@ public class ControlCenterWindow : GlassWindow
 	private Border passwordPanel;
 	private TextBlock passwordPrompt;
 	private TextBox passwordBox;
+	private Border audioSection;
 	private Border volumeSection;
 	private Slider volumeSlider;
 	private TextBlock volumeValue;
@@ -102,6 +104,16 @@ public class ControlCenterWindow : GlassWindow
 	private TextBlock brightnessValue;
 	private Border btSection;
 	private StackPanel btListPanel;
+	private StackPanel homePage;
+	private StackPanel wifiPage;
+	private StackPanel btPage;
+	private int pageIndex;
+	private Border wifiSwitchRow;
+	private Border btSwitchRow;
+	private TextBlock wifiSwitchState;
+	private TextBlock btSwitchState;
+	private Border sysRow;
+	private Border powerCard;
 
 	public ControlCenterWindow(Controller c)
 		: base(24.0)
@@ -156,16 +168,20 @@ public class ControlCenterWindow : GlassWindow
 		btTile.BorderBrush = lineBrush;
 		wifiSection.Background = cardBrush;
 		wifiSection.BorderBrush = lineBrush;
-		volumeSection.Background = cardBrush;
-		volumeSection.BorderBrush = lineBrush;
-		outputSection.Background = cardBrush;
-		outputSection.BorderBrush = lineBrush;
+		audioSection.Background = cardBrush;
+		audioSection.BorderBrush = lineBrush;
 		brightnessSection.Background = cardBrush;
 		brightnessSection.BorderBrush = lineBrush;
 		btSection.Background = cardBrush;
 		btSection.BorderBrush = lineBrush;
 		passwordPanel.Background = cardBrush;
 		passwordPanel.BorderBrush = lineBrush;
+		wifiSwitchRow.Background = cardBrush;
+		wifiSwitchRow.BorderBrush = lineBrush;
+		btSwitchRow.Background = cardBrush;
+		btSwitchRow.BorderBrush = lineBrush;
+		sysRow.Background = cardBrush;
+		sysRow.BorderBrush = lineBrush;
 	}
 
 	// ==================== UI 构建 ====================
@@ -193,7 +209,7 @@ public class ControlCenterWindow : GlassWindow
 		};
 	}
 
-	private Border BuildTile(string kind, string title, out ContentControl iconHost, out TextBlock status, MouseButtonEventHandler toggle)
+	private Border BuildTile(string kind, string title, out ContentControl iconHost, out TextBlock status, MouseButtonEventHandler toggle, Action arrow = null)
 	{
 		Border tile = new Border
 		{
@@ -229,6 +245,50 @@ public class ControlCenterWindow : GlassWindow
 		stack.Children.Add(status);
 		Grid.SetColumn(stack, 1);
 		grid.Children.Add(stack);
+		if (arrow != null)
+		{
+			grid.ColumnDefinitions.Add(new ColumnDefinition
+			{
+				Width = GridLength.Auto
+			});
+			// 整条右缘都是箭头热区：加宽加高，点箭头进二级页不会误触开关
+			Border arrowZone = new Border
+			{
+				Background = System.Windows.Media.Brushes.Transparent,
+				CornerRadius = new CornerRadius(8.0),
+				Padding = new Thickness(9.0, 0.0, 5.0, 0.0),
+				Margin = new Thickness(4.0, 0.0, -4.0, 0.0),
+				VerticalAlignment = VerticalAlignment.Stretch,
+				Cursor = Cursors.Hand
+			};
+			TextBlock arrowText = new TextBlock
+			{
+				Text = "›",
+				FontSize = 22.0,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = TextBrush,
+				VerticalAlignment = VerticalAlignment.Center,
+				HorizontalAlignment = HorizontalAlignment.Center,
+				IsHitTestVisible = false
+			};
+			arrowZone.Child = arrowText;
+			arrowZone.MouseEnter += (object s, System.Windows.Input.MouseEventArgs e) =>
+			{
+				arrowZone.Background = hoverBrush;
+			};
+			arrowZone.MouseLeave += (object s, System.Windows.Input.MouseEventArgs e) =>
+			{
+				arrowZone.Background = System.Windows.Media.Brushes.Transparent;
+			};
+			arrowZone.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+			{
+				// 只进二级页，不触发整块 tile 的开关切换
+				e.Handled = true;
+				arrow();
+			};
+			Grid.SetColumn(arrowZone, 2);
+			grid.Children.Add(arrowZone);
+		}
 		tile.Child = grid;
 		tile.MouseLeftButtonUp += toggle;
 		return tile;
@@ -242,11 +302,22 @@ public class ControlCenterWindow : GlassWindow
 			HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
 		};
 		ContentGrid.Children.Add(scroll);
-		body = new StackPanel
+		Grid pageHost = new Grid();
+		scroll.Content = pageHost;
+		homePage = BuildHomePage();
+		pageHost.Children.Add(homePage);
+		wifiPage = BuildWifiPage();
+		pageHost.Children.Add(wifiPage);
+		btPage = BuildBtPage();
+		pageHost.Children.Add(btPage);
+	}
+
+	private StackPanel BuildHomePage()
+	{
+		StackPanel body = new StackPanel
 		{
 			Margin = new Thickness(16.0, 14.0, 16.0, 18.0)
 		};
-		scroll.Content = body;
 
 		Grid header = new Grid
 		{
@@ -273,12 +344,18 @@ public class ControlCenterWindow : GlassWindow
 		wifiTile = BuildTile("wifi", "Wi-Fi", out wifiIconHost, out wifiStatus, (object s, MouseButtonEventArgs e) =>
 		{
 			ToggleRadio(wifi: true);
+		}, delegate
+		{
+			ShowPage(1);
 		});
 		Grid.SetColumn(wifiTile, 0);
 		tiles.Children.Add(wifiTile);
 		btTile = BuildTile("bluetooth", "蓝牙", out btIconHost, out btStatus, (object s, MouseButtonEventArgs e) =>
 		{
 			ToggleRadio(wifi: false);
+		}, delegate
+		{
+			ShowPage(2);
 		});
 		Grid.SetColumn(btTile, 1);
 		tiles.Children.Add(btTile);
@@ -304,7 +381,6 @@ public class ControlCenterWindow : GlassWindow
 		}, 112.0);
 		scan.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
 		wifiStack.Children.Add(scan);
-		body.Children.Add(wifiSection);
 
 		// 密码输入
 		passwordPanel = new Border
@@ -347,8 +423,15 @@ public class ControlCenterWindow : GlassWindow
 		passwordButtons.Children.Add(connectBtn);
 		passwordStack.Children.Add(passwordButtons);
 
-		// 音量区块
-		volumeSection = SectionCard();
+		// 音频区块：音量与输出设备合并为同一区域（第一行音量、第二行输出设备）
+		audioSection = SectionCard();
+		StackPanel audioStack = new StackPanel();
+		audioSection.Child = audioStack;
+		volumeSection = new Border
+		{
+			Background = System.Windows.Media.Brushes.Transparent,
+			BorderThickness = new Thickness(0.0)
+		};
 		Grid volumeGrid = new Grid();
 		volumeGrid.ColumnDefinitions.Add(new ColumnDefinition
 		{
@@ -359,17 +442,14 @@ public class ControlCenterWindow : GlassWindow
 		{
 			Width = GridLength.Auto
 		});
-		volumeGrid.ColumnDefinitions.Add(new ColumnDefinition
-		{
-			Width = GridLength.Auto
-		});
 		volumeSection.Child = volumeGrid;
+		audioStack.Children.Add(volumeSection);
 		Button muteBtn = new Button
 		{
 			Width = 26.0,
 			Height = 26.0,
 			Padding = new Thickness(0.0),
-			Margin = new Thickness(0.0, 0.0, 10.0, 0.0),
+			Margin = new Thickness(0.0, 0.0, 12.0, 0.0),
 			VerticalAlignment = VerticalAlignment.Center,
 			Background = System.Windows.Media.Brushes.Transparent,
 			BorderThickness = new Thickness(0.0),
@@ -377,7 +457,7 @@ public class ControlCenterWindow : GlassWindow
 		};
 		muteIcon = new System.Windows.Controls.ContentControl
 		{
-			Content = IconPacks.Glyph("volume", C.Prefs.Dock.IconPack, C.Prefs.Dock.Accent, TextBrush, 18.0),
+			Content = IconPacks.Glyph("volume", C.Prefs.Dock.IconPack, C.Prefs.Dock.Accent, TextBrush, 20.0),
 			HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
 			VerticalAlignment = VerticalAlignment.Center,
 			IsHitTestVisible = false
@@ -422,10 +502,13 @@ public class ControlCenterWindow : GlassWindow
 		volumeValue.VerticalAlignment = VerticalAlignment.Center;
 		Grid.SetColumn(volumeValue, 2);
 		volumeGrid.Children.Add(volumeValue);
-		body.Children.Add(volumeSection);
-
-		// 输出设备区块
-		outputSection = SectionCard();
+		// 第二行：输出设备选择器（同一音频区域内，紧凑排布）
+		outputSection = new Border
+		{
+			Background = System.Windows.Media.Brushes.Transparent,
+			BorderThickness = new Thickness(0.0),
+			Margin = new Thickness(0.0, 12.0, 0.0, 0.0)
+		};
 		Grid outputGrid = new Grid();
 		outputGrid.RowDefinitions.Add(new RowDefinition
 		{
@@ -463,7 +546,8 @@ public class ControlCenterWindow : GlassWindow
 		Grid.SetRow(outputHint, 1);
 		Grid.SetColumn(outputHint, 1);
 		outputGrid.Children.Add(outputHint);
-		body.Children.Add(outputSection);
+		audioStack.Children.Add(outputSection);
+		body.Children.Add(audioSection);
 
 		// 亮度区块
 		brightnessSection = SectionCard();
@@ -480,12 +564,12 @@ public class ControlCenterWindow : GlassWindow
 		brightnessSection.Child = brightGrid;
 		ContentControl sunIcon = new ContentControl
 		{
-			Width = 22.0,
-			Height = 22.0,
+			Width = 26.0,
+			Height = 26.0,
 			VerticalAlignment = VerticalAlignment.Center,
 			Margin = new Thickness(0.0, 0.0, 12.0, 0.0)
 		};
-		sunIcon.Content = IconPacks.Glyph("brightness", C.Prefs.Dock.IconPack, C.Prefs.Dock.Accent, TextBrush, 22.0);
+		sunIcon.Content = IconPacks.Glyph("brightness", C.Prefs.Dock.IconPack, C.Prefs.Dock.Accent, TextBrush, 20.0);
 		Grid.SetColumn(sunIcon, 0);
 		brightGrid.Children.Add(sunIcon);
 		brightnessSlider = new Slider
@@ -522,7 +606,74 @@ public class ControlCenterWindow : GlassWindow
 		brightGrid.Children.Add(brightnessValue);
 		body.Children.Add(brightnessSection);
 
-		// 蓝牙区块
+		// 系统快捷行：电源 / 设置 / 锁屏（收纳 Dock 上的电源与设置入口）
+		sysRow = SectionCard();
+		Grid sysGrid = new Grid();
+		sysGrid.ColumnDefinitions.Add(new ColumnDefinition());
+		sysGrid.ColumnDefinitions.Add(new ColumnDefinition());
+		sysGrid.ColumnDefinitions.Add(new ColumnDefinition());
+		sysRow.Child = sysGrid;
+		powerCard = SysButton("power", "电源", OpenPowerMenu);
+		Grid.SetColumn(powerCard, 0);
+		sysGrid.Children.Add(powerCard);
+		Border settingsCard = SysButton("settings", "设置", delegate
+		{
+			ClosePanel();
+			C.Settings();
+		});
+		Grid.SetColumn(settingsCard, 1);
+		sysGrid.Children.Add(settingsCard);
+		Border lockCard = SysButton("lock", "锁屏", delegate
+		{
+			ClosePanel();
+			Native.Lock();
+		});
+		Grid.SetColumn(lockCard, 2);
+		sysGrid.Children.Add(lockCard);
+		body.Children.Add(sysRow);
+		return body;
+	}
+
+	// Wi-Fi 二级页：开关行 + 网络列表 + 底部入口
+	private StackPanel BuildWifiPage()
+	{
+		StackPanel page = new StackPanel
+		{
+			Margin = new Thickness(16.0, 14.0, 16.0, 18.0)
+		};
+		page.Children.Add(PageHead("Wi-Fi"));
+		wifiSwitchRow = BuildSwitchRow("wifi", "Wi-Fi", out wifiSwitchState, delegate
+		{
+			ToggleRadio(wifi: true);
+		});
+		page.Children.Add(wifiSwitchRow);
+		page.Children.Add(wifiSection);
+		WrapPanel footer = new WrapPanel
+		{
+			Margin = new Thickness(0.0, 12.0, 0.0, 0.0),
+			HorizontalAlignment = System.Windows.HorizontalAlignment.Center
+		};
+		footer.Children.Add(Button("网络设置", (object s, RoutedEventArgs e) =>
+		{
+			OpenSettings("ms-settings:network");
+		}, 96.0));
+		page.Children.Add(footer);
+		return page;
+	}
+
+	// 蓝牙二级页：开关行 + 已配对设备 + 底部入口
+	private StackPanel BuildBtPage()
+	{
+		StackPanel page = new StackPanel
+		{
+			Margin = new Thickness(16.0, 14.0, 16.0, 18.0)
+		};
+		page.Children.Add(PageHead("蓝牙"));
+		btSwitchRow = BuildSwitchRow("bluetooth", "蓝牙", out btSwitchState, delegate
+		{
+			ToggleRadio(wifi: false);
+		});
+		page.Children.Add(btSwitchRow);
 		btSection = SectionCard();
 		StackPanel btStack = new StackPanel();
 		btSection.Child = btStack;
@@ -532,25 +683,139 @@ public class ControlCenterWindow : GlassWindow
 			Margin = new Thickness(0.0, 6.0, 0.0, 0.0)
 		};
 		btStack.Children.Add(btListPanel);
-		body.Children.Add(btSection);
-
-		// 底部快捷入口
+		page.Children.Add(btSection);
 		WrapPanel footer = new WrapPanel
 		{
 			Margin = new Thickness(0.0, 12.0, 0.0, 0.0),
 			HorizontalAlignment = System.Windows.HorizontalAlignment.Center
 		};
-		Button netBtn = Button("网络设置", (object s, RoutedEventArgs e) =>
-		{
-			OpenSettings("ms-settings:network");
-		}, 96.0);
-		Button btBtn = Button("蓝牙设置", (object s, RoutedEventArgs e) =>
+		footer.Children.Add(Button("蓝牙设置", (object s, RoutedEventArgs e) =>
 		{
 			OpenSettings("ms-settings:bluetooth");
-		}, 96.0);
-		footer.Children.Add(netBtn);
-		footer.Children.Add(btBtn);
-		body.Children.Add(footer);
+		}, 96.0));
+		page.Children.Add(footer);
+		return page;
+	}
+
+	// 二级页顶部：‹ 返回 + 标题
+	private Grid PageHead(string title)
+	{
+		Grid head = new Grid
+		{
+			Margin = new Thickness(0.0, 0.0, 0.0, 10.0)
+		};
+		head.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = GridLength.Auto
+		});
+		head.ColumnDefinitions.Add(new ColumnDefinition());
+		Button back = Button("‹", (object s, RoutedEventArgs e) =>
+		{
+			ShowPage(0);
+		}, 40.0);
+		back.Padding = new Thickness(0.0);
+		Grid.SetColumn(back, 0);
+		head.Children.Add(back);
+		TextBlock titleText = Label(title, 16.0, FontWeights.SemiBold, TextBrush);
+		titleText.VerticalAlignment = VerticalAlignment.Center;
+		titleText.Margin = new Thickness(4.0, 0.0, 0.0, 0.0);
+		Grid.SetColumn(titleText, 1);
+		head.Children.Add(titleText);
+		return head;
+	}
+
+	// 二级页开关行：图标 + 名称 + 开关状态，整行点击切换
+	private Border BuildSwitchRow(string kind, string title, out TextBlock state, Action toggle)
+	{
+		Border row = new Border
+		{
+			CornerRadius = new CornerRadius(14.0),
+			Padding = new Thickness(14.0),
+			Margin = new Thickness(4.0, 0.0, 4.0, 10.0),
+			BorderThickness = new Thickness(1.0),
+			Cursor = Cursors.Hand
+		};
+		Grid grid = new Grid();
+		grid.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = GridLength.Auto
+		});
+		grid.ColumnDefinitions.Add(new ColumnDefinition());
+		grid.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = GridLength.Auto
+		});
+		ContentControl icon = new ContentControl
+		{
+			Content = IconPacks.Glyph(kind, C.Prefs.Dock.IconPack, C.Prefs.Dock.Accent, TextBrush, 22.0),
+			Width = 22.0,
+			Height = 22.0,
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(0.0, 0.0, 12.0, 0.0)
+		};
+		Grid.SetColumn(icon, 0);
+		grid.Children.Add(icon);
+		TextBlock name = Label(title, 13.0, FontWeights.SemiBold, TextBrush);
+		name.VerticalAlignment = VerticalAlignment.Center;
+		Grid.SetColumn(name, 1);
+		grid.Children.Add(name);
+		state = Label("", 11.0, FontWeights.Normal, MutedBrush);
+		state.VerticalAlignment = VerticalAlignment.Center;
+		Grid.SetColumn(state, 2);
+		grid.Children.Add(state);
+		row.Child = grid;
+		row.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+		{
+			toggle();
+		};
+		return row;
+	}
+
+	// 主页底部系统按钮：扁平横排 图标+文字，无卡片边框，悬停轻高亮，跟随 Dock 主题
+	private Border SysButton(string kind, string title, Action action)
+	{
+		Border card = new Border
+		{
+			CornerRadius = new CornerRadius(6.0),
+			Padding = new Thickness(8.0, 5.0, 8.0, 5.0),
+			Margin = new Thickness(2.0, 0.0, 2.0, 0.0),
+			Background = System.Windows.Media.Brushes.Transparent,
+			BorderThickness = new Thickness(0.0),
+			Cursor = Cursors.Hand
+		};
+		StackPanel stack = new StackPanel
+		{
+			Orientation = Orientation.Vertical,
+			HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		ContentControl icon = new ContentControl
+		{
+			Content = IconPacks.Glyph(kind, C.Prefs.Dock.IconPack, C.Prefs.Dock.Accent, TextBrush, 22.0),
+			Width = 24.0,
+			Height = 24.0,
+			HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+			IsHitTestVisible = false
+		};
+		stack.Children.Add(icon);
+		TextBlock name = Label(title, 11.0, FontWeights.Normal, TextBrush);
+		name.HorizontalAlignment = System.Windows.HorizontalAlignment.Center;
+		name.Margin = new Thickness(0.0, 4.0, 0.0, 0.0);
+		stack.Children.Add(name);
+		card.Child = stack;
+		card.MouseEnter += (object s, System.Windows.Input.MouseEventArgs e) =>
+		{
+			card.Background = hoverBrush;
+		};
+		card.MouseLeave += (object s, System.Windows.Input.MouseEventArgs e) =>
+		{
+			card.Background = System.Windows.Media.Brushes.Transparent;
+		};
+		card.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+		{
+			action();
+		};
+		return card;
 	}
 
 	private static void OpenSettings(string uri)
@@ -595,6 +860,52 @@ public class ControlCenterWindow : GlassWindow
 	private void ShowPanel()
 	{
 		RefreshStyle();
+		ShowPage(0);
+		ApplyPageHeight();
+		PositionPanel();
+		closing = false;
+		Show();
+		Backdrop(LightTheme);
+		AnimateOpen();
+		RefreshAll();
+		refreshTimer.Start();
+	}
+
+	// 页面栈切换：0=主页 1=Wi-Fi 2=蓝牙；每次打开默认回主页
+	private void ShowPage(int page)
+	{
+		pageIndex = page;
+		homePage.Visibility = ((page == 0) ? Visibility.Visible : Visibility.Collapsed);
+		wifiPage.Visibility = ((page == 1) ? Visibility.Visible : Visibility.Collapsed);
+		btPage.Visibility = ((page == 2) ? Visibility.Visible : Visibility.Collapsed);
+		HidePasswordPrompt();
+		if (page == 1)
+		{
+			// 进入 Wi-Fi 页自动扫描并加载（无需手动点「重新扫描」）
+			RefreshNetworks(scan: true);
+		}
+		else if (page == 2)
+		{
+			RefreshBluetooth();
+		}
+		ApplyPageHeight();
+		if (IsVisible)
+		{
+			PositionPanel();
+		}
+	}
+
+	// 按当前页内容自适应窗口高度，去掉主页下方的空白（上限 600 与原高度一致）
+	private void ApplyPageHeight()
+	{
+		FrameworkElement page = ((pageIndex == 0) ? (FrameworkElement)homePage : ((pageIndex == 1) ? (FrameworkElement)wifiPage : (FrameworkElement)btPage));
+		page.Measure(new Size(Math.Max(0.0, Width - 28.0), double.PositiveInfinity));
+		Height = Math.Max(240.0, Math.Min(600.0, page.DesiredSize.Height + 28.0));
+	}
+
+	// 始终贴着 Dock 右缘：上方 10px，空间不足则翻到 Dock 下方
+	private void PositionPanel()
+	{
 		Rect wa = SystemParameters.WorkArea;
 		double dockTop = C.Dock.Top;
 		double dockLeft = C.Dock.Left;
@@ -608,12 +919,72 @@ public class ControlCenterWindow : GlassWindow
 		}
 		Left = left;
 		Top = top;
-		closing = false;
-		Show();
-		Backdrop(LightTheme);
-		AnimateOpen();
-		RefreshAll();
-		refreshTimer.Start();
+	}
+
+	[DllImport("PowrProf.dll", SetLastError = true)]
+	[return: MarshalAs(UnmanagedType.U1)]
+	private static extern bool SetSuspendState([MarshalAs(UnmanagedType.U1)] bool hibernate, [MarshalAs(UnmanagedType.U1)] bool force, [MarshalAs(UnmanagedType.U1)] bool disableWake);
+
+	private void OpenPowerMenu()
+	{
+		suppressHide = true;
+		ContextMenu menu = MenuTheme.Create(LightTheme, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
+		string[] names = new string[3] { "睡眠", "重启", "关机" };
+		for (int i = 0; i < names.Length; i++)
+		{
+			int action = i;
+			MenuItem item = new MenuItem
+			{
+				Header = names[i]
+			};
+			item.Click += (object s, RoutedEventArgs e) =>
+			{
+				Power(action);
+			};
+			menu.Items.Add(item);
+		}
+		menu.Closed += (object s, RoutedEventArgs e) =>
+		{
+			suppressHide = false;
+			if (!IsKeyboardFocusWithin && !IsActive)
+			{
+				Hide();
+			}
+		};
+		menu.PlacementTarget = powerCard;
+		menu.Placement = PlacementMode.Top;
+		menu.IsOpen = true;
+	}
+
+	private void Power(int action)
+	{
+		string text = (new string[3] { "睡眠", "重启", "关机" })[action];
+		if (System.Windows.MessageBox.Show(this, "确定要" + text + "电脑吗？请先保存正在编辑的内容。", "电源 · " + text, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+		{
+			return;
+		}
+		try
+		{
+			if (action == 0)
+			{
+				if (!SetSuspendState(hibernate: false, force: false, disableWake: false))
+				{
+					throw new Win32Exception(Marshal.GetLastWin32Error());
+				}
+			}
+			else
+			{
+				Process.Start(new ProcessStartInfo("shutdown.exe", (action == 1) ? "/r /t 0" : "/s /t 0")
+				{
+					UseShellExecute = false,
+					CreateNoWindow = true
+				});
+			}
+		}
+		catch (Exception ex)
+		{
+			System.Windows.MessageBox.Show(this, ex.Message, "电源操作失败");
+		}
 	}
 
 	protected override void OnClosed(EventArgs e)
@@ -792,10 +1163,12 @@ public class ControlCenterWindow : GlassWindow
 		muted = isMuted;
 		UpdateTileUi();
 		ControlCenterOptions options = C.Prefs.ControlCenter;
-		wifiSection.Visibility = ((options.ShowNetworks && wifiSupported && wifiOn) ? Visibility.Visible : Visibility.Collapsed);
-		btSection.Visibility = ((options.ShowBluetooth && btSupported && btOn) ? Visibility.Visible : Visibility.Collapsed);
+		// 列表区块已移入二级页：是否显示只看设备支持与用户开关，不再依赖开/关状态
+		wifiSection.Visibility = ((options.ShowNetworks && wifiSupported) ? Visibility.Visible : Visibility.Collapsed);
+		btSection.Visibility = ((options.ShowBluetooth && btSupported) ? Visibility.Visible : Visibility.Collapsed);
 		volumeSection.Visibility = ((options.ShowVolume && volumeSupported) ? Visibility.Visible : Visibility.Collapsed);
 		outputSection.Visibility = ((options.ShowOutput && volumeSupported) ? Visibility.Visible : Visibility.Collapsed);
+		audioSection.Visibility = ((volumeSection.Visibility == Visibility.Visible || outputSection.Visibility == Visibility.Visible) ? Visibility.Visible : Visibility.Collapsed);
 		if (brightness.HasValue)
 		{
 			brightnessSection.Visibility = (options.ShowBrightness ? Visibility.Visible : Visibility.Collapsed);
@@ -836,6 +1209,16 @@ public class ControlCenterWindow : GlassWindow
 	{
 		RenderTile(wifiTile, wifiIconHost, wifiStatus, "wifi", wifiSupported && wifiOn, wifiSupported ? (wifiOn ? "已开启" : "已关闭") : "设备不可用");
 		RenderTile(btTile, btIconHost, btStatus, "bluetooth", btSupported && btOn, btSupported ? (btOn ? "已开启" : "已关闭") : "设备不可用");
+		if (wifiSwitchState != null)
+		{
+			wifiSwitchState.Text = (wifiSupported ? (wifiOn ? "已开启" : "已关闭") : "设备不可用");
+			wifiSwitchState.Foreground = ((wifiSupported && wifiOn) ? accentBrush : MutedBrush);
+		}
+		if (btSwitchState != null)
+		{
+			btSwitchState.Text = (btSupported ? (btOn ? "已开启" : "已关闭") : "设备不可用");
+			btSwitchState.Foreground = ((btSupported && btOn) ? accentBrush : MutedBrush);
+		}
 	}
 
 	private void RenderTile(Border tile, ContentControl iconHost, TextBlock status, string kind, bool on, string text)

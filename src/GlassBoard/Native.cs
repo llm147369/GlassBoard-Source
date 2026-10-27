@@ -333,4 +333,19 @@ public static class Native
 			UseShellExecute = true
 		});
 	}
+
+	[DllImport("user32.dll", SetLastError = true)]
+	private static extern bool LockWorkStation();
+
+	// 锁屏：锁定当前工作站（等同 Win+L）
+	public static void Lock()
+	{
+		try
+		{
+			LockWorkStation();
+		}
+		catch
+		{
+		}
+	}
 }

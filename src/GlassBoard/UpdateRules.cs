@@ -10,13 +10,13 @@ namespace GlassBoard;
 
 public static class UpdateRules
 {
-	public const string Repository = "https://github.com/SENLIN-SAMA/win-.-";
+	public const string Repository = "https://github.com/llm147369/GlassBoard-Source";
 
-	public const string Api = "https://api.github.com/repos/SENLIN-SAMA/win-.-";
+	public const string Api = "https://api.github.com/repos/llm147369/GlassBoard-Source";
 
-	public const string Manifest = "https://raw.githubusercontent.com/SENLIN-SAMA/win-.-/main/update.json";
+	public const string Manifest = "https://raw.githubusercontent.com/llm147369/GlassBoard-Source/main/update.json";
 
-	public const string ManifestFallback = "https://github.com/SENLIN-SAMA/win-.-/raw/refs/heads/main/update.json";
+	public const string ManifestFallback = "https://github.com/llm147369/GlassBoard-Source/raw/refs/heads/main/update.json";
 
 	public const long MaxArchive = 16777216L;
 
@@ -29,11 +29,11 @@ public static class UpdateRules
 
 	public static string Alternate(string url)
 	{
-		if (url == null || !url.StartsWith("https://raw.githubusercontent.com/SENLIN-SAMA/win-.-/main/", StringComparison.OrdinalIgnoreCase))
+		if (url == null || !url.StartsWith("https://raw.githubusercontent.com/llm147369/GlassBoard-Source/main/", StringComparison.OrdinalIgnoreCase))
 		{
 			return null;
 		}
-		return "https://github.com/SENLIN-SAMA/win-.-/raw/refs/heads/main/" + url.Substring("https://raw.githubusercontent.com/SENLIN-SAMA/win-.-/main/".Length);
+		return "https://github.com/llm147369/GlassBoard-Source/raw/refs/heads/main/" + url.Substring("https://raw.githubusercontent.com/llm147369/GlassBoard-Source/main/".Length);
 	}
 
 	public static Version PackageVersion(string name)
@@ -52,11 +52,11 @@ public static class UpdateRules
 		{
 			return false;
 		}
-		if (!result.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) || !result.AbsolutePath.StartsWith("/SENLIN-SAMA/win-.-/releases/download/", StringComparison.OrdinalIgnoreCase))
+		if (!result.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) || !result.AbsolutePath.StartsWith("/llm147369/GlassBoard-Source/releases/download/", StringComparison.OrdinalIgnoreCase))
 		{
 			if (result.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase))
 			{
-				return result.AbsolutePath.StartsWith("/SENLIN-SAMA/win-.-/", StringComparison.OrdinalIgnoreCase);
+				return result.AbsolutePath.StartsWith("/llm147369/GlassBoard-Source/", StringComparison.OrdinalIgnoreCase);
 			}
 			return false;
 		}

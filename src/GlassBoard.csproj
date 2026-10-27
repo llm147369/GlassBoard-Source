@@ -22,15 +22,14 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="GlassBoard.Assets.c1.dat" LogicalName="GlassBoard.Assets.c1.dat" />
-    <EmbeddedResource Include="GlassBoard.Assets.c2.dat" LogicalName="GlassBoard.Assets.c2.dat" />
     <EmbeddedResource Include="GlassBoard.MediaBridge.ps1" LogicalName="GlassBoard.MediaBridge.ps1" />
     <EmbeddedResource Include="GlassBoard.NativeMediaBridge.ps1" LogicalName="GlassBoard.NativeMediaBridge.ps1" />
     <EmbeddedResource Include="GlassBoard\ControlCenter.ps1" LogicalName="GlassBoard.ControlCenter.ps1" />
     <EmbeddedResource Include="GlassBoard\Assets\launchpad.png" LogicalName="GlassBoard.Assets.launchpad.png" />
     <EmbeddedResource Include="GlassBoard\Assets\settings.svg" LogicalName="GlassBoard.Assets.settings.svg" />
     <EmbeddedResource Include="GlassBoard\Assets\running.png" LogicalName="GlassBoard.Assets.running.png" />
-    <EmbeddedResource Include="GlassBoard\Assets\qrcode.png" LogicalName="GlassBoard.Assets.qrcode.png" />
+    <EmbeddedResource Include="GlassBoard\Assets\wechat.jpg" LogicalName="GlassBoard.Assets.wechat.jpg" />
+    <EmbeddedResource Include="GlassBoard\Assets\alipay.jpg" LogicalName="GlassBoard.Assets.alipay.jpg" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="Interop.UIAutomationClient">

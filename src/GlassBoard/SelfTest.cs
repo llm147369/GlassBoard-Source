@@ -301,22 +301,7 @@ public static class SelfTest
 			{
 				throw new Exception("透明度边界失败");
 			}
-			string[] array5 = new string[2] { "Wechat", "Alipay" };
-			for (int i = 0; i < array5.Length; i++)
-			{
-				using MemoryStream streamSource = new MemoryStream(CreatorAssets.Read(array5[i]), writable: false);
-				BitmapImage bitmapImage = new BitmapImage();
-				bitmapImage.BeginInit();
-				bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
-				bitmapImage.StreamSource = streamSource;
-				bitmapImage.EndInit();
-				if (bitmapImage.PixelWidth < 200 || bitmapImage.PixelHeight < 200)
-				{
-					throw new Exception("收款图片尺寸异常");
-				}
-				bitmapImage.Freeze();
-			}
-			File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "self-test-result.txt"), "PASS: transparent material bounds and widget recovery menu; Dock rendering/order/mouse-capture release and native process path/reuse; light/dark nested menus, submenu open/close, checkmarks, disabled items, header sliders, shortcut overlay cache and legacy configuration; shared theme styles, bounded thumbnails and stream-independent pixels, hidden board release/reopen; recordable glass window affinity before/after backdrop/show/hide; embedded creator image decoding, WPF light/dark button/combo/text/check/slider templates, value bindings, button handlers, visibility switch, configuration, removed entries, opacity bounds, pages and search\r\n", Encoding.UTF8);
+			File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "self-test-result.txt"), "PASS: transparent material bounds and widget recovery menu; Dock rendering/order/mouse-capture release and native process path/reuse; light/dark nested menus, submenu open/close, checkmarks, disabled items, header sliders, shortcut overlay cache and legacy configuration; shared theme styles, bounded thumbnails and stream-independent pixels, hidden board release/reopen; recordable glass window affinity before/after backdrop/show/hide; WPF light/dark button/combo/text/check/slider templates, value bindings, button handlers, visibility switch, configuration, removed entries, opacity bounds, pages and search\r\n", Encoding.UTF8);
 			return 0;
 		}
 		catch (Exception ex)

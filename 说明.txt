@@ -1,4 +1,4 @@
-GlassBoard v0.9.18.8 便携版
+GlassBoard v0.9.19.0 便携版
 
 【运行】解压后双击 GlassBoard.exe 即可，无需安装。
 【桌面快捷方式】右键 GlassBoard.exe → 发送到 → 桌面快捷方式，即可从桌面启动（也可让 AI 帮忙创建）。

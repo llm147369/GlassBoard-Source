@@ -29,24 +29,24 @@ public static class DockLayoutRules
 
 	public static bool Visible(DockOptions o, string key)
 	{
+		// 收纳整合开启时，此电脑/设置/电源/网络一律不显示在 Dock 上
+		bool folded = o.Consolidate;
 		switch (key)
 		{
-		default:
-			if (!(key != "glassboard://dock/settings"))
-			{
-				return o.ShowSettings;
-			}
-			return true;
 		case "glassboard://dock/network":
-			return o.ShowNetwork;
+			return !folded && o.ShowNetwork;
 		case "glassboard://dock/power":
-			return o.ShowPower;
+			return !folded && o.ShowPower;
 		case "glassboard://dock/control":
 			return o.ShowControlCenter;
 		case "glassboard://dock/computer":
-			return o.ShowComputer;
+			return !folded && o.ShowComputer;
 		case "glassboard://dock/running":
 			return o.ShowRunningList;
+		case "glassboard://dock/settings":
+			return !folded && o.ShowSettings;
+		default:
+			return true;
 		}
 	}
 

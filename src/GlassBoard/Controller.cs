@@ -182,7 +182,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard v0.9.18.8 · 玻璃启动台",
+			Text = "GlassBoard v0.9.19.0 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1317,7 +1317,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard · 个性化与控制 v0.9.18.8",
+				Title = "GlassBoard · 个性化与控制 v0.9.19.0",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -1400,7 +1400,6 @@ public class Controller
 			};
 			StackPanel stackPanel2 = func("面板与主题");
 			StackPanel stackPanel3 = func("Dock DIY");
-			StackPanel controlPage = func("控制中心");
 			StackPanel stackPanel4 = func("快捷键与开关");
 			StackPanel stackPanel5 = func("桌面组件");
 			StackPanel stackPanel6 = func("通用");
@@ -1418,13 +1417,13 @@ public class Controller
 			UsageGuide.Build(tabs);
 			tabs.SelectionChanged += (object ss, SelectionChangedEventArgs ee) =>
 			{
-				if (tabs.SelectedIndex == 7)
+				if (tabs.SelectedIndex == 6)
 				{
 					loadCreator();
 				}
 			};
-			tabs.SelectedIndex = Math.Max(0, Math.Min(7, selectedPage));
-			if (tabs.SelectedIndex == 7)
+			tabs.SelectedIndex = Math.Max(0, Math.Min(6, selectedPage));
+			if (tabs.SelectedIndex == 6)
 			{
 				loadCreator();
 			}
@@ -1771,22 +1770,48 @@ public class Controller
 				draft.ShowLabels = showLabels;
 				live();
 			});
-			func3(stackPanel3, "显示此电脑", draft.ShowComputer, (bool showComputer) =>
+			System.Windows.Controls.CheckBox cbComputer = null;
+			System.Windows.Controls.CheckBox cbSettings = null;
+			System.Windows.Controls.CheckBox cbPower = null;
+			System.Windows.Controls.CheckBox cbNetwork = null;
+			func3(stackPanel3, "收纳整合系统入口（此电脑 / 设置 / 电源 / Wi-Fi·蓝牙收进应用面板与控制中心）", draft.Consolidate, (bool consolidate) =>
+			{
+				draft.Consolidate = consolidate;
+				if (consolidate)
+				{
+					// 收纳开启时自动收起各独立入口（运行列表与控制中心保留）
+					if (cbComputer != null && cbComputer.IsChecked == true) cbComputer.IsChecked = false;
+					if (cbSettings != null && cbSettings.IsChecked == true) cbSettings.IsChecked = false;
+					if (cbPower != null && cbPower.IsChecked == true) cbPower.IsChecked = false;
+					if (cbNetwork != null && cbNetwork.IsChecked == true) cbNetwork.IsChecked = false;
+				}
+				live();
+			});
+			TextBlock consolidateTip = new TextBlock
+			{
+				Text = "开启后自动关闭下方「此电脑 / 设置 / 电源 / Wi-Fi·蓝牙」入口（运行列表与控制中心不受影响）；关闭收纳后各开关可独立开启。",
+				TextWrapping = TextWrapping.Wrap,
+				Foreground = System.Windows.Media.Brushes.LightGray,
+				FontSize = 11.0,
+				Margin = new Thickness(0.0, -4.0, 0.0, 6.0)
+			};
+			stackPanel3.Children.Add(consolidateTip);
+			cbComputer = func3(stackPanel3, "显示此电脑", draft.ShowComputer, (bool showComputer) =>
 			{
 				draft.ShowComputer = showComputer;
 				live();
 			});
-			func3(stackPanel3, "显示设置图标", draft.ShowSettings, (bool showSettings) =>
+			cbSettings = func3(stackPanel3, "显示设置图标", draft.ShowSettings, (bool showSettings) =>
 			{
 				draft.ShowSettings = showSettings;
 				live();
 			});
-			func3(stackPanel3, "显示电源快捷菜单", draft.ShowPower, (bool showPower) =>
+			cbPower = func3(stackPanel3, "显示电源快捷菜单", draft.ShowPower, (bool showPower) =>
 			{
 				draft.ShowPower = showPower;
 				live();
 			});
-			func3(stackPanel3, "显示 Wi-Fi / 蓝牙快捷菜单", draft.ShowNetwork, (bool showNetwork) =>
+			cbNetwork = func3(stackPanel3, "显示 Wi-Fi / 蓝牙快捷菜单", draft.ShowNetwork, (bool showNetwork) =>
 			{
 				draft.ShowNetwork = showNetwork;
 				live();
@@ -1805,38 +1830,6 @@ public class Controller
 			{
 				draft.Accent = accent;
 				live();
-			});
-			controlPage.Children.Add(new TextBlock
-			{
-				Text = "控制中心显示为 Dock 上的一个入口，点击后在 Dock 上方展开；主题与强调色跟随当前设置。",
-				TextWrapping = TextWrapping.Wrap,
-				Foreground = System.Windows.Media.Brushes.LightGray,
-				Margin = new Thickness(0.0, 8.0, 0.0, 8.0)
-			});
-			func3(controlPage, "显示网络模块（可用网络列表与连接）", Prefs.ControlCenter.ShowNetworks, (bool showNetworks) =>
-			{
-				Prefs.ControlCenter.ShowNetworks = showNetworks;
-				Save();
-			});
-			func3(controlPage, "显示蓝牙模块（已配对设备）", Prefs.ControlCenter.ShowBluetooth, (bool showBluetooth) =>
-			{
-				Prefs.ControlCenter.ShowBluetooth = showBluetooth;
-				Save();
-			});
-			func3(controlPage, "显示音量模块", Prefs.ControlCenter.ShowVolume, (bool showVolume) =>
-			{
-				Prefs.ControlCenter.ShowVolume = showVolume;
-				Save();
-			});
-			func3(controlPage, "显示输出设备模块", Prefs.ControlCenter.ShowOutput, (bool showOutput) =>
-			{
-				Prefs.ControlCenter.ShowOutput = showOutput;
-				Save();
-			});
-			func3(controlPage, "显示亮度模块（部分显示器不支持）", Prefs.ControlCenter.ShowBrightness, (bool showBrightness) =>
-			{
-				Prefs.ControlCenter.ShowBrightness = showBrightness;
-				Save();
 			});
 			func3(stackPanel3, "显示分隔线", draft.ShowSeparator, (bool showSeparator) =>
 			{
@@ -1881,6 +1874,7 @@ public class Controller
 			stackPanel3.Children.Add(FeatureUi.Button("重置 Dock 位置", () =>
 			{
 				Prefs.Placement.DockCenter = (Prefs.Placement.DockLeft = (Prefs.Placement.DockTop = null));
+				Dock.ResetSettledTop();
 				live();
 			}));
 			func4(stackPanel3, "水平位置", new string[3] { "靠左", "居中", "靠右" }, draft.Alignment, (int alignment) =>
@@ -1899,6 +1893,7 @@ public class Controller
 			{
 				Prefs.DockGap = dockGap;
 				Prefs.Placement.DockTop = null;
+				Dock.ResetSettledTop();
 				live();
 			});
 			func2(stackPanel3, "固定应用显示数量", 3.0, 20.0, draft.MaxPinned, 1.0, " 个", (double num3) =>
@@ -3812,43 +3807,47 @@ public class Controller
 		}
 	}
 
-	private static BitmapSource CreatorImage(string key, bool thumbnail = false)
+	private static BitmapSource CreatorImage(string key)
 	{
-		if (thumbnail)
+		try
 		{
-			return ThumbnailImages.Read(CreatorAssets.Read(key), 960);
+			using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("GlassBoard.Assets." + key + ".jpg"))
+			{
+				if (stream == null)
+				{
+					return null;
+				}
+				BitmapImage bitmapImage = new BitmapImage();
+				bitmapImage.BeginInit();
+				bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
+				bitmapImage.StreamSource = stream;
+				bitmapImage.EndInit();
+				bitmapImage.Freeze();
+				return bitmapImage;
+			}
 		}
-		using MemoryStream streamSource = new MemoryStream(CreatorAssets.Read(key), writable: false);
-		BitmapImage bitmapImage = new BitmapImage();
-		bitmapImage.BeginInit();
-		bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
-		bitmapImage.StreamSource = streamSource;
-		bitmapImage.EndInit();
-		bitmapImage.Freeze();
-		return bitmapImage;
+		catch
+		{
+			return null;
+		}
 	}
 
 	private void ShowCreatorImage(Window owner, string key, string title)
 	{
+		BitmapSource src = CreatorImage(key);
+		if (src == null)
+		{
+			return;
+		}
 		Window window = FeatureUi.Dialog(title, owner, 680.0, 850.0);
 		window.ResizeMode = ResizeMode.CanResize;
 		DockPanel dockPanel = new DockPanel
 		{
 			Margin = new Thickness(18.0)
 		};
-		TextBlock element = new TextBlock
-		{
-			Text = "感谢你的支持 · 森霖sama",
-			Foreground = System.Windows.Media.Brushes.White,
-			FontSize = 15.0,
-			HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
-			Margin = new Thickness(0.0, 12.0, 0.0, 0.0)
-		};
-		DockPanel.SetDock(element, System.Windows.Controls.Dock.Bottom);
-		dockPanel.Children.Add(element);
 		dockPanel.Children.Add(new System.Windows.Controls.Image
 		{
-			Source = CreatorImage(key),
+			Source = src,
 			Stretch = Stretch.Uniform
 		});
 		window.Content = dockPanel;
@@ -3866,42 +3865,56 @@ public class Controller
 			LineHeight = 24.0,
 			Margin = new Thickness(0.0, 0.0, 0.0, 14.0)
 		});
-		try
+		WrapPanel wrapPanel = new WrapPanel();
+		panel.Children.Add(wrapPanel);
+		AddCreatorQr(wrapPanel, owner, "wechat", "微信收款");
+		AddCreatorQr(wrapPanel, owner, "alipay", "支付宝收款");
+	}
+
+	private void AddCreatorQr(WrapPanel panel, Window owner, string key, string title)
+	{
+		BitmapSource src = CreatorImage(key);
+		if (src == null)
 		{
-			using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("GlassBoard.Assets.qrcode.png"))
-			{
-				if (stream != null)
-				{
-					BitmapImage bitmap = new BitmapImage();
-					bitmap.BeginInit();
-					bitmap.CacheOption = BitmapCacheOption.OnLoad;
-					bitmap.StreamSource = stream;
-					bitmap.EndInit();
-					bitmap.Freeze();
-					System.Windows.Controls.Image qr = new System.Windows.Controls.Image
-					{
-						Source = bitmap,
-						Width = 220.0,
-						Height = 220.0,
-						Stretch = System.Windows.Media.Stretch.Uniform
-					};
-					RenderOptions.SetBitmapScalingMode(qr, System.Windows.Media.BitmapScalingMode.HighQuality);
-					Border card = new Border
-					{
-						Background = System.Windows.Media.Brushes.White,
-						CornerRadius = new CornerRadius(10.0),
-						Padding = new Thickness(10.0),
-						HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
-						Margin = new Thickness(0.0, 0.0, 0.0, 10.0),
-						Child = qr
-					};
-					panel.Children.Add(card);
-				}
-			}
+			return;
 		}
-		catch
+		StackPanel stackPanel = new StackPanel
 		{
-		}
+			Margin = new Thickness(0.0, 0.0, 16.0, 0.0),
+			Cursor = System.Windows.Input.Cursors.Hand,
+			ToolTip = "点击查看大图"
+		};
+		System.Windows.Controls.Image qr = new System.Windows.Controls.Image
+		{
+			Source = src,
+			Width = 190.0,
+			Height = 190.0,
+			Stretch = Stretch.Uniform
+		};
+		RenderOptions.SetBitmapScalingMode(qr, BitmapScalingMode.HighQuality);
+		Border card = new Border
+		{
+			Background = System.Windows.Media.Brushes.White,
+			CornerRadius = new CornerRadius(10.0),
+			Padding = new Thickness(10.0),
+			HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+			Child = qr
+		};
+		stackPanel.Children.Add(card);
+		stackPanel.Children.Add(new TextBlock
+		{
+			Text = title,
+			FontSize = 13.0,
+			Foreground = System.Windows.Media.Brushes.White,
+			HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+			Margin = new Thickness(0.0, 8.0, 0.0, 0.0)
+		});
+		stackPanel.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+		{
+			e.Handled = true;
+			ShowCreatorImage(owner, key, title);
+		};
+		panel.Children.Add(stackPanel);
 	}
 
 	public void RefreshWidgets()
@@ -3966,7 +3979,7 @@ public class Controller
 
 	public void ConfigureWidgets()
 	{
-		Settings(5);
+		Settings(4);
 	}
 
 	public void AddFolder()

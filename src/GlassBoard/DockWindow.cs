@@ -91,6 +91,11 @@ public class DockWindow : GlassWindow
 
 	private double shownTop;
 
+	// 运行期记忆的"贴底"位置：任务栏隐藏/显示会改变 WorkingArea 高度，
+	// 默认贴底的 Dock 每次 Refresh 都会跟着漂移；首次定位后固定住，
+	// 只有显示设置变化或用户主动"重置位置/改 DockGap"才重新贴底。
+	private double? settledTop;
+
 	private Rect dockWorkingArea;
 
 	private Rect dockScreenArea;
@@ -469,8 +474,15 @@ public class DockWindow : GlassWindow
 		Dispatcher.BeginInvoke((Action)(() =>
 		{
 			C.Board.Hide();
+			settledTop = null;
 			Refresh();
 		}));
+	}
+
+	// 主动要求下次刷新重新贴底：设置里「重置 Dock 位置」与调整「距工作区底边」时调用。
+	public void ResetSettledTop()
+	{
+		settledTop = null;
 	}
 
 	public bool ApplyHotkeys(List<HotkeySetting> candidate, out string error)
@@ -710,7 +722,7 @@ public class DockWindow : GlassWindow
 		{
 			C.Toggle();
 		});
-		if (dock.ShowComputer)
+		if (dock.ShowComputer && !dock.Consolidate)
 		{
 			// 此电脑：直接打开系统官方「此电脑」（explorer shell:MyComputerFolder），
 			// 不做激活/最小化切换，行为与任务栏固定图标一致。
@@ -821,7 +833,7 @@ public class DockWindow : GlassWindow
 			}
 		}
 		AddQuickButtons();
-		if (dock.ShowSettings)
+		if (dock.ShowSettings && !dock.Consolidate)
 		{
 			AddSystemButton("glassboard://dock/settings", DockButton("⚙", null, () =>
 			{
@@ -855,7 +867,11 @@ public class DockWindow : GlassWindow
 			placement.DockCenter = placement.DockLeft.Value + Width / 2.0;
 		}
 		Left = DockAnchorRules.Left(placement.DockLeft.HasValue ? placement.DockCenter : ((double?)null), Width, num6 + dock.Offset, rect.Left, rect.Width);
-		Top = FeatureRules.Position(C.Prefs.Placement.DockTop ?? (rect.Bottom - Height - C.Prefs.DockGap), rect.Top, rect.Height, Height);
+		// 未手动拖过 Dock 时贴工作区底边；settledTop 锁定首次贴底结果，
+		// 避免任务栏隐藏/显示引起的工作区变化让 Dock 上下漂移。
+		double defaultTop = settledTop ?? (rect.Bottom - Height - C.Prefs.DockGap);
+		Top = FeatureRules.Position(C.Prefs.Placement.DockTop ?? defaultTop, rect.Top, rect.Height, Height);
+		settledTop = Top;
 		shownTop = Top;
 		if (dock.AutoHide)
 		{
@@ -4122,14 +4138,14 @@ public class DockWindow : GlassWindow
 
 	private void AddQuickButtons()
 	{
-		if (C.Prefs.Dock.ShowPower)
+		if (C.Prefs.Dock.ShowPower && !C.Prefs.Dock.Consolidate)
 		{
 			AddQuickButton("glassboard://dock/power", "power", "电源", new string[3] { "睡眠", "重启", "关机" }, (int i) =>
 			{
 				Power(i);
 			});
 		}
-		if (!C.Prefs.Dock.ShowNetwork)
+		if (!C.Prefs.Dock.ShowNetwork || C.Prefs.Dock.Consolidate)
 		{
 			return;
 		}
