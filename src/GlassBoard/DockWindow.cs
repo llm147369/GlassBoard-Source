@@ -80,10 +80,20 @@ public class DockWindow : GlassWindow
 
 	private DispatcherTimer runningTimer = new DispatcherTimer
 	{
-		Interval = TimeSpan.FromSeconds(3.0)
+		// 1 秒一拍：运行点/活动胶囊跟随前台窗口即时切换；进程扫描仍按下方 3 秒节流。
+		Interval = TimeSpan.FromSeconds(1.0)
 	};
 
 	private DateTime lastRunningScan = DateTime.MinValue;
+
+	// —— 运行状态指示器（macOS 风格）：尺寸/圆角集中管理，颜色跟随 Dock 强调色 ——
+	// 运行中 = 图标下方小圆点；活动窗口 = 稍长的胶囊形指示条（覆盖圆点显示）。
+	private const double RunDotWidth = 5.0;
+	private const double RunDotHeight = 4.0;
+	private const double RunDotRadius = 2.0;
+	private const double RunActiveWidth = 14.0;
+	private const double RunActiveHeight = 4.0;
+	private const double RunActiveRadius = 2.0;
 
 	private AutoHidePolicy hidePolicy = new AutoHidePolicy();
 
@@ -136,6 +146,15 @@ public class DockWindow : GlassWindow
 	// 图标按下（点击/拖拽判定）期间冻结悬停动画：Mouse.Capture 会让按钮收到 MouseLeave，
 	// 松手释放捕获又触发 MouseEnter——若不冻结，每次点击图标都会先落下再弹起（“跳动”）。
 	private bool dockPressActive;
+
+	// 应用通知红点：Dock 每次 Refresh 重建按钮后，通知中心按 path 恢复徽标状态；
+	// notifyIcons 存图标元素本体，弹跳/发光动画只作用在它上面（grid2 不接收命中，点击区不变）。
+	private readonly Dictionary<string, Border> notifyBadges = new Dictionary<string, Border>();
+	private readonly Dictionary<string, FrameworkElement> notifyIcons = new Dictionary<string, FrameworkElement>();
+	private readonly Dictionary<string, bool> notifyOn = new Dictionary<string, bool>();
+
+	// 运行指示器诊断：每个入口最近一次指示状态（0=无 1=圆点 2=活动胶囊），变化时打日志
+	private readonly Dictionary<string, int> runState = new Dictionary<string, int>();
 
 	private bool dockPointerPreviousBusy;
 
@@ -261,6 +280,11 @@ public class DockWindow : GlassWindow
 			ReleaseCancelledExternalDrag();
 			C.CheckGameMode();
 			RunningWindows.SampleForeground();
+			if (!C.GlassSuppressed && (IsVisible || C.Board.IsVisible) && (C.Prefs.Dock.ShowRunning || taskWheel.Running))
+			{
+				// 增量更新：只改指示器可见性（纯快照读取，无扫描），前台切换 1 秒内跟上
+				UpdateRunning();
+			}
 			if (!C.GlassSuppressed && (IsVisible || C.Board.IsVisible) && (C.Prefs.Dock.ShowRunning || taskWheel.Running) && !((DateTime.UtcNow - lastRunningScan).TotalSeconds < (double)(renderedHidden ? 10 : 3)))
 			{
 				lastRunningScan = DateTime.UtcNow;
@@ -718,6 +742,9 @@ public class DockWindow : GlassWindow
 		moveGrip.Cursor = (C.Prefs.Placement.DockLocked ? System.Windows.Input.Cursors.Arrow : System.Windows.Input.Cursors.SizeAll);
 		moveGrip.ToolTip = DockTip(C.Prefs.Placement.DockLocked ? "右键 Dock → 允许自由拖动 Dock" : "拖动把手或空白区域移动 Dock，松手保存");
 		Items.Children.Clear();
+		// 重建图标的同时清空徽标注册表：DockButton 会重新注册并恢复通知状态
+		notifyBadges.Clear();
+		notifyIcons.Clear();
 		Items.Margin = new Thickness(dock.HoverPadding(), 0.0, dock.HoverPadding(), 0.0);
 		Surface.CornerRadius = new CornerRadius(dock.Radius);
 		AddSystemButton("glassboard://dock/apps", DockButton("▦", null, () =>
@@ -943,6 +970,9 @@ public class DockWindow : GlassWindow
 
 	private void UpdateRunning()
 	{
+		// 活动胶囊：当前前台窗口归属的入口显示长条，其余运行入口显示圆点。
+		IntPtr foreground = RunningWindows.EffectiveForeground();
+		string fgPath = (foreground == IntPtr.Zero ? "" : RunningWindows.PathOfWindow(foreground));
 		foreach (System.Windows.Controls.Button item in Items.Children.OfType<System.Windows.Controls.Button>())
 		{
 			Entry entry = item.Tag as Entry;
@@ -951,11 +981,47 @@ public class DockWindow : GlassWindow
 			{
 				continue;
 			}
+			List<RunningWindow> ws = RunningWindows.For(entry);
+			bool isRunning = ws.Count > 0;
+			bool isActive = false;
+			if (isRunning && foreground != IntPtr.Zero)
+			{
+				foreach (RunningWindow w in ws)
+				{
+					if (w.Handle == foreground)
+					{
+						isActive = true;
+						break;
+					}
+				}
+				// 前台事件可能领先窗口快照 1 秒左右：句柄不在快照里时按进程路径兜底，
+				// 保证“点一下刚打开的窗口”胶囊立即跟上（不影响圆点/布局）。
+				if (!isActive && fgPath.Length > 0)
+				{
+					isActive = RunningWindows.MatchesPath(entry, fgPath);
+				}
+			}
 			foreach (Border item2 in from b in grid.Children.OfType<Border>()
 				where b.Tag as string == "running"
 				select b)
 			{
-				item2.Visibility = ((!C.Prefs.Dock.ShowRunning || !RunningWindows.IsRunning(entry)) ? Visibility.Collapsed : Visibility.Visible);
+				item2.Visibility = ((!C.Prefs.Dock.ShowRunning || !isRunning || isActive) ? Visibility.Collapsed : Visibility.Visible);
+			}
+			foreach (Border item3 in from b in grid.Children.OfType<Border>()
+				where b.Tag as string == "active"
+				select b)
+			{
+				item3.Visibility = ((C.Prefs.Dock.ShowRunning && isActive) ? Visibility.Visible : Visibility.Collapsed);
+			}
+			// 运行指示器诊断：状态变化才打日志（0=无 1=圆点 2=活动胶囊），日志不含窗口标题等敏感内容
+			int newState = isActive ? 2 : (isRunning ? 1 : 0);
+			if (RenderDiagnostics.Verbose)
+			{
+				if (!runState.TryGetValue(entry.Path, out int oldState) || oldState != newState)
+				{
+					runState[entry.Path] = newState;
+					RenderDiagnostics.Trace("RUN state " + (newState == 0 ? "none" : (newState == 1 ? "dot" : "active")) + " entry=" + entry.Path + " windows=" + ws.Count + " fgHwnd=" + foreground.ToInt64() + " fgPath=" + fgPath);
+				}
 			}
 		}
 	}
@@ -997,6 +1063,94 @@ public class DockWindow : GlassWindow
 				VisualTree = border
 			}
 		};
+	}
+
+	// 通知中心回调（UI 线程）：点亮/熄灭入口右上角红点；新通知时触发一次柔光+弹跳。
+	// on 表示“有未处理通知”，与通知是否已读是两回事——系统不保证未读数可靠，故只显示红点。
+	public void NotifyBadge(string path, bool on, bool pulse)
+	{
+		notifyOn[path] = on;
+		if (notifyBadges.TryGetValue(path, out Border badge))
+		{
+			badge.Visibility = (on ? Visibility.Visible : Visibility.Collapsed);
+		}
+		if (on && pulse && notifyIcons.TryGetValue(path, out FrameworkElement icon))
+		{
+			RunNotifyPulse(icon);
+		}
+	}
+
+	// 一次性通知动画：图标轻微弹跳 + 柔和外发光后恢复原状。不循环、不持续闪烁；
+	// 只作用在图标元素自身的 RenderTransform/Effect 上，不改按钮命中区域与布局。
+	private void RunNotifyPulse(FrameworkElement icon)
+	{
+		try
+		{
+			if (!MotionEnabled)
+			{
+				// 动画关闭时仅亮徽标（NotifyBadge 已处理），不播弹跳/发光
+				return;
+			}
+			System.Windows.Media.Effects.DropShadowEffect glow = new System.Windows.Media.Effects.DropShadowEffect
+			{
+				Color = System.Windows.Media.Color.FromArgb(byte.MaxValue, byte.MaxValue, 96, 96),
+				BlurRadius = 0.0,
+				ShadowDepth = 0.0,
+				Opacity = 0.0
+			};
+			icon.Effect = glow;
+			DoubleAnimationUsingKeyFrames blur = new DoubleAnimationUsingKeyFrames
+			{
+				Duration = TimeSpan.FromMilliseconds(760.0)
+			};
+			blur.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(0.0)));
+			blur.KeyFrames.Add(new LinearDoubleKeyFrame(18.0, KeyTime.FromPercent(0.4)));
+			blur.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(1.0)));
+			DoubleAnimationUsingKeyFrames glowOpacity = new DoubleAnimationUsingKeyFrames
+			{
+				Duration = TimeSpan.FromMilliseconds(760.0)
+			};
+			glowOpacity.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(0.0)));
+			glowOpacity.KeyFrames.Add(new LinearDoubleKeyFrame(0.85, KeyTime.FromPercent(0.4)));
+			glowOpacity.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(1.0)));
+			glow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, blur);
+			glow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.OpacityProperty, glowOpacity);
+			// 弹跳比发光短：发光结束再摘 Effect，避免把发光中途剪掉
+			blur.Completed += (object s, EventArgs e) =>
+			{
+				if (ReferenceEquals(icon.Effect, glow))
+				{
+					icon.Effect = null;
+				}
+			};
+			TranslateTransform bounce = new TranslateTransform();
+			icon.RenderTransform = bounce;
+			DoubleAnimationUsingKeyFrames y = new DoubleAnimationUsingKeyFrames
+			{
+				Duration = TimeSpan.FromMilliseconds(420.0)
+			};
+			y.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(0.0)));
+			y.KeyFrames.Add(new EasingDoubleKeyFrame(-7.0, KeyTime.FromPercent(0.45), new CubicEase
+			{
+				EasingMode = EasingMode.EaseOut
+			}));
+			y.KeyFrames.Add(new EasingDoubleKeyFrame(0.0, KeyTime.FromPercent(1.0), new CubicEase
+			{
+				EasingMode = EasingMode.EaseIn
+			}));
+			y.Completed += (object s, EventArgs e) =>
+			{
+				if (ReferenceEquals(icon.RenderTransform, bounce))
+				{
+					icon.RenderTransform = null;
+				}
+			};
+			bounce.BeginAnimation(TranslateTransform.YProperty, y);
+		}
+		catch
+		{
+			// 动画失败只影响视觉效果，通知徽标本身已点亮
+		}
 	}
 
 	private System.Windows.Controls.Button DockButton(string text, ImageSource icon, Action action, string tip, Entry entry = null, string glyphKind = null)
@@ -1191,17 +1345,61 @@ public class DockWindow : GlassWindow
 		if (entry != null)
 		{
 			button.Tag = entry;
+			// 运行圆点：无标签时用 -2 底部负边距把圆点放到图标下缘外侧（Grid 高度不变，不影响布局与点击区）；
+			// 显示标签时标签自带 4px 上边距，圆点贴图标底边正好落在该间隙里。
+			double runDotMarginBottom = (o.ShowLabels ? 0.0 : -2.0);
 			grid2.Children.Add(new Border
 			{
 				Tag = "running",
-				Width = 5.0,
-				Height = 4.0,
-				CornerRadius = new CornerRadius(2.0),
+				Width = RunDotWidth,
+				Height = RunDotHeight,
+				CornerRadius = new CornerRadius(RunDotRadius),
 				Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(135, 205, byte.MaxValue)),
 				HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Bottom,
+				Margin = new Thickness(0.0, 0.0, 0.0, runDotMarginBottom),
 				Visibility = Visibility.Collapsed
 			});
+			// 活动窗口指示条：当前前台窗口所属应用显示长胶囊（覆盖圆点），颜色跟随 Dock 强调色
+			grid2.Children.Add(new Border
+			{
+				Tag = "active",
+				Width = RunActiveWidth,
+				Height = RunActiveHeight,
+				CornerRadius = new CornerRadius(RunActiveRadius),
+				Background = new SolidColorBrush(Accent(C.Prefs.Dock.Accent)),
+				HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+				VerticalAlignment = VerticalAlignment.Bottom,
+				Margin = new Thickness(0.0, 0.0, 0.0, runDotMarginBottom),
+				Visibility = Visibility.Collapsed
+			});
+			if (RenderDiagnostics.Verbose)
+			{
+				// 指示器创建诊断：确认圆点/胶囊进了可视树且尺寸正常
+				RenderDiagnostics.Trace("RUN marker created entry=" + entry.Path + " dot=" + RunDotWidth + "x" + RunDotHeight + " capsule=" + RunActiveWidth + "x" + RunActiveHeight + " dotMarginBottom=" + runDotMarginBottom + " iconSize=" + iconSize);
+			}
+			// 通知红点：右上角 9×9，只表示“有未处理通知”，不显示数字（无法可靠获取未读数时不伪造）
+			Border notifyBadge = new Border
+			{
+				Tag = "notify",
+				Width = 9.0,
+				Height = 9.0,
+				CornerRadius = new CornerRadius(4.5),
+				Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(byte.MaxValue, 64, 64)),
+				BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(byte.MaxValue, byte.MaxValue, byte.MaxValue)),
+				BorderThickness = new Thickness(1.0),
+				HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+				VerticalAlignment = VerticalAlignment.Top,
+				Margin = new Thickness(0.0, 1.0, 3.0, 0.0),
+				Visibility = Visibility.Collapsed
+			};
+			grid2.Children.Add(notifyBadge);
+			notifyBadges[entry.Path] = notifyBadge;
+			notifyIcons[entry.Path] = element;
+			if (notifyOn.TryGetValue(entry.Path, out bool on) && on)
+			{
+				notifyBadge.Visibility = Visibility.Visible;
+			}
 		}
 		button.Content = grid2;
 		ScaleTransform scale = new ScaleTransform(1.0, 1.0);

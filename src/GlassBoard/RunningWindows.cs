@@ -638,6 +638,16 @@ public static class RunningWindows
 			windows.Clear();
 			windows.AddRange(next);
 		}
+		if (RenderDiagnostics.Verbose)
+		{
+			// 采样日志：只记录 hwnd/pid/程序路径（不记窗口标题等敏感内容）
+			System.Text.StringBuilder sample = new System.Text.StringBuilder();
+			foreach (RunningWindow w in next.Take(3))
+			{
+				sample.Append("[hwnd=").Append(w.Handle.ToInt64()).Append(" pid=").Append(w.ProcessId).Append(" path=").Append(w.Path ?? "").Append("]");
+			}
+			RenderDiagnostics.Trace("RUN scan windows=" + next.Count + " sample=" + sample);
+		}
 		KickTrayRefresh();
 	}
 
@@ -1268,6 +1278,49 @@ public static class RunningWindows
 			where !string.IsNullOrEmpty(w.Path) && (paths.Contains(w.Path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(w.Path)))
 			orderby w.Handle.ToInt64()
 			select w).ToList();
+	}
+
+	// 前台窗口 → 进程路径（走 pidMeta 缓存，无枚举无扫描，UI 线程可安全调用）。
+	public static string PathOfWindow(IntPtr hwnd)
+	{
+		try
+		{
+			GetWindowThreadProcessId(hwnd, out uint id);
+			if (id == 0)
+			{
+				return "";
+			}
+			return ProcessPath(id) ?? "";
+		}
+		catch
+		{
+			return "";
+		}
+	}
+
+	// 判断某前台窗口路径是否属于该入口（与 For 的匹配规则一致，供前台事件领先窗口快照时兜底）。
+	public static bool MatchesPath(Entry entry, string windowPath)
+	{
+		if (entry == null || entry.IsFolder || string.IsNullOrEmpty(windowPath))
+		{
+			return false;
+		}
+		Resolve(entry);
+		string[] paths = WindowActivationRules.Executables(entry);
+		if (paths.Contains(windowPath, StringComparer.OrdinalIgnoreCase))
+		{
+			return true;
+		}
+		string name = Path.GetFileNameWithoutExtension(windowPath);
+		foreach (string text in paths)
+		{
+			string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(text);
+			if (!string.IsNullOrEmpty(fileNameWithoutExtension) && !GenericExeNames.Any((string n) => n.Equals(fileNameWithoutExtension, StringComparison.OrdinalIgnoreCase)) && fileNameWithoutExtension.Equals(name, StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static List<RunningWindow> Snapshot()

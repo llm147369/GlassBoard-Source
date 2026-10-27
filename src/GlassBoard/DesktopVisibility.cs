@@ -57,6 +57,13 @@ public static class DesktopVisibility
 	// 任务栏窗口隐藏节流：explorer 重启重建窗口时避免高频拉扯（comctl32 崩溃循环防护）。
 	private static readonly Dictionary<long, DateTime> lastHide = new Dictionary<long, DateTime>();
 
+	// 任务栏"闪现"防护：ABS_AUTOHIDE 只是为了释放全屏工作区，但 Explorer 的自动隐藏
+	// 状态机在鼠标触及屏幕底边时仍会自己把 Shell_TrayWnd 重新显示出来（我们只是 SW_HIDE
+	// 了窗口）。用 WinEvent 监听 SHOW 事件即时压回，不等 2 秒维护循环，避免拖到底边弹任务栏。
+	private static IntPtr revealHook = IntPtr.Zero;
+	private static WinEventProc revealProc;
+	private static readonly Dictionary<long, DateTime> lastRehide = new Dictionary<long, DateTime>();
+
 	private const string ExplorerAdvancedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
 
 	private static readonly DispatcherTimer maintenance;
@@ -99,6 +106,14 @@ public static class DesktopVisibility
 
 	[DllImport("shell32.dll")]
 	private static extern UIntPtr SHAppBarMessage(uint message, ref APPBARDATA data);
+
+	private delegate void WinEventProc(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint eventTime);
+
+	[DllImport("user32.dll")]
+	private static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr module, WinEventProc proc, uint processId, uint threadId, uint flags);
+
+	[DllImport("user32.dll")]
+	private static extern bool UnhookWinEvent(IntPtr hook);
 
 	// 桌面图标走 Explorer 原生开关（HideIcons 注册表值 + 广播 WM_SETTINGCHANGE）：
 	// Explorer 自己负责隐藏/显示，窗口层不再反复 SW_HIDE，彻底消除图标闪烁。
@@ -373,9 +388,12 @@ public static class DesktopVisibility
 					Store.Log(new Win32Exception(Marshal.GetLastWin32Error(), "无法隐藏 " + Class(item)));
 				}
 			}
+			// 即时压回：鼠标触及底边时 Explorer 会把任务栏重新显示出来，不等维护循环
+			InstallRevealHook();
 		}
 		else if (taskbar)
 		{
+			UninstallRevealHook();
 			RestoreAppBarState();
 			foreach (IntPtr item in list)
 			{
@@ -478,6 +496,78 @@ public static class DesktopVisibility
 		return true;
 	}
 
+	private static void InstallRevealHook()
+	{
+		if (revealHook != IntPtr.Zero)
+		{
+			return;
+		}
+		revealProc = OnReveal;
+		revealHook = SetWinEventHook(0x8002u, 0x8002u, IntPtr.Zero, revealProc, 0u, 0u, 0u);
+		Store.Trace("TASKBAR reveal hook=" + revealHook.ToInt64());
+	}
+
+	private static void UninstallRevealHook()
+	{
+		if (revealHook == IntPtr.Zero)
+		{
+			return;
+		}
+		UnhookWinEvent(revealHook);
+		revealHook = IntPtr.Zero;
+		revealProc = null;
+		lastRehide.Clear();
+	}
+
+	// 任务栏被 Explorer 重新显示时立即压回（WinEvent 回调线程，仅罕见事件）。
+	private static void OnReveal(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
+	{
+		if (taskbarHidden != true || idObject != 0)
+		{
+			return;
+		}
+		try
+		{
+			string cls = Class(hwnd);
+			if (cls != "Shell_TrayWnd" && cls != "Shell_SecondaryTrayWnd")
+			{
+				return;
+			}
+			if (!IsWindowVisible(hwnd) || ShellBooting(hwnd))
+			{
+				return;
+			}
+			if (!ThrottledRehide(hwnd))
+			{
+				return;
+			}
+			Store.Trace("TASKBAR reveal " + cls + " -> re-hide");
+			ShowWindowAsync(hwnd, 0);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+	}
+
+	// 单窗口压回节流（800ms）：Explorer 反复重试显示时避免高频拉扯闪屏。
+	private static bool ThrottledRehide(IntPtr h)
+	{
+		long key = h.ToInt64();
+		DateTime utcNow = DateTime.UtcNow;
+		if (lastRehide.TryGetValue(key, out DateTime value) && utcNow - value < TimeSpan.FromMilliseconds(800.0))
+		{
+			return false;
+		}
+		lastRehide[key] = utcNow;
+		if (lastRehide.Count > 32)
+		{
+			long oldest = lastRehide.OrderBy((KeyValuePair<long, DateTime> pair) => pair.Value).First().Key;
+			lastRehide.Remove(oldest);
+		}
+		return true;
+	}
+
 	private static void Maintain()
 	{
 		try
@@ -570,6 +660,7 @@ public static class DesktopVisibility
 	public static void RestoreOriginal()
 	{
 		maintenance.Stop();
+		UninstallRevealHook();
 		taskbarHidden = null;
 		iconsHidden = null;
 		RestoreAppBarState();
@@ -595,6 +686,7 @@ public static class DesktopVisibility
 	public static void ShowAll()
 	{
 		maintenance.Stop();
+		UninstallRevealHook();
 		taskbarHidden = false;
 		iconsHidden = false;
 		RestoreAppBarState();

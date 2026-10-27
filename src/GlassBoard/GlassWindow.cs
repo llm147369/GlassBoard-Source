@@ -190,6 +190,23 @@ public class GlassWindow : Window
 				{
 					widget.MarkSessionEnding();
 				}
+				// 壁纸切换（SPI_SETDESKWALLPAPER 广播，含 Wallpaper Engine 切换场景/壁纸）、
+				// 显示器变化、DPI 变化 → 背景缓存失效并延迟重捕，避免 Dock 上残留旧壁纸底图。
+				if (msg == 0x001A && wp.ToInt64() == 0x14)
+				{
+					Store.Trace("RENDER wallpaper change → backdrop refresh");
+					ScheduleBackdropRefresh(LightTheme);
+				}
+				else if (msg == 0x007E)
+				{
+					Store.Trace("RENDER display change → backdrop refresh");
+					ScheduleBackdropRefresh(LightTheme);
+				}
+				else if (msg == 0x02E0)
+				{
+					Store.Trace("RENDER dpi change → backdrop refresh");
+					ScheduleBackdropRefresh(LightTheme);
+				}
 				return IntPtr.Zero;
 			});
 		};
@@ -286,34 +303,53 @@ public class GlassWindow : Window
 		{
 			return;
 		}
-		string key = (int)Math.Round(Left) + "_" + (int)Math.Round(Top) + "_" + (int)Math.Round(Width) + "_" + (int)Math.Round(Height) + "_" + (LightTheme ? 1 : 0);
+		IntPtr hwnd;
+		try
+		{
+			hwnd = new WindowInteropHelper(this).EnsureHandle();
+		}
+		catch (InvalidOperationException)
+		{
+			// 窗口已被 Close()：WPF 禁止为已关闭窗口重建句柄，直接放弃本次背景捕获。
+			// （控制中心/小组件关闭后仍可能有刷新路径触发 Backdrop，属正常竞态。）
+			return;
+		}
+		if (!Native.GetWindowRect(hwnd, out Native.RECT rect) || rect.Right - rect.Left < 56 || rect.Bottom - rect.Top < 56)
+		{
+			return;
+		}
+		// 物理像素坐标捕获：不再用 TransformToDevice（主屏 DPI 矩阵在混合 DPI 多显示器下算错区域）。
+		// 缓存键用物理矩形 + DPI，显示器/DPI/壁纸变化后自然失效重捕。
+		int dpi = Native.DpiOf(hwnd);
+		string key = rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (LightTheme ? 1 : 0);
 		if (cachedBackdrop != null && backdropKey == key)
 		{
 			AddBackdrop(cachedBackdrop);
 			return;
 		}
+		CaptureRegion(rect, dpi);
+	}
+
+	private void RemoveBackdropBorders()
+	{
+		(from b in Root.Children.OfType<Border>()
+			where b.Tag as string == "backdrop"
+			select b).ToList().ForEach((Border b) =>
+		{
+			Root.Children.Remove(b);
+		});
+	}
+
+	// 捕获指定物理矩形区域作为毛玻璃底图（1/8 缩放 PNG 往返，写入 cachedBackdrop/backdropKey 并挂载）。
+	private void CaptureRegion(Native.RECT rect, int dpi)
+	{
 		try
 		{
-			Matrix matrix = Matrix.Identity;
-			try
-			{
-				new WindowInteropHelper(this).EnsureHandle();
-			}
-			catch (InvalidOperationException)
-			{
-				// 窗口已被 Close()：WPF 禁止为已关闭窗口重建句柄，直接放弃本次背景捕获。
-				// （控制中心/小组件关闭后仍可能有刷新路径触发 Backdrop，属正常竞态。）
-				return;
-			}
-			PresentationSource presentationSource = PresentationSource.FromVisual(this);
-			if (presentationSource != null)
-			{
-				matrix = presentationSource.CompositionTarget.TransformToDevice;
-			}
-			int sourceX = (int)Math.Round((Left + 14.0) * matrix.M11);
-			int sourceY = (int)Math.Round((Top + 14.0) * matrix.M22);
-			int num = Math.Max(1, (int)Math.Ceiling((Width - 28.0) * matrix.M11));
-			int num2 = Math.Max(1, (int)Math.Ceiling((Height - 28.0) * matrix.M22));
+			int margin = (int)Math.Round(14.0 * dpi / 96.0);
+			int sourceX = rect.Left + margin;
+			int sourceY = rect.Top + margin;
+			int num = Math.Max(1, rect.Right - rect.Left - 2 * margin);
+			int num2 = Math.Max(1, rect.Bottom - rect.Top - 2 * margin);
 			using Bitmap bitmap = new Bitmap(num, num2);
 			using (Graphics graphics = Graphics.FromImage(bitmap))
 			{
@@ -330,8 +366,72 @@ public class GlassWindow : Window
 			bitmapImage.EndInit();
 			bitmapImage.Freeze();
 			cachedBackdrop = bitmapImage;
-			backdropKey = key;
+			backdropKey = rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (LightTheme ? 1 : 0);
 			AddBackdrop(cachedBackdrop);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+	}
+
+	private System.Windows.Threading.DispatcherTimer backdropRefreshTimer;
+
+	// 壁纸/显示器/DPI 变化后的重捕调度：1.2 秒合并窗口，多个广播（切换壁纸会连发多条）只捕一次。
+	public void ScheduleBackdropRefresh(bool light)
+	{
+		if (backdropRefreshTimer == null)
+		{
+			backdropRefreshTimer = new System.Windows.Threading.DispatcherTimer
+			{
+				Interval = TimeSpan.FromMilliseconds(1200.0)
+			};
+			backdropRefreshTimer.Tick += delegate
+			{
+				backdropRefreshTimer.Stop();
+				RecaptureBackdrop(LightTheme);
+			};
+		}
+		backdropRefreshTimer.Stop();
+		backdropRefreshTimer.Start();
+	}
+
+	// 可见状态下重捕：临时把窗口移出屏幕（避免 CopyFromScreen 捕到自身形成反馈），
+	// 按原物理矩形捕获后再移回并刷新画刷。仅在壁纸/显示变化这类低频事件触发，不会高频闪动。
+	public void RecaptureBackdrop(bool light)
+	{
+		if (Width < 40.0 || Height < 40.0 || GlassPercent == 0.0)
+		{
+			cachedBackdrop = null;
+			backdropKey = "";
+			return;
+		}
+		if (!IsVisible)
+		{
+			cachedBackdrop = null;
+			backdropKey = "";
+			Backdrop(light);
+			return;
+		}
+		try
+		{
+			IntPtr hwnd = new WindowInteropHelper(this).Handle;
+			if (!Native.GetWindowRect(hwnd, out Native.RECT rect) || rect.Right - rect.Left < 56 || rect.Bottom - rect.Top < 56)
+			{
+				return;
+			}
+			int dpi = Native.DpiOf(hwnd);
+			double oldLeft = Left;
+			double oldTop = Top;
+			Left = -20000.0;
+			Top = -20000.0;
+			cachedBackdrop = null;
+			backdropKey = "";
+			RemoveBackdropBorders();
+			CaptureRegion(rect, dpi);
+			Left = oldLeft;
+			Top = oldTop;
+			RefreshBackdropStyle();
 		}
 		catch (Exception ex)
 		{

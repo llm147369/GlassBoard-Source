@@ -155,6 +155,15 @@ public class Controller
 		}
 		Board = new BoardWindow(this);
 		Dock = new DockWindow(this);
+		try
+		{
+			// 渲染环境诊断：后台采集一次 OS/渲染层级/显示器 DPI/GPU（WMI 较慢，不阻塞启动）
+			System.Threading.Tasks.Task.Run((Action)RenderDiagnostics.DumpOnce);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 		DesktopWatcher.Start(this);
 		EnsureSystemEntries();
 		ApplyShellPreferences();
@@ -182,12 +191,30 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard v0.9.19.1 · 玻璃启动台",
+			Text = "GlassBoard v0.9.20.0 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
 		RefreshTrayMenu();
 		TryAutoUpdate();
+		try
+		{
+			// 应用通知红点：监听系统通知（Win10/11）。无权限或系统不支持时功能自动停用并记日志。
+			NotificationCenter.Start(this);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+		try
+		{
+			// 微信专用通知检测（通知气泡 WinEvent Hook），与系统通知监听互补，互不干扰。
+			WeChatNotifier.Start(this);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 		Tray.DoubleClick += (object s, EventArgs e) =>
 		{
 			Toggle(force: true);
@@ -355,6 +382,10 @@ public class Controller
 		contextMenuStrip2.Items.Add("检查更新", null, async (object s, EventArgs e) =>
 		{
 			await OnlineUpdate.CheckManualAsync(null);
+		});
+		contextMenuStrip2.Items.Add("测试微信通知红点（调试）", null, (object s, EventArgs e) =>
+		{
+			WeChatNotifier.TestBadge();
 		});
 		contextMenuStrip2.Items.Add(new ToolStripSeparator());
 		contextMenuStrip2.Items.Add("退出 GlassBoard", null, (object s, EventArgs e) =>
@@ -542,6 +573,15 @@ public class Controller
 	{
 		try
 		{
+			// 用户点击图标 = 已看到该应用：按任务栏惯例熄灭其通知红点。
+			// QQ 等应用把已读通知长期留在通知中心，不能只靠系统事件熄灭。
+			try
+			{
+				NotificationCenter.ClearEntry(entry?.Path ?? "");
+			}
+			catch
+			{
+			}
 			if (SystemPlaces.IsComputer(entry))
 			{
 				Native.Computer();
@@ -1501,7 +1541,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard · 个性化与控制 v0.9.19.1",
+				Title = "GlassBoard · 个性化与控制 v0.9.20.0",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,

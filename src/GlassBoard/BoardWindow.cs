@@ -600,6 +600,9 @@ public class BoardWindow : GlassWindow
 			trimTimer.Stop();
 		}
 		preparingView = true;
+		Stopwatch openTimer = Stopwatch.StartNew();
+		long buildMs = 0L;
+		long backdropMs = 0L;
 		try
 		{
 			visibilitySerial++;
@@ -631,12 +634,27 @@ public class BoardWindow : GlassWindow
 			GlassPercent = C.Prefs.OpacityPercent ?? 72.0;
 			Polish.Apply(this, LightTheme);
 			BuildForSize();
+			buildMs = openTimer.ElapsedMilliseconds;
 			Backdrop(C.Prefs.Light);
+			backdropMs = openTimer.ElapsedMilliseconds - buildMs;
 			Show();
-			Activate();
-			Native.SetForegroundWindow(new WindowInteropHelper(this).Handle);
 			AnimateOpen();
 			Keyboard.ClearFocus();
+			// 激活窗口放到开启动画之后（下一空闲帧）：SetForegroundWindow 的 shell 往返
+			// 在部分系统上会阻塞几十毫秒，原本夹在 Show 与动画之间正是"动画开头停一帧"的来源。
+			Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(delegate
+			{
+				try
+				{
+					Activate();
+					Native.SetForegroundWindow(new WindowInteropHelper(this).Handle);
+				}
+				catch
+				{
+				}
+			}));
+			// 打开耗时诊断：build 为 UI 树重建（含磁贴），backdrop 为背景捕获（缓存命中近 0）
+			Store.Trace("BOARD open total=" + openTimer.ElapsedMilliseconds + "ms build=" + buildMs + "ms backdrop=" + backdropMs + "ms");
 		}
 		finally
 		{
@@ -1940,8 +1958,20 @@ public class BoardWindow : GlassWindow
 			Padding = new Thickness(4.0),
 			Cursor = Cursors.Hand,
 			ToolTip = a.Name,
-			ContextMenu = (editing ? null : C.Menu(a, currentGroup, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0))),
 			AllowDrop = true
+		};
+		// 右键菜单按需创建：打开面板时不再为每个磁贴预建整棵菜单。
+		// ~50 个磁贴 × 全量 ContextMenu（含子菜单与样式）是打开首帧卡顿的主要来源。
+		tile.ContextMenuOpening += (object s, ContextMenuEventArgs e) =>
+		{
+			if (editing)
+			{
+				return; // 多选模式下不弹右键菜单（与原逻辑一致）
+			}
+			if (tile.ContextMenu == null)
+			{
+				tile.ContextMenu = C.Menu(a, currentGroup, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
+			}
 		};
 		Grid grid = new Grid();
 		tile.Child = grid;

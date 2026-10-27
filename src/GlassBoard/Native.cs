@@ -348,4 +348,194 @@ public static class Native
 		{
 		}
 	}
+
+	// ---- 快捷方式 AppUserModelID（通知红点把通知按 AUMID 关联到 Dock 图标） ----
+
+	[ComImport]
+	[Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+	[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+	private interface IPropertyStore
+	{
+		[PreserveSig]
+		int GetCount(out uint count);
+		[PreserveSig]
+		int GetAt(uint index, out PropertyKey key);
+		// PROPVARIANT 用原始缓冲区读写：struct 封送在部分环境返回 VT_EMPTY（封送器差异）
+		[PreserveSig]
+		int GetValue(ref PropertyKey key, IntPtr value);
+		[PreserveSig]
+		int SetValue(ref PropertyKey key, IntPtr value);
+		[PreserveSig]
+		int Commit();
+	}
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct PropertyKey
+	{
+		public Guid fmtid;
+		public uint pid;
+	}
+
+	[DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+	private static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr pbc, int flags, ref Guid riid, out IPropertyStore store);
+
+	private static readonly Guid IID_IPropertyStore = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+	private static readonly PropertyKey PKEY_AppUserModel_ID = new PropertyKey
+	{
+		fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+		pid = 5u
+	};
+
+	// 读取 .lnk 快捷方式的 AppUserModelID（失败或非快捷方式返回空串）
+	public static string ShortcutAumid(string path)
+	{
+		try
+		{
+			Guid iid = IID_IPropertyStore;
+			SHGetPropertyStoreFromParsingName(path, IntPtr.Zero, 0, ref iid, out IPropertyStore store);
+			try
+			{
+				PropertyKey key = PKEY_AppUserModel_ID;
+				IntPtr pv = Marshal.AllocHGlobal(16);
+				try
+				{
+					int hr = store.GetValue(ref key, pv);
+					if (hr == 0 && Marshal.ReadInt16(pv) == 31)
+					{
+						IntPtr val = Marshal.ReadIntPtr(pv, 8);
+						if (val != IntPtr.Zero)
+						{
+							string result = Marshal.PtrToStringUni(val) ?? "";
+							Marshal.FreeCoTaskMem(val);
+							return result;
+						}
+					}
+				}
+				finally
+				{
+					Marshal.FreeHGlobal(pv);
+				}
+				return "";
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(store);
+			}
+		}
+		catch
+		{
+			return "";
+		}
+	}
+
+	// 读取 .lnk 指向的目标路径（WScript.Shell COM + 反射，避免引入 Microsoft.CSharp）
+	public static string ShortcutTarget(string path)
+	{
+		try
+		{
+			Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+			if (shellType == null)
+			{
+				return "";
+			}
+			object shell = Activator.CreateInstance(shellType);
+			if (shell == null)
+			{
+				return "";
+			}
+			try
+			{
+				object lnk = shellType.InvokeMember("CreateShortcut",
+					System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { path });
+				if (lnk == null)
+				{
+					return "";
+				}
+				try
+				{
+					object target = lnk.GetType().InvokeMember("TargetPath",
+						System.Reflection.BindingFlags.GetProperty, null, lnk, null);
+					return target as string ?? "";
+				}
+				finally
+				{
+					Marshal.ReleaseComObject(lnk);
+				}
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(shell);
+			}
+		}
+		catch
+		{
+			return "";
+		}
+	}
+
+	// —— 渲染诊断支持：物理坐标与每显示器 DPI ——
+	// 背景捕获（CopyFromScreen）必须用物理像素坐标。WPF 的 TransformToDevice 矩阵
+	// 基于主屏 DPI，在混合 DPI 多显示器（主屏 150% + 副屏 100% 等）下算出的区域是错的，
+	// 这正是部分设备（尤其配合动态壁纸）背景错位/黑块的根因。
+
+	[StructLayout(LayoutKind.Sequential)]
+	public struct RECT
+	{
+		public int Left;
+		public int Top;
+		public int Right;
+		public int Bottom;
+	}
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+	[DllImport("user32.dll")]
+	public static extern int GetDpiForWindow(IntPtr hWnd);
+
+	[DllImport("user32.dll")]
+	public static extern IntPtr GetDC(IntPtr hWnd);
+
+	[DllImport("gdi32.dll")]
+	public static extern int GetDeviceCaps(IntPtr hdc, int index);
+
+	[DllImport("user32.dll")]
+	public static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
+
+	/// <summary>窗口所在显示器的 DPI（Win10 1607+ 用 GetDpiForWindow，失败回退 GDI）。</summary>
+	public static int DpiOf(IntPtr hwnd)
+	{
+		try
+		{
+			int dpi = GetDpiForWindow(hwnd);
+			if (dpi > 0)
+			{
+				return dpi;
+			}
+		}
+		catch
+		{
+		}
+		try
+		{
+			IntPtr hdc = GetDC(hwnd);
+			if (hdc == IntPtr.Zero)
+			{
+				return 96;
+			}
+			try
+			{
+				int caps = GetDeviceCaps(hdc, 88); // LOGPIXELSX
+				return caps > 0 ? caps : 96;
+			}
+			finally
+			{
+				ReleaseDC(hwnd, hdc);
+			}
+		}
+		catch
+		{
+			return 96;
+		}
+	}
 }
