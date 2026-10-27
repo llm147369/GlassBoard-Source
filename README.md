@@ -1,4 +1,4 @@
-# GlassBoard v0.9.18.6
+# GlassBoard v0.9.18.8
 
 一个运行在 Windows 10/11 上的免费桌面启动台——毛玻璃 Dock 栏、应用面板、控制中心、桌面组件，一次装齐。
 
@@ -35,7 +35,7 @@ dotnet build src\GlassBoard.csproj -c Release
 
 ## 发布说明
 
-本仓库源码对应 v0.9.18.6（程序集版本 0.9.18.6）。仓库根目录直接存放编译好的便携版（拉取即用，双击 `GlassBoard.exe` 运行）；GitHub Release 页面同时提供便携压缩包 `GlassBoard-0.9.18.6-portable.zip`。源码位于 `src\` 目录，仅供开发者参考与修改。
+本仓库源码对应 v0.9.18.8（程序集版本 0.9.18.8）。仓库根目录直接存放编译好的便携版（拉取即用，双击 `GlassBoard.exe` 运行）；GitHub Release 页面同时提供便携压缩包 `GlassBoard-0.9.18.8-portable.zip`。源码位于 `src\` 目录，仅供开发者参考与修改。
 
 ## 原作者
 
