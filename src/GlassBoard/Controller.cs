@@ -252,12 +252,8 @@ public class Controller
 	}
 
 	// —— 图标缓存预热：大面板首次打开慢，是因为几十个磁贴的图标解码/提取全部堆在
-	// 首次打开的那一瞬间。启动后在空闲优先级下分批预热与面板完全相同的图标管线
-	// （FeatureUi.Icon → Native.Icon 的内存+磁盘缓存），首次打开面板即全部命中缓存。
-	private DispatcherTimer iconWarmTimer;
-	private int iconWarmIndex;
-	private List<Entry> iconWarmList;
-
+	// 首次打开的那一瞬间。现在把与面板完全相同的图标管线（MediaThumb.TileIcon）整批
+	// 交给 IconPipeline 后台线程提取，填满内存+磁盘缓存，完全不占用 UI 线程。
 	private void WarmIconCache()
 	{
 		try
@@ -276,38 +272,8 @@ public class Controller
 			{
 				return;
 			}
-			iconWarmList = list;
-			iconWarmIndex = 0;
-			iconWarmTimer = new DispatcherTimer(DispatcherPriority.ApplicationIdle)
-			{
-				Interval = TimeSpan.FromMilliseconds(120.0)
-			};
-			iconWarmTimer.Tick += delegate
-			{
-				int done = 0;
-				while (iconWarmIndex < iconWarmList.Count && done < 2)
-				{
-					Entry entry = iconWarmList[iconWarmIndex++];
-					try
-					{
-						MediaThumb.TileIcon(entry, Prefs.Dock.ShowShortcutOverlays);
-					}
-					catch
-					{
-					}
-					done++;
-				}
-				if (iconWarmIndex >= iconWarmList.Count)
-				{
-					iconWarmTimer.Stop();
-					iconWarmTimer = null;
-					int total = iconWarmIndex;
-					iconWarmList = null;
-					Store.Trace("WARM icons done n=" + total);
-				}
-			};
-			iconWarmTimer.Start();
-			Store.Trace("WARM icons start n=" + iconWarmList.Count);
+			Store.Trace("WARM icons start n=" + list.Count);
+			IconPipeline.Warm(list, Prefs.Dock.ShowShortcutOverlays);
 		}
 		catch (Exception ex)
 		{

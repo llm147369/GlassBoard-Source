@@ -810,7 +810,16 @@ public class DockWindow : GlassWindow
 			foreach (Entry a in list.Take(num3))
 			{
 				// 常用软件：左键启动，右键精简菜单（打开 / 位置 / 移动 / 添加 / 自定义 / 移除）
-				System.Windows.Controls.Button button = DockButton(null, FeatureUi.Icon(a, C.Prefs.Dock.ShowShortcutOverlays, true), () =>
+				// 图标走后台管线：缓存未命中先渲染占位符，提取完成后回填，不再阻塞 UI 线程
+				System.Windows.Controls.Button button = null;
+				ImageSource icon = IconPipeline.Request(a, C.Prefs.Dock.ShowShortcutOverlays, true, false, img =>
+				{
+					if (button != null)
+					{
+						DockSetIcon(a, button, img);
+					}
+				});
+				button = DockButton(null, icon, () =>
 				{
 					C.Launch(a);
 				}, a.Name, a);
@@ -1150,6 +1159,28 @@ public class DockWindow : GlassWindow
 		catch
 		{
 			// 动画失败只影响视觉效果，通知徽标本身已点亮
+		}
+	}
+
+	// 后台图标回填：把固定应用按钮的占位符（□）换成真图标，并同步通知红点动画的图标引用
+	private void DockSetIcon(Entry entry, System.Windows.Controls.Button button, ImageSource source)
+	{
+		if (source == null || entry == null || button == null || button.Parent == null)
+		{
+			return;
+		}
+		if (button.Content is Grid grid && grid.Children.Count > 0 && grid.Children[0] is StackPanel sp && sp.Children.Count > 0)
+		{
+			System.Windows.Controls.Image image = new System.Windows.Controls.Image
+			{
+				Source = source,
+				Width = C.Prefs.Dock.IconSize,
+				Height = C.Prefs.Dock.IconSize,
+				Stretch = Stretch.Uniform
+			};
+			RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+			sp.Children[0] = image;
+			notifyIcons[entry.Path] = image;
 		}
 	}
 

@@ -1943,6 +1943,31 @@ public class BoardWindow : GlassWindow
 		return value.ToString((unit == 0) ? "0" : "0.##", System.Globalization.CultureInfo.InvariantCulture) + " " + units[unit];
 	}
 
+	// 后台图标回填：把磁贴占位符（▣）换成真图标；磁贴已被重建（脱离可视树）时放弃
+	private void TileSetIcon(StackPanel panel, ImageSource source)
+	{
+		if (source == null || panel == null || panel.Parent == null)
+		{
+			return;
+		}
+		System.Windows.Controls.Image image = new System.Windows.Controls.Image
+		{
+			Source = source,
+			Width = C.Prefs.BoardIconSize,
+			Height = C.Prefs.BoardIconSize,
+			Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
+		};
+		RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+		if (panel.Children.Count > 0)
+		{
+			panel.Children[0] = image;
+		}
+		else
+		{
+			panel.Children.Insert(0, image);
+		}
+	}
+
 	private FrameworkElement Tile(Entry a, int index, bool animate)
 	{
 		bool isSelected = editing && selected.Contains(a.Path);
@@ -1980,7 +2005,8 @@ public class BoardWindow : GlassWindow
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		grid.Children.Add(stackPanel);
-		ImageSource imageSource = MediaThumb.TileIcon(a, C.Prefs.Dock.ShowShortcutOverlays);
+		// 磁贴图标走后台管线：缓存未命中先渲染 ▣ 占位符，提取完成后回填
+		ImageSource imageSource = IconPipeline.Request(a, C.Prefs.Dock.ShowShortcutOverlays, true, true, img => TileSetIcon(stackPanel, img));
 		if (imageSource != null)
 		{
 			System.Windows.Controls.Image image = new System.Windows.Controls.Image

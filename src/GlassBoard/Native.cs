@@ -225,6 +225,18 @@ public static class Native
 		}
 	}
 
+	// 只查内存缓存：图标后台管线的 UI 线程快速路径（未命中返回 null，不提取）
+	public static ImageSource IconCached(string path, bool showShortcutOverlays = false, bool sharper = false)
+	{
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			return null;
+		}
+		string key = (sharper ? "sharp/" : "normal/") + (showShortcutOverlays ? "overlay/" : "plain/") + path;
+		icons.TryGet(key, out var value);
+		return value;
+	}
+
 	public static void ClearIconCache()
 	{
 		icons.Clear();
@@ -327,26 +339,43 @@ public static class Native
 		return null;
 	}
 
+	// 系统特殊图标（此电脑/回收站）只在首次被请求时提取；UI 线程与后台图标管线可能并发触发
+	private static readonly object shellIconLock = new object();
+
 	// 此电脑图标：系统官方图标（SHGetFileInfo → 注册表 DefaultIcon 双通道）
 	public static ImageSource MyComputerIcon()
 	{
-		if (computerIcon != null)
+		ImageSource existing = computerIcon;
+		if (existing != null)
 		{
+			return existing;
+		}
+		lock (shellIconLock)
+		{
+			if (computerIcon == null)
+			{
+				computerIcon = ShellNamespaceIcon(SystemPlaces.ComputerClsid);
+			}
 			return computerIcon;
 		}
-		computerIcon = ShellNamespaceIcon(SystemPlaces.ComputerClsid);
-		return computerIcon;
 	}
 
 	// 回收站图标：系统官方图标（SHGetFileInfo → 注册表 DefaultIcon 双通道）
 	public static ImageSource RecycleIcon()
 	{
-		if (recycleIcon != null)
+		ImageSource existing = recycleIcon;
+		if (existing != null)
 		{
+			return existing;
+		}
+		lock (shellIconLock)
+		{
+			if (recycleIcon == null)
+			{
+				recycleIcon = ShellNamespaceIcon(RecycleBin.Clsid);
+			}
 			return recycleIcon;
 		}
-		recycleIcon = ShellNamespaceIcon(RecycleBin.Clsid);
-		return recycleIcon;
 	}
 
 	public static void Computer()

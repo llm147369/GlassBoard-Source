@@ -19,19 +19,36 @@ namespace GlassBoard
 		// 避免重复计算；命中时返回的是规范化后的结果而非原始图。
 		private static readonly Dictionary<ImageSource, ImageSource> glyphCache = new Dictionary<ImageSource, ImageSource>();
 
+		// 图标后台管线引入后，UI 线程快速命中检查与后台提取线程会并发访问 glyphCache
+		private static readonly object glyphLock = new object();
+
 		internal static ImageSource Normalize(ImageSource source)
 		{
 			if (source == null)
 			{
 				return null;
 			}
-			if (glyphCache.TryGetValue(source, out ImageSource cached))
+			lock (glyphLock)
 			{
-				return cached;
+				if (glyphCache.TryGetValue(source, out ImageSource cached))
+				{
+					return cached;
+				}
 			}
 			ImageSource result = DoGlyph(source);
-			glyphCache.Add(source, result);
-			Prune();
+			lock (glyphLock)
+			{
+				if (glyphCache.ContainsKey(source))
+				{
+					// 并发提取同一源时以先入缓存者为准
+					result = glyphCache[source];
+				}
+				else
+				{
+					glyphCache.Add(source, result);
+					Prune();
+				}
+			}
 			return result;
 		}
 

@@ -59,7 +59,9 @@ internal static class IconDiskCache
 			string file = Path.Combine(Dir, cacheName + ".png");
 			PngBitmapEncoder encoder = new PngBitmapEncoder();
 			encoder.Frames.Add(BitmapFrame.Create(bitmap));
-			using (FileStream stream = File.Create(file))
+			// FileShare.Read：后台提取线程与 UI 线程偶发写同一缓存文件时，
+			// 另一方仍可读取（File.Create 的独占锁会让并行解码失败）
+			using (FileStream stream = new FileStream(file, FileMode.Create, FileAccess.Write, FileShare.Read))
 			{
 				encoder.Save(stream);
 			}

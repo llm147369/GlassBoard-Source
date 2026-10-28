@@ -14,6 +14,9 @@ public static class ShellThumbnail
 {
 	private static readonly Dictionary<string, ImageSource> cache = new Dictionary<string, ImageSource>();
 
+	// 后台图标管线与 UI 线程（媒体悬浮预览）会并发访问缩略图缓存
+	private static readonly object thumbLock = new object();
+
 	[StructLayout(LayoutKind.Sequential)]
 	private struct SIZE
 	{
@@ -84,16 +87,22 @@ public static class ShellThumbnail
 	public static ImageSource Get(string path, int size)
 	{
 		string key = path.ToLowerInvariant() + "|" + size;
-		if (cache.TryGetValue(key, out ImageSource hit))
+		lock (thumbLock)
 		{
-			return hit;
+			if (cache.TryGetValue(key, out ImageSource hit))
+			{
+				return hit;
+			}
 		}
 		// 永久磁盘缓存：提取一次，后续启动直接加载
 		string cacheName = IconDiskCache.Name(key + "|" + IconDiskCache.FileFingerprint(path));
 		ImageSource diskHit = IconDiskCache.Load(cacheName);
 		if (diskHit != null)
 		{
-			cache[key] = diskHit;
+			lock (thumbLock)
+			{
+				cache[key] = diskHit;
+			}
 			return diskHit;
 		}
 		ImageSource src = Fetch(path, size);
@@ -101,11 +110,14 @@ public static class ShellThumbnail
 		{
 			IconDiskCache.Save(cacheName, srcBitmap);
 		}
-		if (cache.Count > 160)
+		lock (thumbLock)
 		{
-			cache.Clear();
+			if (cache.Count > 160)
+			{
+				cache.Clear();
+			}
+			cache[key] = src;
 		}
-		cache[key] = src;
 		return src;
 	}
 }
@@ -116,6 +128,8 @@ public static class MediaThumb
 	private static readonly string[] ImageExt = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".svg" };
 	private static readonly string[] VideoExt = { ".mp4", ".m4v", ".mov", ".wmv", ".avi", ".mkv", ".webm", ".mpg", ".mpeg", ".flv", ".ts" };
 	private static readonly Dictionary<string, string> svgPng = new Dictionary<string, string>();
+
+	private static readonly object svgLock = new object();
 
 	public static bool IsImage(string path)
 	{
@@ -177,14 +191,20 @@ public static class MediaThumb
 
 	private static string SvgRaster(string path)
 	{
-		if (svgPng.TryGetValue(path, out string cached) && File.Exists(cached))
+		lock (svgLock)
 		{
-			return cached;
+			if (svgPng.TryGetValue(path, out string cached) && File.Exists(cached))
+			{
+				return cached;
+			}
 		}
 		string png = SvgIconConverter.TryConvert(path, 256);
 		if (png != null)
 		{
-			svgPng[path] = png;
+			lock (svgLock)
+			{
+				svgPng[path] = png;
+			}
 		}
 		return png;
 	}

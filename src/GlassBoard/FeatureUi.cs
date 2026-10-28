@@ -241,4 +241,44 @@ public static class FeatureUi
 		}
 		return IconNormalizer.Normalize(result);
 	}
+
+	// 只查内存缓存：图标后台管线在 UI 线程的快速命中检查（未命中返回 null，不提取）。
+	// 返回结果同样经过 IconNormalizer 统一，与 Icon() 视觉一致。
+	public static ImageSource Cached(Entry entry, bool showShortcutOverlays = false, bool sharper = false)
+	{
+		if (entry == null)
+		{
+			return null;
+		}
+		ImageSource hit = null;
+		if (RecycleBin.IsEntry(entry))
+		{
+			hit = Native.RecycleIcon();
+		}
+		else if (SystemPlaces.IsComputer(entry))
+		{
+			hit = Native.MyComputerIcon();
+		}
+		else if (!string.IsNullOrWhiteSpace(entry.IconPath) && File.Exists(entry.IconPath))
+		{
+			try
+			{
+				FileInfo fileInfo = new FileInfo(entry.IconPath);
+				string key = fileInfo.FullName + "/" + fileInfo.Length + "/" + fileInfo.LastWriteTimeUtc.Ticks;
+				// 自定义图标未缓存时直接返回 null（绝不回退到设置自定义图标前提取的旧缓存）
+				if (!customIconCache.TryGet(key, out hit))
+				{
+					hit = null;
+				}
+			}
+			catch
+			{
+			}
+		}
+		else
+		{
+			hit = Native.IconCached(entry.Path, showShortcutOverlays, sharper);
+		}
+		return IconNormalizer.Normalize(hit);
+	}
 }
