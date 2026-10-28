@@ -15,7 +15,7 @@ namespace GlassBoard;
 // 启动预热（Controller.WarmIconCache）同样走本管线，不再用空闲定时器占用 UI 线程。
 public static class IconPipeline
 {
-	private sealed class Request
+	private sealed class IconJob
 	{
 		public Entry Entry;
 		public bool Overlays;
@@ -25,7 +25,7 @@ public static class IconPipeline
 		public int WarmTotal;
 	}
 
-	private static readonly BlockingCollection<Request> queue = new BlockingCollection<Request>();
+	private static readonly BlockingCollection<IconJob> queue = new BlockingCollection<IconJob>();
 	private static readonly Thread worker;
 	private static Dispatcher ui;
 
@@ -57,7 +57,7 @@ public static class IconPipeline
 		{
 			return hit;
 		}
-		queue.Add(new Request
+		queue.Add(new IconJob
 		{
 			Entry = entry,
 			Overlays = overlays,
@@ -86,14 +86,14 @@ public static class IconPipeline
 				continue;
 			}
 			n++;
-			queue.Add(new Request
+			queue.Add(new IconJob
 			{
 				Entry = e,
 				Overlays = overlays,
 				Tile = true
 			});
 		}
-		queue.Add(new Request
+		queue.Add(new IconJob
 		{
 			DoneSentinel = true,
 			WarmTotal = n
@@ -102,7 +102,7 @@ public static class IconPipeline
 
 	private static void Work()
 	{
-		foreach (Request req in queue.GetConsumingEnumerable())
+		foreach (IconJob req in queue.GetConsumingEnumerable())
 		{
 			if (req.DoneSentinel)
 			{
