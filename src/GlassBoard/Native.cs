@@ -123,28 +123,51 @@ public static class Native
 			icons.Put(key, cached);
 			return cached;
 		}
-		// 首选 Jumbo 通道：SYSICONINDEX + SHIL_JUMBO → 256×256 系统图标（最清晰）
+		// 首选 Jumbo 通道：SYSICONINDEX + SHIL_JUMBO → 256×256 系统图标（最清晰）。
+		// 注意：纯 SYSICONINDEX 请求拿不到 iIcon 高字节的角标（overlay）索引，
+		// 因此带角标请求必须走下方 overlay 分支，否则快捷方式箭头会被静默丢弃。
 		SHFILEINFO info;
 		IntPtr intPtr;
-		try
+		if (!showShortcutOverlays)
 		{
-			if (SHGetFileInfo(path, 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 0x4000u) != IntPtr.Zero && info.iIcon != 0)
+			try
 			{
-				Guid guid = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
-				SHGetImageList(0x4, ref guid, out IImageList imageList);
-				if (imageList != null && imageList.GetIcon(info.iIcon, 1u, out IntPtr jumboHandle) == 0 && jumboHandle != IntPtr.Zero)
+				if (SHGetFileInfo(path, 0u, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 0x4000u) != IntPtr.Zero && info.iIcon != 0)
 				{
-					BitmapSource jumbo = Imaging.CreateBitmapSourceFromHIcon(jumboHandle, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(256, 256));
-					jumbo.Freeze();
-					DestroyIcon(jumboHandle);
-					icons.Put(key, jumbo);
-					IconDiskCache.Save(cacheName, jumbo);
-					return jumbo;
+					Guid guid = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
+					IImageList imageList = null;
+					IntPtr jumboHandle = IntPtr.Zero;
+					try
+					{
+						SHGetImageList(0x4, ref guid, out imageList);
+						if (imageList != null && imageList.GetIcon(info.iIcon, 1u, out jumboHandle) == 0 && jumboHandle != IntPtr.Zero)
+						{
+							BitmapSource jumbo = Imaging.CreateBitmapSourceFromHIcon(jumboHandle, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(256, 256));
+							jumbo.Freeze();
+							icons.Put(key, jumbo);
+							IconDiskCache.Save(cacheName, jumbo);
+							return jumbo;
+						}
+					}
+					catch
+					{
+					}
+					finally
+					{
+						if (jumboHandle != IntPtr.Zero)
+						{
+							DestroyIcon(jumboHandle);
+						}
+						if (imageList != null && Marshal.IsComObject(imageList))
+						{
+							Marshal.ReleaseComObject(imageList);
+						}
+					}
 				}
 			}
-		}
-		catch
-		{
+			catch
+			{
+			}
 		}
 		if (showShortcutOverlays)
 		{

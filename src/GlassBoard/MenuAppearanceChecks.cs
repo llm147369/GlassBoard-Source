@@ -102,7 +102,8 @@ public static class MenuAppearanceChecks
 				Popup popup = menuItem.Template.FindName("PART_Popup", menuItem) as Popup;
 				Border border = ((popup == null) ? null : (popup.Child as Border));
 				SolidColorBrush solidColorBrush = ((border == null) ? null : (border.Background as SolidColorBrush));
-				if (solidColorBrush == null || solidColorBrush.Color != ((SolidColorBrush)Polish.Color(flag ? "#FAFCFF" : "#202B3D")).Color)
+				// 菜单底色在 MenuTheme.Colors 中会掺入 10% 强调色（有意设计），断言须与主题实际产出一致
+				if (solidColorBrush == null || solidColorBrush.Color != MenuTheme.Palette(flag).bg)
 				{
 					throw new Exception("二级菜单背景配色错误");
 				}
@@ -202,7 +203,8 @@ public static class MenuAppearanceChecks
 			}
 			BitmapSource bitmapSource = Native.Icon(text2, showShortcutOverlays: false, sharper: true) as BitmapSource;
 			ImageSource imageSource3 = Native.Icon(text2, showShortcutOverlays: true, sharper: true);
-			if (bitmapSource == null || imageSource3 == null || !bitmapSource.IsFrozen || bitmapSource.PixelWidth > 128 || bitmapSource.PixelHeight > 128 || bitmapSource == imageSource)
+			// Jumbo 通道输出固定 256×256，因此高清图标的上限是 256（此检查过去为 128，已被 Jumbo 设计取代）
+			if (bitmapSource == null || imageSource3 == null || !bitmapSource.IsFrozen || bitmapSource.PixelWidth > 256 || bitmapSource.PixelHeight > 256 || bitmapSource == imageSource)
 			{
 				throw new Exception("高清图标尺寸、角标组合或缓存失败");
 			}

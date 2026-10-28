@@ -38,6 +38,11 @@ public static class UpdateNotice
 			"更新入口：设置 → 通用 → 检查更新，一键下载并自动重启升级；托盘菜单里也有「检查更新」。",
 			"更新只替换程序文件，配置与自定义图标不受影响。"
 		}, accent, cardBrush, lineBrush));
+		content.Children.Add(Card("动态壁纸（Wallpaper Engine）", new string[]
+		{
+			"本机桌面壁纸使用的是 Wallpaper Engine 动态壁纸。",
+			"本程序已针对 Wallpaper Engine 做兼容处理：启动与显示界面时不会触发桌面重绘或窗口层级变化，动态壁纸持续正常播放；切换壁纸后程序背景会自动跟随更新。"
+		}, accent, cardBrush, lineBrush));
 		TabItem item = new TabItem
 		{
 			Header = "重要提示",
