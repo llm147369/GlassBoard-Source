@@ -247,14 +247,14 @@ public static class OnlineUpdate
 			if (cmp < 0 || (cmp == 0 && !sameBuild))
 			{
 				Set("当前版本 v" + current + " 已是最新。");
-				MessageBox.Show(owner, "当前版本 v" + current + " 已是最新版本。", "GlassBoard 在线更新");
+				MessageBox.Show(owner, "当前版本 v" + current + " 已是最新版本。", "GlassBoard-Source 在线更新");
 				return;
 			}
 			string tag = info.TagName.TrimStart('v', 'V');
 			string prompt = (cmp > 0)
 				? ("发现新版本 v" + tag + "\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？")
 				: ("发现 v" + tag + " 的新构建（同版本号，包含最新修复）。\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？");
-			if (MessageBox.Show(owner, prompt, "GlassBoard 在线更新", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
+			if (MessageBox.Show(owner, prompt, "GlassBoard-Source 在线更新", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
 			{
 				Set("已取消更新，当前版本 v" + current + "。");
 				return;
@@ -279,7 +279,7 @@ public static class OnlineUpdate
 			}
 			ZipFile.ExtractToDirectory(zipPath, extractDir);
 			File.Delete(zipPath);
-			if (MessageBox.Show(owner, "更新包已就绪。\n\n点击「确定」后程序会自动重启并完成升级。", "GlassBoard 在线更新", MessageBoxButton.OKCancel) != MessageBoxResult.OK)
+			if (MessageBox.Show(owner, "更新包已就绪。\n\n点击「确定」后程序会自动重启并完成升级。", "GlassBoard-Source 在线更新", MessageBoxButton.OKCancel) != MessageBoxResult.OK)
 			{
 				Set("已取消更新，当前版本 v" + current + "。");
 				return;
@@ -291,7 +291,7 @@ public static class OnlineUpdate
 		{
 			Store.Log(new Exception("在线更新失败", ex));
 			Set("更新失败：" + ex.Message);
-			MessageBox.Show(owner, "更新失败：" + ex.Message + "\n\n网络受限时可打开以下链接手动下载便携包，解压覆盖即可：\n" + ReleasePage, "GlassBoard 在线更新");
+			MessageBox.Show(owner, "更新失败：" + ex.Message + "\n\n网络受限时可打开以下链接手动下载便携包，解压覆盖即可：\n" + ReleasePage, "GlassBoard-Source 在线更新");
 		}
 	}
 
@@ -380,7 +380,7 @@ public static class OnlineUpdate
 		}
 		catch
 		{
-			MessageBox.Show("程序目录不可写（可能需要管理员权限），无法自动覆盖程序文件。\n\n请以管理员身份运行 GlassBoard 后重试，或手动下载便携包覆盖：\n" + ReleasePage, "GlassBoard 在线更新");
+			MessageBox.Show("程序目录不可写（可能需要管理员权限），无法自动覆盖程序文件。\n\n请以管理员身份运行 GlassBoard-Source 后重试，或手动下载便携包覆盖：\n" + ReleasePage, "GlassBoard-Source 在线更新");
 			return;
 		}
 		if (File.Exists(Path.Combine(appDir, "DefaultConfig.json")) || File.Exists(Path.Combine(appDir, "DefaultConfig.json.done")))

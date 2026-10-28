@@ -105,7 +105,7 @@ public static class FeatureUi
 	{
 		Window window = new Window
 		{
-			Title = "GlassBoard · " + title,
+			Title = "GlassBoard-Source · " + title,
 			Owner = owner,
 			Width = Math.Min(width, SystemParameters.WorkArea.Width - 40.0),
 			Height = Math.Min(height, SystemParameters.WorkArea.Height - 50.0),

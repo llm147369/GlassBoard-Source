@@ -24,7 +24,7 @@ public static class ConfigImport
 			{
 				return;
 			}
-			MessageBoxResult choice = MessageBox.Show("检测到作者推荐的配置。\n\n是否使用推荐配置？\n· 会覆盖当前设置（已有配置将自动备份）\n· 不会导入任何图标文件\n· 应用列表仅保留你电脑上实际存在的程序", "GlassBoard · 推荐配置", MessageBoxButton.YesNo, MessageBoxImage.Question);
+			MessageBoxResult choice = MessageBox.Show("检测到作者推荐的配置。\n\n是否使用推荐配置？\n· 会覆盖当前设置（已有配置将自动备份）\n· 不会导入任何图标文件\n· 应用列表仅保留你电脑上实际存在的程序", "GlassBoard-Source · 推荐配置", MessageBoxButton.YesNo, MessageBoxImage.Question);
 			if (choice == MessageBoxResult.Yes)
 			{
 				Preferences p = Store.ReadLayout(File.ReadAllBytes(defaultPath));

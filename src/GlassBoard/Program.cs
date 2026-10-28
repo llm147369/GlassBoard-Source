@@ -9,6 +9,8 @@ namespace GlassBoard;
 
 public static class Program
 {
+	// 进程启动时刻（Environment.TickCount）：窗口初始化/背景捕获等诊断日志用它换算相对耗时。
+	internal static readonly long ProcessStartTick = Environment.TickCount;
 	private static void CleanLegacyUpdater()
 	{
 		try
@@ -72,12 +74,12 @@ public static class Program
 					Store.Log(ex);
 				}
 				DesktopVisibility.ShowAll();
-				MessageBox.Show("已执行任务栏和桌面图标恢复。", "GlassBoard");
+				MessageBox.Show("已执行任务栏和桌面图标恢复。", "GlassBoard-Source");
 				return 0;
 			}
 			catch (Exception ex2)
 			{
-				MessageBox.Show(ex2.Message, "GlassBoard");
+				MessageBox.Show(ex2.Message, "GlassBoard-Source");
 				return 1;
 			}
 		}
@@ -167,10 +169,21 @@ public static class Program
 			}
 			try
 			{
-				Store.Trace("START exe=" + Assembly.GetExecutingAssembly().Location + " OS=" + Environment.OSVersion?.ToString() + " CLR=" + Environment.Version);
+				Store.Trace("START phase=enter exe=" + Assembly.GetExecutingAssembly().Location + " OS=" + Environment.OSVersion?.ToString() + " CLR=" + Environment.Version);
 				try
 				{
-					DesktopVisibility.Recover();
+					// 崩溃恢复前先读偏好：新会话本就要隐藏任务栏/图标时不做"还原再重隐"，
+					// 避免两次桌面级变更导致 Wallpaper Engine 等动态壁纸瞬间黑屏。
+					Preferences recoveryPrefs = null;
+					try
+					{
+						recoveryPrefs = Store.Load(mergeJournal: false);
+					}
+					catch
+					{
+					}
+					DesktopVisibility.Recover(keepIconsHidden: recoveryPrefs?.HideDesktopIcons == true, keepTaskbarHidden: recoveryPrefs?.HideTaskbar == true);
+					Store.Trace("START phase=recover ms=" + (Environment.TickCount - ProcessStartTick));
 				}
 				catch (Exception ex3)
 				{
@@ -179,19 +192,24 @@ public static class Program
 				try
 				{
 					TaskbarAutoHide.Restore();
+					Store.Trace("START phase=taskbar-restore ms=" + (Environment.TickCount - ProcessStartTick));
 				}
 				catch (Exception ex4)
 				{
 					Store.Log(ex4);
 				}
 				ConfigImport.TryRun();
+				Store.Trace("START phase=config-import ms=" + (Environment.TickCount - ProcessStartTick));
 				Application application = new Application();
 				application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+				Controller controller = null;
 				application.Exit += (object s, ExitEventArgs e) =>
 				{
 					try
 					{
-						DesktopVisibility.RestoreOriginal();
+						// 隐藏桌面图标是持久偏好：退出时保留隐藏状态，下次启动免广播、
+						// 免重新隐藏（Wallpaper Engine 兼容修复的一部分）。
+						DesktopVisibility.RestoreOriginal(keepIconsHidden: controller != null && controller.Prefs.HideDesktopIcons);
 					}
 					catch (Exception ex6)
 					{
@@ -206,7 +224,6 @@ public static class Program
 						Store.Log(ex7);
 					}
 				};
-				Controller controller = null;
 				application.DispatcherUnhandledException += (object s, DispatcherUnhandledExceptionEventArgs e) =>
 				{
 					Store.Log(e.Exception);
@@ -221,10 +238,11 @@ public static class Program
 							Store.Log(ex6);
 						}
 					}
-					MessageBox.Show("操作失败，详情已记录在配置文件夹 error.log。\n" + e.Exception.Message, "GlassBoard");
+					MessageBox.Show("操作失败，详情已记录在配置文件夹 error.log。\n" + e.Exception.Message, "GlassBoard-Source");
 					e.Handled = true;
 				};
 				controller = new Controller();
+				Store.Trace("START phase=controller ms=" + (Environment.TickCount - ProcessStartTick));
 				if (args.Any((string a) => a == "--recover-widgets"))
 				{
 					controller.RecoverWidgets();
@@ -236,7 +254,7 @@ public static class Program
 			catch (Exception ex5)
 			{
 				Store.Log(ex5);
-				MessageBox.Show("启动失败：" + ex5.Message, "GlassBoard");
+				MessageBox.Show("启动失败：" + ex5.Message, "GlassBoard-Source");
 				return 1;
 			}
 		}

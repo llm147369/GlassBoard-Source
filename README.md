@@ -1,4 +1,4 @@
-# GlassBoard v0.9.20.0
+# GlassBoard-Source v0.9.20.0
 
 一个运行在 Windows 10/11 上的免费桌面启动台——毛玻璃 Dock 栏、应用面板、控制中心、桌面组件，一次装齐。
 

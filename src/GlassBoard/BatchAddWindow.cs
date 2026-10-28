@@ -53,7 +53,7 @@ public class BatchAddWindow : Window
 	{
 		C = controller;
 		targetGroup = (C.Board.IsVisible ? C.Board.CurrentGroup : "全部");
-		Title = "GlassBoard · 添加到 " + targetGroup;
+		Title = "GlassBoard-Source · 添加到 " + targetGroup;
 		Width = Math.Min(800.0, SystemParameters.WorkArea.Width - 40.0);
 		Height = Math.Min(670.0, SystemParameters.WorkArea.Height - 50.0);
 		WindowStartupLocation = WindowStartupLocation.CenterOwner;

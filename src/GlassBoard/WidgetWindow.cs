@@ -1761,7 +1761,7 @@ public sealed class WidgetWindow : GlassWindow
 		}, 51.0));
 		wrapPanel.Children.Add(Small("删除", () =>
 		{
-			if (MessageBox.Show(this, "删除这条备忘录？", "GlassBoard", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+			if (MessageBox.Show(this, "删除这条备忘录？", "GlassBoard-Source", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
 			{
 				M.Notes.Remove();
 				M.RefreshNotes();

@@ -179,7 +179,7 @@ public class BoardWindow : GlassWindow
 		: base(42.0)
 	{
 		C = c;
-		Title = "GlassBoard 应用启动台";
+		Title = "GlassBoard-Source 应用启动台";
 		AllowDrop = true;
 		// 点击搜索框以外的区域时收起键盘焦点，输入光标不再一直闪烁
 		Root.PreviewMouseDown += delegate

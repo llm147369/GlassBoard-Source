@@ -444,7 +444,7 @@ public class DockWindow : GlassWindow
 		{
 			if (C.Tray != null)
 			{
-				C.Tray.ShowBalloonTip(3000, "GlassBoard", shortcuts + " 已被占用，对应功能仍可从托盘操作。", ToolTipIcon.Info);
+				C.Tray.ShowBalloonTip(3000, "GlassBoard-Source", shortcuts + " 已被占用，对应功能仍可从托盘操作。", ToolTipIcon.Info);
 			}
 		}));
 	}

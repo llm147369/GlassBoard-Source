@@ -94,7 +94,7 @@ public static class BackupFiles
 	{
 		if (!data.ContainsKey("manifest.json") || !data.ContainsKey("layout.json") || !data.ContainsKey("notes.json"))
 		{
-			throw new InvalidDataException("不是完整的 GlassBoard 备份");
+			throw new InvalidDataException("不是完整的 GlassBoard-Source 备份");
 		}
 		BackupManifest backupManifest = Json<BackupManifest>(data["manifest.json"]);
 		if (backupManifest == null || backupManifest.Version != 1)

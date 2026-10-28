@@ -149,6 +149,8 @@ public class GlassWindow : Window
 			{
 				DesktopWindowPolicy.Apply(this);
 			}
+			// 窗口生命周期诊断：记录首次句柄创建的相对时刻，用于对照黑屏发生前的操作时序。
+			Store.Trace("WINDOW init cls=" + GetType().Name + " ms=" + (Environment.TickCount - Program.ProcessStartTick));
 			try
 			{
 				if (!Native.SetWindowDisplayAffinity(new WindowInteropHelper(this).Handle, 0u))
@@ -343,6 +345,7 @@ public class GlassWindow : Window
 	// 捕获指定物理矩形区域作为毛玻璃底图（1/8 缩放 PNG 往返，写入 cachedBackdrop/backdropKey 并挂载）。
 	private void CaptureRegion(Native.RECT rect, int dpi)
 	{
+		long captureStart = Environment.TickCount;
 		try
 		{
 			int margin = (int)Math.Round(14.0 * dpi / 96.0);
@@ -368,6 +371,10 @@ public class GlassWindow : Window
 			cachedBackdrop = bitmapImage;
 			backdropKey = rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (LightTheme ? 1 : 0);
 			AddBackdrop(cachedBackdrop);
+			if (RenderDiagnostics.Verbose)
+			{
+				Store.Trace("RENDER capture cls=" + GetType().Name + " rect=" + rect.Left + "," + rect.Top + " " + num + "x" + num2 + " ms=" + (Environment.TickCount - captureStart) + " rel=" + (Environment.TickCount - Program.ProcessStartTick));
+			}
 		}
 		catch (Exception ex)
 		{

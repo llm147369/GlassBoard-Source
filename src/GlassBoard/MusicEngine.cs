@@ -907,7 +907,7 @@ public sealed class MusicEngine : IDisposable
 		{
 		}
 		string dumpLine = ((sessionDump.Length == 0) ? "会话枚举失败或超时" : sessionDump);
-		return "GlassBoard v" + Assembly.GetExecutingAssembly().GetName().Version?.ToString() + "\n程序位置：" + Assembly.GetExecutingAssembly().Location + "\n主通道：" + primaryStatus + "\n读取后端：" + session.Backend + "\n播放器：" + session.Source + "\n曲目：" + Title + "\n封面：" + session.CoverStatus + "\n曲目信息：" + session.MetadataStatus + "\n封面补充：" + C.Prefs.Widgets.AutoNativeMediaCompatibility + "\n兼容通道：" + nativeStatus + "\n状态：" + session.Status + "\n会话列表（AUMID | 类型 | 状态 | 标题 | 艺术家）：\n" + dumpLine;
+		return "GlassBoard-Source v" + Assembly.GetExecutingAssembly().GetName().Version?.ToString() + "\n程序位置：" + Assembly.GetExecutingAssembly().Location + "\n主通道：" + primaryStatus + "\n读取后端：" + session.Backend + "\n播放器：" + session.Source + "\n曲目：" + Title + "\n封面：" + session.CoverStatus + "\n曲目信息：" + session.MetadataStatus + "\n封面补充：" + C.Prefs.Widgets.AutoNativeMediaCompatibility + "\n兼容通道：" + nativeStatus + "\n状态：" + session.Status + "\n会话列表（AUMID | 类型 | 状态 | 标题 | 艺术家）：\n" + dumpLine;
 	}
 
 	private void Accept(MediaSnapshot data)

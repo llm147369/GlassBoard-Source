@@ -140,6 +140,7 @@ public class Controller
 			return;
 		}
 		Prefs = Store.Load();
+		Store.Trace("START phase=prefs ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		// 关机/注销时窗口被系统销毁会触发 Closed 事件；标记正在退出，防止组件被误判为"用户关闭"而全部禁用
 		SystemEvents.SessionEnding += (object s, SessionEndingEventArgs e) =>
 		{
@@ -147,7 +148,7 @@ public class Controller
 		};
 		if (!string.IsNullOrEmpty(Store.RecoveryMessage))
 		{
-			System.Windows.MessageBox.Show(Store.RecoveryMessage, "GlassBoard 配置恢复");
+			System.Windows.MessageBox.Show(Store.RecoveryMessage, "GlassBoard-Source 配置恢复");
 		}
 		if (Prefs.Removed.Count > 0 || Prefs.RemovedIdentities.Count > 0)
 		{
@@ -155,6 +156,7 @@ public class Controller
 		}
 		Board = new BoardWindow(this);
 		Dock = new DockWindow(this);
+		Store.Trace("START phase=windows ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		try
 		{
 			// 渲染环境诊断：后台采集一次 OS/渲染层级/显示器 DPI/GPU（WMI 较慢，不阻塞启动）
@@ -165,9 +167,12 @@ public class Controller
 			Store.Log(ex);
 		}
 		DesktopWatcher.Start(this);
+		Store.Trace("START phase=watcher ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		EnsureSystemEntries();
 		ApplyShellPreferences();
+		Store.Trace("START phase=shell ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		ApplyGlobalStyle();
+		Store.Trace("START phase=style ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		DispatcherTimer memoryTrimTimer = new DispatcherTimer
 		{
 			Interval = TimeSpan.FromSeconds(90)
@@ -191,11 +196,12 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard v0.9.20.0 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.0 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
 		RefreshTrayMenu();
+		Store.Trace("START phase=tray ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		TryAutoUpdate();
 		try
 		{
@@ -215,6 +221,7 @@ public class Controller
 		{
 			Store.Log(ex);
 		}
+		Store.Trace("START phase=services ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		Tray.DoubleClick += (object s, EventArgs e) =>
 		{
 			Toggle(force: true);
@@ -388,7 +395,7 @@ public class Controller
 			WeChatNotifier.TestBadge();
 		});
 		contextMenuStrip2.Items.Add(new ToolStripSeparator());
-		contextMenuStrip2.Items.Add("退出 GlassBoard", null, (object s, EventArgs e) =>
+		contextMenuStrip2.Items.Add("退出 GlassBoard-Source", null, (object s, EventArgs e) =>
 		{
 			Quit();
 		});
@@ -433,7 +440,7 @@ public class Controller
 		catch (Exception ex)
 		{
 			Store.Log(ex);
-			System.Windows.MessageBox.Show("布局保存失败：" + ex.Message, "GlassBoard");
+			System.Windows.MessageBox.Show("布局保存失败：" + ex.Message, "GlassBoard-Source");
 		}
 	}
 
@@ -550,7 +557,7 @@ public class Controller
 				stored = SvgIconConverter.TryConvert(dialog.FileName, 128);
 				if (stored == null)
 				{
-					System.Windows.MessageBox.Show("无法解析该 SVG 文件（仅支持标准矢量路径/矩形/圆形/线条）。\n\n建议使用图标库导出的 PNG 版本。", "GlassBoard");
+					System.Windows.MessageBox.Show("无法解析该 SVG 文件（仅支持标准矢量路径/矩形/圆形/线条）。\n\n建议使用图标库导出的 PNG 版本。", "GlassBoard-Source");
 					return;
 				}
 			}
@@ -565,7 +572,7 @@ public class Controller
 		}
 		catch (Exception ex)
 		{
-			System.Windows.MessageBox.Show("无法加载该图片。\n\n" + ex.Message, "GlassBoard");
+			System.Windows.MessageBox.Show("无法加载该图片。\n\n" + ex.Message, "GlassBoard-Source");
 		}
 	}
 
@@ -628,7 +635,7 @@ public class Controller
 		}
 		catch (Exception ex)
 		{
-			System.Windows.MessageBox.Show("无法打开「" + entry.Name + "」。\n入口可能已移动或卸载。\n\n" + ex.Message, "GlassBoard");
+			System.Windows.MessageBox.Show("无法打开「" + entry.Name + "」。\n入口可能已移动或卸载。\n\n" + ex.Message, "GlassBoard-Source");
 		}
 	}
 
@@ -767,7 +774,7 @@ public class Controller
 		try
 		{
 			string messageBoxText = "从「" + group + "」移除已选的 " + num + " 个入口？\n" + ((group == "全部") ? "本次从所有分组与 Dock 移除，原软件和磁盘文件保留。" : "同一软件在其他组中的入口保留；原软件和磁盘文件保留。") + "\n移除后可点击「撤销」。";
-			if ((Board.IsVisible ? System.Windows.MessageBox.Show(Board, messageBoxText, "GlassBoard", MessageBoxButton.YesNo) : System.Windows.MessageBox.Show(messageBoxText, "GlassBoard", MessageBoxButton.YesNo)) != MessageBoxResult.Yes)
+			if ((Board.IsVisible ? System.Windows.MessageBox.Show(Board, messageBoxText, "GlassBoard-Source", MessageBoxButton.YesNo) : System.Windows.MessageBox.Show(messageBoxText, "GlassBoard-Source", MessageBoxButton.YesNo)) != MessageBoxResult.Yes)
 			{
 				return;
 			}
@@ -797,7 +804,7 @@ public class Controller
 	{
 		if (!a.Pinned && Prefs.Apps.Count((Entry x) => x.Pinned) >= 20)
 		{
-			System.Windows.MessageBox.Show("最多固定 20 个入口。请先取消一个固定。", "GlassBoard");
+			System.Windows.MessageBox.Show("最多固定 20 个入口。请先取消一个固定。", "GlassBoard-Source");
 			return;
 		}
 		BoardEditState before = BeginBoardEdit();
@@ -1051,7 +1058,7 @@ public class Controller
 			}
 			catch (Exception ex)
 			{
-				System.Windows.MessageBox.Show(ex.Message, "GlassBoard");
+				System.Windows.MessageBox.Show(ex.Message, "GlassBoard-Source");
 			}
 		});
 		action("文件属性", () =>
@@ -1062,7 +1069,7 @@ public class Controller
 			}
 			catch (Exception ex)
 			{
-				System.Windows.MessageBox.Show(ex.Message, "GlassBoard");
+				System.Windows.MessageBox.Show(ex.Message, "GlassBoard-Source");
 			}
 		});
 		action("系统右键菜单（管理员运行等）", () =>
@@ -1216,7 +1223,7 @@ public class Controller
 				}
 				catch (Exception ex)
 				{
-					System.Windows.MessageBox.Show(ex.Message, "GlassBoard");
+					System.Windows.MessageBox.Show(ex.Message, "GlassBoard-Source");
 				}
 			});
 			add("文件属性", () =>
@@ -1227,7 +1234,7 @@ public class Controller
 				}
 				catch (Exception ex)
 				{
-					System.Windows.MessageBox.Show(ex.Message, "GlassBoard");
+					System.Windows.MessageBox.Show(ex.Message, "GlassBoard-Source");
 				}
 			});
 		}
@@ -1309,7 +1316,7 @@ public class Controller
 		}
 		catch (Exception ex)
 		{
-			System.Windows.MessageBox.Show("无法打开「" + entry.Name + "」。\n入口可能已移动或卸载。\n\n" + ex.Message, "GlassBoard");
+			System.Windows.MessageBox.Show("无法打开「" + entry.Name + "」。\n入口可能已移动或卸载。\n\n" + ex.Message, "GlassBoard-Source");
 		}
 	}
 
@@ -1541,7 +1548,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard · 个性化与控制 v0.9.20.0",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.0",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -2180,7 +2187,7 @@ public class Controller
 			});
 			stackPanel4.Children.Add(new TextBlock
 			{
-				Text = "可点击录制直接按组合键，保存后生效。右侧开关即时操作。\n隐藏开关：开启彻底隐藏任务栏，关闭显示；自动开关：Windows 任务栏自动隐藏（悬停底部边缘弹出）。\n两者互斥：开启其中一个会自动关闭另一个。注意：彻底隐藏任务栏窗口与 Wallpaper Engine 等动态壁纸可能冲突（表现为背景白屏），如遇白屏请改用自动隐藏。\n修改组合时下方会实时探测冲突（可用/被占用）。快捷键在 GlassBoard 后台运行时始终有效：关闭面板不影响，托盘「退出」才失效；组合被其他软件占用时会每 5 秒自动重试，对方释放后自动接管。",
+				Text = "可点击录制直接按组合键，保存后生效。右侧开关即时操作。\n隐藏开关：开启彻底隐藏任务栏，关闭显示；自动开关：Windows 任务栏自动隐藏（悬停底部边缘弹出）。\n两者互斥：开启其中一个会自动关闭另一个。注意：彻底隐藏任务栏窗口与 Wallpaper Engine 等动态壁纸可能冲突（表现为背景白屏），如遇白屏请改用自动隐藏。\n修改组合时下方会实时探测冲突（可用/被占用）。快捷键在 GlassBoard-Source 后台运行时始终有效：关闭面板不影响，托盘「退出」才失效；组合被其他软件占用时会每 5 秒自动重试，对方释放后自动接管。",
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				TextWrapping = TextWrapping.Wrap,
 				Margin = new Thickness(0.0, 8.0, 0.0, 18.0)
@@ -2705,7 +2712,7 @@ public class Controller
 			}
 			System.Windows.Controls.CheckBox startupCheck = new System.Windows.Controls.CheckBox
 			{
-				Content = "登录 Windows 后自动启动 GlassBoard",
+				Content = "登录 Windows 后自动启动 GlassBoard-Source",
 				IsChecked = value2,
 				Foreground = System.Windows.Media.Brushes.White,
 				Margin = new Thickness(0.0, 10.0, 0.0, 12.0)
@@ -2967,13 +2974,13 @@ public class Controller
 			Board.SetStatus(text);
 			if (Tray != null)
 			{
-				Tray.ShowBalloonTip(1500, "GlassBoard", text, ToolTipIcon.Info);
+				Tray.ShowBalloonTip(1500, "GlassBoard-Source", text, ToolTipIcon.Info);
 			}
 		}
 		catch (Exception ex2)
 		{
 			Store.Log(ex2);
-			System.Windows.MessageBox.Show("无法切换系统界面：" + ex2.Message, "GlassBoard");
+			System.Windows.MessageBox.Show("无法切换系统界面：" + ex2.Message, "GlassBoard-Source");
 		}
 	}
 
@@ -2998,7 +3005,7 @@ public class Controller
 		catch (Exception ex)
 		{
 			Store.Log(ex);
-			System.Windows.MessageBox.Show("退出前保存失败，软件仍保持运行，避免丢失当前内容。\n" + ex.Message, "GlassBoard");
+			System.Windows.MessageBox.Show("退出前保存失败，软件仍保持运行，避免丢失当前内容。\n" + ex.Message, "GlassBoard-Source");
 			return;
 		}
 		ShuttingDown = true;
@@ -3762,7 +3769,7 @@ public class Controller
 			string text = tint.Text.Trim();
 			if (text.Length > 0 && !Regex.IsMatch(text, "^#[a-fA-F0-9]{6}$"))
 			{
-				System.Windows.MessageBox.Show("请输入 #RRGGBB 格式的颜色，例如 #334A70。", "GlassBoard");
+				System.Windows.MessageBox.Show("请输入 #RRGGBB 格式的颜色，例如 #334A70。", "GlassBoard-Source");
 			}
 			else
 			{
@@ -3953,8 +3960,8 @@ public class Controller
 		{
 			Microsoft.Win32.SaveFileDialog saveFileDialog = new Microsoft.Win32.SaveFileDialog
 			{
-				FileName = "GlassBoard_完整备份_" + DateTime.Now.ToString("yyyyMMdd_HHmm") + ".gbbackup",
-				Filter = "GlassBoard 完整备份|*.gbbackup"
+				FileName = "GlassBoard-Source_完整备份_" + DateTime.Now.ToString("yyyyMMdd_HHmm") + ".gbbackup",
+				Filter = "GlassBoard-Source 完整备份|*.gbbackup"
 			};
 			if (saveFileDialog.ShowDialog(OwnerWindow) == true)
 			{
@@ -3986,7 +3993,7 @@ public class Controller
 		{
 			Microsoft.Win32.OpenFileDialog openFileDialog = new Microsoft.Win32.OpenFileDialog
 			{
-				Filter = "GlassBoard 完整备份|*.gbbackup"
+				Filter = "GlassBoard-Source 完整备份|*.gbbackup"
 			};
 			if (openFileDialog.ShowDialog(OwnerWindow) != true)
 			{
@@ -4082,7 +4089,7 @@ public class Controller
 	{
 		panel.Children.Add(new TextBlock
 		{
-			Text = "谢谢你的支持与陪伴，也谢谢每一次认真反馈。你的鼓励，会帮助我继续打磨 GlassBoard，让桌面更舒服、更好用。",
+			Text = "谢谢你的支持与陪伴，也谢谢每一次认真反馈。你的鼓励，会帮助我继续打磨 GlassBoard-Source，让桌面更舒服、更好用。",
 			TextWrapping = TextWrapping.Wrap,
 			Foreground = System.Windows.Media.Brushes.LightGray,
 			FontSize = 14.0,
@@ -4460,7 +4467,7 @@ public class Controller
 		EndBoardEdit(before, "自动分组");
 		Refresh();
 		int num2 = Prefs.Apps.Count((Entry a) => FeatureRules.GroupName(a) == "未分组");
-		System.Windows.MessageBox.Show(owner ?? OwnerWindow, "已自动分组 " + num + " 个软件。\n还有 " + num2 + " 个未识别，可手动移动到分组。已有手动分组已保留。", "GlassBoard");
+		System.Windows.MessageBox.Show(owner ?? OwnerWindow, "已自动分组 " + num + " 个软件。\n还有 " + num2 + " 个未识别，可手动移动到分组。已有手动分组已保留。", "GlassBoard-Source");
 	}
 
 	public void ManageGroups(Window owner = null)
@@ -4541,7 +4548,7 @@ public class Controller
 			}));
 			wrapPanel.Children.Add(FeatureUi.Button("删除分组", () =>
 			{
-				if (list.SelectedItem is string text && System.Windows.MessageBox.Show(w, "删除分组「" + text + "」？入口保留并移到未分组。", "GlassBoard", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+				if (list.SelectedItem is string text && System.Windows.MessageBox.Show(w, "删除分组「" + text + "」？入口保留并移到未分组。", "GlassBoard-Source", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
 				{
 					BoardEditState before = BeginBoardEdit();
 					FeatureRules.DeleteGroup(Prefs, text);
@@ -4870,7 +4877,7 @@ public class Controller
 				{
 					Microsoft.Win32.SaveFileDialog saveFileDialog = new Microsoft.Win32.SaveFileDialog
 					{
-						FileName = "GlassBoard_外观方案.json",
+						FileName = "GlassBoard-Source_外观方案.json",
 						Filter = "外观方案|*.json"
 					};
 					if (saveFileDialog.ShowDialog(w) == true)
@@ -4901,7 +4908,7 @@ public class Controller
 			}));
 			wrapPanel.Children.Add(FeatureUi.Button("删除方案", () =>
 			{
-				if (list.SelectedItem is AppearanceScheme key && System.Windows.MessageBox.Show(w, "删除保存的方案？当前外观保持。", "GlassBoard", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+				if (list.SelectedItem is AppearanceScheme key && System.Windows.MessageBox.Show(w, "删除保存的方案？当前外观保持。", "GlassBoard-Source", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
 				{
 					File.Delete(files[key]);
 					reload();
