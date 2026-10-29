@@ -50,6 +50,8 @@ public static class OnlineUpdate
 		public string Name;
 		[DataMember(Name = "html_url")]
 		public string HtmlUrl;
+		[DataMember(Name = "body")]
+		public string Body;
 		[DataMember(Name = "published_at")]
 		public string PublishedAt;
 		[DataMember(Name = "assets")]
@@ -166,6 +168,40 @@ public static class OnlineUpdate
 		return info == null ? "" : (info.TagName ?? "");
 	}
 
+	// 把 Release 说明（GitHub release body）整理成可显示的纯文本摘要，超长按换行截断
+	public static string ReleaseNotesSummary(ReleaseInfo info, int max)
+	{
+		try
+		{
+			string text = (info == null) ? "" : (info.Body ?? "");
+			if (string.IsNullOrWhiteSpace(text))
+			{
+				return "";
+			}
+			text = text.Replace("**", "");
+			while (text.Contains("  "))
+			{
+				text = text.Replace("  ", " ");
+			}
+			text = text.Trim();
+			if (text.Length > max)
+			{
+				text = text.Substring(0, max);
+				int cut = text.LastIndexOf('\n');
+				if (cut > max / 2)
+				{
+					text = text.Substring(0, cut);
+				}
+				text = text.TrimEnd() + " …";
+			}
+			return text;
+		}
+		catch
+		{
+			return "";
+		}
+	}
+
 	// 同版本号但远端构建更新（例如同 tag 重新打包了新修复）的判定：
 	// 用 Release 时间戳与本地 exe 文件时间比较（2 分钟余量），弥补纯版本号比较的盲区。
 	public static bool RemoteBuildNewer(ReleaseInfo info, ReleaseAsset asset)
@@ -192,28 +228,35 @@ public static class OnlineUpdate
 		}
 	}
 
-	// 返回「有可用更新时的版本号」，无更新返回空串：版本更高，或同版本但远端构建更新。
-	public static async Task<string> LatestAvailableTagAsync()
+	// 返回「有可用更新时的版本信息」，无更新返回 null：版本更高，或同版本但远端构建更新。
+	public static async Task<ReleaseInfo> LatestAvailableAsync()
 	{
 		ReleaseInfo info = await FetchLatestAsync();
 		if (info == null || string.IsNullOrEmpty(info.TagName))
 		{
-			return "";
+			return null;
 		}
 		int cmp = CompareVersion(info.TagName, CurrentVersion());
 		if (cmp > 0)
 		{
-			return info.TagName;
+			return info;
 		}
 		if (cmp == 0)
 		{
 			ReleaseAsset asset = info.Assets == null ? null : info.Assets.FirstOrDefault((ReleaseAsset a) => !string.IsNullOrEmpty(a.DownloadUrl) && a.DownloadUrl.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
 			if (RemoteBuildNewer(info, asset))
 			{
-				return info.TagName;
+				return info;
 			}
 		}
-		return "";
+		return null;
+	}
+
+	// 返回「有可用更新时的版本号」，无更新返回空串
+	public static async Task<string> LatestAvailableTagAsync()
+	{
+		ReleaseInfo info = await LatestAvailableAsync();
+		return info == null ? "" : (info.TagName ?? "");
 	}
 
 	// WPF 的 MessageBox.Show(owner=null, …) 会抛 ArgumentNullException("window")；
@@ -260,9 +303,11 @@ public static class OnlineUpdate
 				return;
 			}
 			string tag = info.TagName.TrimStart('v', 'V');
+			string notes = ReleaseNotesSummary(info, 400);
+			string noteBlock = string.IsNullOrEmpty(notes) ? "" : ("\n\n更新内容：\n" + notes);
 			string prompt = (cmp > 0)
-				? ("发现新版本 v" + tag + "\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？")
-				: ("发现 v" + tag + " 的新构建（同版本号，包含最新修复）。\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？");
+				? ("发现新版本 v" + tag + noteBlock + "\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？")
+				: ("发现 v" + tag + " 的新构建（同版本号，包含最新修复）。" + noteBlock + "\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？");
 			if (ShowDialog(owner, prompt, "GlassBoard-Source 在线更新", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
 			{
 				Set("已取消更新，当前版本 v" + current + "。");
