@@ -19,12 +19,6 @@ public class Entry
 	public bool IsFolder;
 
 	[DataMember(EmitDefaultValue = false)]
-	public string Group;
-
-	[DataMember(EmitDefaultValue = false)]
-	public List<string> ExtraGroups;
-
-	[DataMember(EmitDefaultValue = false)]
 	public string IconPath;
 
 	[DataMember(EmitDefaultValue = false)]

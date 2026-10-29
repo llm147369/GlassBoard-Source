@@ -292,8 +292,18 @@ public static class AudioCore
 				return list;
 			}
 			IntPtr vt = Marshal.ReadIntPtr(collection);
-			CollectionGetCount getCount = (CollectionGetCount)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, 3 * IntPtr.Size), typeof(CollectionGetCount));
-			CollectionItem item = (CollectionItem)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, 4 * IntPtr.Size), typeof(CollectionItem));
+			if (vt == IntPtr.Zero)
+			{
+				return list;
+			}
+			IntPtr getCountPtr = Marshal.ReadIntPtr(vt, 3 * IntPtr.Size);
+			IntPtr itemPtr = Marshal.ReadIntPtr(vt, 4 * IntPtr.Size);
+			if (getCountPtr == IntPtr.Zero || itemPtr == IntPtr.Zero)
+			{
+				return list;
+			}
+			CollectionGetCount getCount = (CollectionGetCount)Marshal.GetDelegateForFunctionPointer(getCountPtr, typeof(CollectionGetCount));
+			CollectionItem item = (CollectionItem)Marshal.GetDelegateForFunctionPointer(itemPtr, typeof(CollectionItem));
 			hr = getCount(collection, out uint count);
 			if (hr < 0)
 			{
@@ -324,11 +334,15 @@ public static class AudioCore
 						if (hr >= 0 && storeRaw != IntPtr.Zero)
 						{
 							IntPtr svt = Marshal.ReadIntPtr(storeRaw);
-							StoreGetValue getValue = (StoreGetValue)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(svt, 5 * IntPtr.Size), typeof(StoreGetValue));
-							name = ReadStoreString(getValue, storeRaw, PKEY_Device_FriendlyName);
-							if (string.IsNullOrWhiteSpace(name))
+							IntPtr getValuePtr = (svt == IntPtr.Zero) ? IntPtr.Zero : Marshal.ReadIntPtr(svt, 5 * IntPtr.Size);
+							if (getValuePtr != IntPtr.Zero)
 							{
-								name = ReadStoreString(getValue, storeRaw, PKEY_Device_DeviceDesc);
+								StoreGetValue getValue = (StoreGetValue)Marshal.GetDelegateForFunctionPointer(getValuePtr, typeof(StoreGetValue));
+								name = ReadStoreString(getValue, storeRaw, PKEY_Device_FriendlyName);
+								if (string.IsNullOrWhiteSpace(name))
+								{
+									name = ReadStoreString(getValue, storeRaw, PKEY_Device_DeviceDesc);
+								}
 							}
 						}
 					}
@@ -359,6 +373,10 @@ public static class AudioCore
 
 	private static string ReadStoreString(StoreGetValue getValue, IntPtr store, PROPERTYKEY key)
 	{
+		if (getValue == null || store == IntPtr.Zero)
+		{
+			return null;
+		}
 		int hr = getValue(store, ref key, out PROPVARIANT value);
 		if (hr < 0)
 		{

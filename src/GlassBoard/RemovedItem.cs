@@ -7,8 +7,4 @@ public class RemovedItem
 	public int Index;
 
 	public bool WasRemoved;
-
-	public bool MembershipOnly;
-
-	public string RemovedGroup;
 }

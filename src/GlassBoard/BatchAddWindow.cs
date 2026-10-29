@@ -20,8 +20,6 @@ public class BatchAddWindow : Window
 {
 	private readonly Controller C;
 
-	private readonly string targetGroup;
-
 	private readonly CancellationTokenSource cancellation = new CancellationTokenSource();
 
 	private readonly List<AddCandidate> candidates = new List<AddCandidate>();
@@ -52,8 +50,7 @@ public class BatchAddWindow : Window
 	public BatchAddWindow(Controller controller)
 	{
 		C = controller;
-		targetGroup = (C.Board.IsVisible ? C.Board.CurrentGroup : "全部");
-		Title = "GlassBoard-Source · 添加到 " + targetGroup;
+		Title = "GlassBoard-Source · 批量添加";
 		Width = Math.Min(800.0, SystemParameters.WorkArea.Width - 40.0);
 		Height = Math.Min(670.0, SystemParameters.WorkArea.Height - 50.0);
 		WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -84,7 +81,7 @@ public class BatchAddWindow : Window
 		});
 		stackPanel.Children.Add(new TextBlock
 		{
-			Text = "添加位置：" + targetGroup + " · 选择来源并勾选，已有入口会自动去重。也可以直接把文件或文件夹拖进这个窗口。",
+			Text = "选择来源并勾选，已有入口会自动去重。也可以直接把文件或文件夹拖进这个窗口。",
 			Foreground = Brushes.LightGray,
 			Margin = new Thickness(0.0, 0.0, 0.0, 12.0)
 		});
@@ -211,10 +208,10 @@ public class BatchAddWindow : Window
 			string[] paths = (from x in candidates
 				where x.Selected
 				select x.Path).ToArray();
-			int num = C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, targetGroup));
-			C.Add(paths, manual: true, targetGroup);
+			int num = C.Prefs.Apps.Count;
+			C.Add(paths, manual: true);
 			C.Board.ClearSearch();
-			int added = C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, targetGroup)) - num;
+			int added = C.Prefs.Apps.Count - num;
 			C.Board.SetStatus("已添加 " + added + " 个入口");
 			// 已添加的从列表移除，窗口保留，可继续添加其他来源
 			candidates.RemoveAll((AddCandidate c) => c.Selected);
@@ -334,7 +331,7 @@ public class BatchAddWindow : Window
 	private void Merge(IEnumerable<string> paths)
 	{
 		HashSet<string> hashSet = new HashSet<string>(candidates.Select((AddCandidate c) => c.Path), StringComparer.OrdinalIgnoreCase);
-		foreach (string item in EntryRules.Candidates(paths, C.Prefs.Apps.Where((Entry a) => targetGroup == "全部" || FeatureRules.InGroup(a, targetGroup))))
+		foreach (string item in EntryRules.Candidates(paths, C.Prefs.Apps))
 		{
 			if (!hashSet.Add(item))
 			{

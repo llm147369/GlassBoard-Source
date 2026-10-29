@@ -11,7 +11,7 @@ public static class EntryRecoveryRules
 		return EntryRules.NormalizeEntries(historical.Select(FeatureRules.Copy)).Where((Entry a) =>
 		{
 			Entry current = prefs.Apps.FirstOrDefault((Entry x) => string.Equals(x.Path, a.Path, StringComparison.OrdinalIgnoreCase));
-			return current == null || FeatureRules.Memberships(a).Any((string g) => !FeatureRules.InGroup(current, g));
+			return current == null;
 		}).ToList();
 	}
 
@@ -25,13 +25,6 @@ public static class EntryRecoveryRules
 			{
 				entry = FeatureRules.Copy(item);
 				prefs.Apps.Add(entry);
-			}
-			else
-			{
-				foreach (string item2 in FeatureRules.Memberships(item))
-				{
-					FeatureRules.AddMembership(entry, item2);
-				}
 			}
 			RemovalRules.Forget(prefs, entry);
 			num++;

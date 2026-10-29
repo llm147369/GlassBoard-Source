@@ -51,6 +51,9 @@ public class BoardWindow : GlassWindow
 
 	private Entry dragEntry;
 
+	// 搜索栏宿主边框：设置里「隐藏大面板搜索栏」开关控制其可见性
+	private FrameworkElement searchHost;
+
 	private bool editing;
 
 	private readonly HashSet<string> selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -85,17 +88,7 @@ public class BoardWindow : GlassWindow
 
 	private Button editSelection;
 
-	private Button moveSelected;
-
 	private ContextMenu iconMenu;
-
-	private ComboBox groups;
-
-	private ComboBox moveGroup;
-
-	private string currentGroup = "全部";
-
-	private bool syncingGroups;
 
 	private bool iconSizeSync;
 
@@ -103,16 +96,12 @@ public class BoardWindow : GlassWindow
 
 	private TextBlock iconSizeText;
 
-	private Button addExisting;
-
 	private Thumb moveGrip;
 
 	private Thumb resizeGrip;
 
 	private int visibilitySerial;
 	private DispatcherTimer trimTimer;
-
-	private WrapPanel folderBar;
 
 	private readonly DispatcherTimer idleRelease = new DispatcherTimer
 	{
@@ -131,15 +120,6 @@ public class BoardWindow : GlassWindow
 
 	private bool activeDrag;
 
-	private string hoverGroup;
-
-	private string folderSignature = "";
-
-	private readonly DispatcherTimer hoverTimer = new DispatcherTimer
-	{
-		Interval = TimeSpan.FromMilliseconds(700.0)
-	};
-
 	private readonly DispatcherTimer sizeRefresh = new DispatcherTimer(DispatcherPriority.Background)
 	{
 		Interval = TimeSpan.FromMilliseconds(100.0)
@@ -150,20 +130,6 @@ public class BoardWindow : GlassWindow
 	private bool refreshingSize;
 
 	private bool iconsDirty = true;
-
-	private bool foldersVisible
-	{
-		get
-		{
-			if (!C.Prefs.BoardHideGroups)
-			{
-				return !C.Prefs.BoardHideFolders;
-			}
-			return false;
-		}
-	}
-
-	public string CurrentGroup => currentGroup;
 
 	internal bool HasView => layout != null;
 
@@ -391,12 +357,8 @@ public class BoardWindow : GlassWindow
 	private void BuildForSize()
 	{
 		string text = ((C.Prefs.BoardHideSearch || Search == null) ? "" : Search.Text);
-		if (C.Prefs.BoardHideGroups)
-		{
-			currentGroup = "全部";
-		}
 		columns = BoardIconRules.Columns(Width - 104.0, C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
-		int num = BoardIconRules.Rows(Height - (double)(C.Prefs.BoardHideGroups ? 180 : 258), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
+		int num = BoardIconRules.Rows(Height - 180.0, C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
 		capacity = columns * num;
 		Build(num);
 		Search.Text = text;
@@ -569,11 +531,10 @@ public class BoardWindow : GlassWindow
 		PageNav = null;
 		Pager = (Status = (Empty = null));
 		layout = null;
-		bulkBar = (folderBar = null);
+		bulkBar = null;
 		bulkRow = null;
 		selectionCount = (iconSizeText = null);
-		selectAll = (clearSelection = (deleteSelected = (undoRemoval = (editSelection = (moveSelected = (addExisting = null))))));
-		groups = (moveGroup = null);
+		selectAll = (clearSelection = (deleteSelected = (undoRemoval = (editSelection = null))));
 		boardIconSlider = null;
 		dragEntry = null;
 		return true;
@@ -696,10 +657,6 @@ public class BoardWindow : GlassWindow
 		});
 		ContentGrid.Children.Add(layout);
 		Grid grid = new Grid();
-		grid.ColumnDefinitions.Add(new ColumnDefinition
-		{
-			Width = new GridLength(320.0)
-		});
 		grid.ColumnDefinitions.Add(new ColumnDefinition());
 		grid.ColumnDefinitions.Add(new ColumnDefinition
 		{
@@ -801,14 +758,16 @@ public class BoardWindow : GlassWindow
 			RunSearch();
 		};
 		grid2.Children.Add(Search);
-		Grid.SetColumn(border, 1);
+		searchHost = border;
+		searchHost.Visibility = (C.Prefs.BoardHideSearch ? Visibility.Collapsed : Visibility.Visible);
+		Grid.SetColumn(border, 0);
 		grid.Children.Add(border);
 		BuildSearchPopup(border);
 		Button element = Button("+ 批量添加", (object s, RoutedEventArgs e) =>
 		{
 			C.Choose();
 		}, 106.0);
-		Grid.SetColumn(element, 2);
+		Grid.SetColumn(element, 1);
 		grid.Children.Add(element);
 		editSelection = Button(editing ? "完成" : "多选", null, 68.0);
 		editSelection.ToolTip = "跨页勾选，一次移除多个入口";
@@ -818,7 +777,7 @@ public class BoardWindow : GlassWindow
 			Search.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
 			Render();
 		};
-		Grid.SetColumn(editSelection, 3);
+		Grid.SetColumn(editSelection, 2);
 		grid.Children.Add(editSelection);
 		Button button = Button("⚙", (object s, RoutedEventArgs e) =>
 		{
@@ -826,53 +785,27 @@ public class BoardWindow : GlassWindow
 		}, 30.0);
 		button.Content = CustomIcons.Settings(18.0, TextBrush);
 		button.ToolTip = "外观、组件与快捷键";
-		Grid.SetColumn(button, 4);
+		Grid.SetColumn(button, 3);
 		grid.Children.Add(button);
 		Button button2 = Button("···", (object s, RoutedEventArgs e) =>
 		{
 			MoreMenu();
 		}, 32.0);
 		button2.ToolTip = "更多与显示选项";
-		Grid.SetColumn(button2, 5);
+		Grid.SetColumn(button2, 4);
 		grid.Children.Add(button2);
 		Button element2 = Button("×", (object s, RoutedEventArgs e) =>
 		{
 			CollapseSmooth();
 		}, 32.0);
-		Grid.SetColumn(element2, 6);
+		Grid.SetColumn(element2, 5);
 		grid.Children.Add(element2);
 		WrapPanel wrapPanel = new WrapPanel
 		{
-			VerticalAlignment = VerticalAlignment.Center,
-			Visibility = (C.Prefs.BoardHideGroups ? Visibility.Collapsed : Visibility.Visible)
+			VerticalAlignment = VerticalAlignment.Center
 		};
 		Grid.SetRow(wrapPanel, 1);
 		layout.Children.Add(wrapPanel);
-		groups = new ComboBox
-		{
-			Width = 145.0,
-			Height = 30.0,
-			Margin = new Thickness(8.0, 0.0, 10.0, 0.0)
-		};
-		wrapPanel.Children.Add(groups);
-		groups.SelectionChanged += (object s, SelectionChangedEventArgs e) =>
-		{
-			if (!syncingGroups)
-			{
-				string text = (groups.SelectedItem as string) ?? "全部";
-				if (text != currentGroup)
-				{
-					selected.Clear();
-				}
-				currentGroup = text;
-				if (addExisting != null)
-				{
-					addExisting.IsEnabled = currentGroup != "全部";
-				}
-				page = 0;
-				Render(animate: true);
-			}
-		};
 		StackPanel stackPanel = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
@@ -909,11 +842,6 @@ public class BoardWindow : GlassWindow
 		};
 		stackPanel.Children.Add(boardIconSlider);
 		wrapPanel.Children.Add(stackPanel);
-		addExisting = Button("添加已有图标", (object s, RoutedEventArgs e) =>
-		{
-			C.AddExistingToGroup(currentGroup);
-		}, 112.0);
-		wrapPanel.Children.Add(addExisting);
 		wrapPanel.Children.Add(Button("添加文件夹", (object s, RoutedEventArgs e) =>
 		{
 			C.AddFolder();
@@ -959,37 +887,12 @@ public class BoardWindow : GlassWindow
 			Margin = new Thickness(10.0, 0.0, 0.0, 0.0)
 		};
 		bulkBar.Children.Add(selectionCount);
-		moveGroup = new ComboBox
-		{
-			Width = 112.0,
-			Height = 30.0,
-			Margin = new Thickness(12.0, 0.0, 4.0, 0.0),
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		bulkBar.Children.Add(moveGroup);
-		moveSelected = Button("移动", (object s, RoutedEventArgs e) =>
-		{
-			if (moveGroup.SelectedItem is string to && selected.Count != 0)
-			{
-				C.TransferEntries(selected.ToArray(), currentGroup, to);
-			}
-		}, 100.0);
-		bulkBar.Children.Add(moveSelected);
-		SyncGroups();
 		DockPanel dockPanel = new DockPanel
 		{
 			Margin = new Thickness(0.0, 10.0, 0.0, 4.0)
 		};
 		Grid.SetRow(dockPanel, 3);
 		layout.Children.Add(dockPanel);
-		folderSignature = "";
-		folderBar = new WrapPanel
-		{
-			Margin = new Thickness(0.0, 0.0, 0.0, 8.0),
-			Visibility = ((!foldersVisible) ? Visibility.Collapsed : Visibility.Visible)
-		};
-		DockPanel.SetDock(folderBar, Dock.Top);
-		dockPanel.Children.Add(folderBar);
 		Grid grid3 = new Grid();
 		dockPanel.Children.Add(grid3);
 		Tiles = new UniformGrid
@@ -1035,7 +938,7 @@ public class BoardWindow : GlassWindow
 		};
 		Tiles.DragLeave += (object s, DragEventArgs e) =>
 		{
-			// 离开网格（如移向分组栏）只收起指示线；让位布局保留，回到网格继续拖
+			// 离开网格只收起指示线；让位布局保留，回到网格继续拖
 			HideInsertMarker();
 		};
 		insertMarker = new Border
@@ -1236,42 +1139,9 @@ public class BoardWindow : GlassWindow
 		return entry;
 	}
 
-	public void SyncGroups()
-	{
-		if (addExisting != null)
-		{
-			addExisting.IsEnabled = currentGroup != "全部";
-		}
-		if (groups != null)
-		{
-			syncingGroups = true;
-			List<string> list = new string[2] { "全部", "未分组" }.Concat(C.Prefs.Groups).ToList();
-			groups.ItemsSource = list;
-			if (!list.Contains(currentGroup))
-			{
-				currentGroup = "全部";
-				selected.Clear();
-				page = 0;
-			}
-			groups.SelectedItem = currentGroup;
-			if (moveGroup != null)
-			{
-				string text = moveGroup.SelectedItem as string;
-				moveGroup.ItemsSource = list.Skip(1).ToList();
-				moveGroup.SelectedItem = (list.Contains(text) ? text : "未分组");
-			}
-			syncingGroups = false;
-			if (addExisting != null)
-			{
-				addExisting.IsEnabled = currentGroup != "全部";
-			}
-		}
-	}
-
 	private List<Entry> Filtered()
 	{
-		string q = "";
-		return C.Prefs.Apps.Where((Entry a) => (C.Prefs.BoardHideGroups || currentGroup == "全部" || FeatureRules.InGroup(a, currentGroup)) && LayoutRules.Matches(a.Name, q)).ToList();
+		return C.Prefs.Apps.ToList();
 	}
 
 	private void BuildSearchPopup(Border anchor)
@@ -1616,9 +1486,6 @@ public class BoardWindow : GlassWindow
 		bool flag = editing;
 		bulkBar.Visibility = ((!flag) ? Visibility.Collapsed : Visibility.Visible);
 		bulkRow.Height = (flag ? GridLength.Auto : new GridLength(0.0));
-		moveGroup.IsEnabled = editing;
-		moveSelected.Content = ((currentGroup == "全部") ? "添加到分组" : "移动");
-		moveSelected.IsEnabled = editing && selected.Count > 0;
 		selectAll.IsEnabled = editing;
 		clearSelection.IsEnabled = editing && selected.Count > 0;
 		deleteSelected.IsEnabled = editing && selected.Count > 0;
@@ -1638,7 +1505,6 @@ public class BoardWindow : GlassWindow
 			return;
 		}
 		UpdateSelectionBar();
-		RefreshFolders();
 		Tiles.Children.Clear();
 		List<Entry> list = Filtered();
 		int num = LayoutRules.Pages(list.Count, capacity);
@@ -1993,7 +1859,7 @@ public class BoardWindow : GlassWindow
 			}
 			if (tile.ContextMenu == null)
 			{
-				tile.ContextMenu = C.Menu(a, currentGroup, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
+				tile.ContextMenu = C.Menu(a, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
 			}
 		};
 		Grid grid = new Grid();
@@ -2392,117 +2258,11 @@ public class BoardWindow : GlassWindow
 		livePreview = true;
 	}
 
-	private void OpenGroup(string name)
-	{
-		FinishSelection();
-		currentGroup = name;
-		page = 0;
-		ClearSearch();
-		SyncGroups();
-		Render(animate: true);
-	}
-
-	private void RefreshFolders()
-	{
-		if (folderBar == null || (activeDrag && folderBar.Children.Count > 0))
-		{
-			return;
-		}
-		string text = currentGroup + "/" + LightTheme + "/" + string.Join("|", from g in new string[2] { "全部", "未分组" }.Concat(C.Prefs.Groups)
-			select g + ":" + C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, g)));
-		if (folderSignature == text && folderBar.Children.Count > 0)
-		{
-			return;
-		}
-		folderSignature = text;
-		folderBar.Children.Clear();
-		foreach (string item in new string[2] { "全部", "未分组" }.Concat(C.Prefs.Groups))
-		{
-			string name = item;
-			int num = ((name == "全部") ? C.Prefs.Apps.Count : C.Prefs.Apps.Count((Entry a) => FeatureRules.InGroup(a, name)));
-			SolidColorBrush normal = ((name == currentGroup) ? new SolidColorBrush(Color.FromArgb(55, 130, 180, byte.MaxValue)) : new SolidColorBrush(Color.FromArgb(22, byte.MaxValue, byte.MaxValue, byte.MaxValue)));
-			Border box = new Border
-			{
-				CornerRadius = new CornerRadius(12.0),
-				Background = normal,
-				Padding = new Thickness(10.0, 6.0, 10.0, 6.0),
-				Margin = new Thickness(0.0, 0.0, 6.0, 6.0),
-				Cursor = Cursors.Hand,
-				AllowDrop = true,
-				ToolTip = ((name == "全部") ? "查看全部入口" : "点击打开；将一个或多个入口拖到这里分组")
-			};
-			StackPanel stackPanel = new StackPanel
-			{
-				Orientation = Orientation.Horizontal
-			};
-			FrameworkElement frameworkElement = Polish.Icon((name == "全部") ? "grid" : "folder", TextBrush, 18.0);
-			frameworkElement.Margin = new Thickness(0.0, 0.0, 6.0, 0.0);
-			stackPanel.Children.Add(frameworkElement);
-			stackPanel.Children.Add(new TextBlock
-			{
-				Text = name + "  " + num,
-				Foreground = TextBrush,
-				FontSize = 12.0,
-				VerticalAlignment = VerticalAlignment.Center
-			});
-			box.Child = stackPanel;
-			box.MouseLeftButtonUp += (object sender, MouseButtonEventArgs e) =>
-			{
-				OpenGroup(name);
-				e.Handled = true;
-			};
-			box.DragEnter += (object sender, DragEventArgs e) =>
-			{
-				if (DraggedEntries(e.Data).Length != 0 || e.Data.GetDataPresent(DataFormats.FileDrop))
-				{
-					BeginGroupHover(name);
-					box.Background = new SolidColorBrush(Color.FromArgb(90, 100, 160, 240));
-					e.Effects = GroupDragEffect(e.Data, name);
-					e.Handled = true;
-				}
-			};
-			box.DragOver += (object sender, DragEventArgs e) =>
-			{
-				if (DraggedEntries(e.Data).Length != 0 || e.Data.GetDataPresent(DataFormats.FileDrop))
-				{
-					BeginGroupHover(name);
-				}
-				e.Effects = GroupDragEffect(e.Data, name);
-				e.Handled = true;
-			};
-			box.DragLeave += (object sender, DragEventArgs e) =>
-			{
-				StopGroupHover(name);
-				box.Background = normal;
-			};
-			box.Drop += (object sender, DragEventArgs e) =>
-			{
-				e.Handled = true;
-				if (!(name == "全部"))
-				{
-					string[] array = DraggedEntries(e.Data);
-					if (array.Length != 0)
-					{
-						string text2 = (e.Data.GetDataPresent("GlassBoard.SourceGroup") ? ((string)e.Data.GetData("GlassBoard.SourceGroup")) : currentGroup);
-						C.TransferEntries(array, text2, name);
-					}
-					else if (e.Data.GetDataPresent(DataFormats.FileDrop))
-					{
-						C.Add((string[])e.Data.GetData(DataFormats.FileDrop), manual: true, name);
-						OpenGroup(name);
-						SetStatus("已添加到「" + name + "」");
-					}
-				}
-			};
-			folderBar.Children.Add(box);
-		}
-	}
-
 	private void ExternalDrop(object s, DragEventArgs e)
 	{
 		if (e.Data.GetDataPresent(DataFormats.FileDrop))
 		{
-			C.Add((string[])e.Data.GetData(DataFormats.FileDrop), manual: true, currentGroup);
+			C.Add((string[])e.Data.GetData(DataFormats.FileDrop), manual: true);
 			ClearSearch();
 			e.Handled = true;
 		}
@@ -2567,14 +2327,6 @@ public class BoardWindow : GlassWindow
 			Visibility = Visibility.Collapsed
 		};
 		Root.Children.Add(dragPreview);
-		hoverTimer.Tick += (object s, EventArgs e) =>
-		{
-			hoverTimer.Stop();
-			if (activeDrag && hoverGroup != null && hoverGroup != currentGroup)
-			{
-				OpenGroup(hoverGroup);
-			}
-		};
 		PreviewDragOver += (object s, DragEventArgs e) =>
 		{
 			string[] array = DraggedEntries(e.Data);
@@ -2619,40 +2371,14 @@ public class BoardWindow : GlassWindow
 				}
 			}));
 		};
-		Closed += (object s, EventArgs e) =>
-		{
-			hoverTimer.Stop();
-		};
-	}
-
-	private void BeginGroupHover(string name)
-	{
-		if (!(hoverGroup == name))
-		{
-			hoverGroup = name;
-			hoverTimer.Stop();
-			hoverTimer.Start();
-		}
-	}
-
-	private void StopGroupHover(string name)
-	{
-		if (name == null || hoverGroup == name)
-		{
-			hoverGroup = null;
-			hoverTimer.Stop();
-		}
 	}
 
 	private void EndDragPreview()
 	{
 		activeDrag = false;
-		hoverTimer.Stop();
-		hoverGroup = null;
 		dragPreview.Visibility = Visibility.Collapsed;
 		dragPreviewText.Text = "";
 		dragPreviewIcon.Source = null;
-		folderSignature = "";
 	}
 
 	private void StartEntryDrag(FrameworkElement tile, Entry entry)
@@ -2661,7 +2387,6 @@ public class BoardWindow : GlassWindow
 		DataObject dataObject = new DataObject();
 		dataObject.SetData("GlassBoard.Entry", entry.Path);
 		dataObject.SetData("GlassBoard.Entries", array);
-		dataObject.SetData("GlassBoard.SourceGroup", currentGroup);
 		dragPreviewText.Text = ((array.Length == 1) ? entry.Name : (entry.Name + " 等 " + array.Length + " 个"));
 		try
 		{
@@ -2688,36 +2413,19 @@ public class BoardWindow : GlassWindow
 		}
 	}
 
-	private DragDropEffects GroupDragEffect(IDataObject data, string name)
-	{
-		if (name == "全部")
-		{
-			return DragDropEffects.None;
-		}
-		if (DraggedEntries(data).Length != 0)
-		{
-			if (!data.GetDataPresent("GlassBoard.SourceGroup") || !((string)data.GetData("GlassBoard.SourceGroup") == "全部"))
-			{
-				return DragDropEffects.Move;
-			}
-			return DragDropEffects.Copy;
-		}
-		if (!data.GetDataPresent(DataFormats.FileDrop))
-		{
-			return DragDropEffects.None;
-		}
-		return DragDropEffects.Copy;
-	}
-
 	public void ApplyDisplayOptions()
 	{
-		if (C.Prefs.BoardHideGroups)
-		{
-			currentGroup = "全部";
-		}
 		if (C.Prefs.BoardHideSearch && Search != null)
 		{
 			Search.Clear();
+			if (searchPopup != null)
+			{
+				searchPopup.IsOpen = false;
+			}
+		}
+		if (searchHost != null)
+		{
+			searchHost.Visibility = (C.Prefs.BoardHideSearch ? Visibility.Collapsed : Visibility.Visible);
 		}
 		if (IsVisible)
 		{
@@ -2773,26 +2481,6 @@ public class BoardWindow : GlassWindow
 		{
 			IconSettings();
 		}, arg3: true);
-		action(C.Prefs.BoardHideGroups ? "显示分组栏" : "隐藏分组栏 · 显示全部图标", () =>
-		{
-			C.Prefs.BoardHideGroups = !C.Prefs.BoardHideGroups;
-			C.Save();
-			ApplyDisplayOptions();
-		}, arg3: true);
-		action(foldersVisible ? "收起分组文件夹" : "展开分组文件夹", () =>
-		{
-			C.Prefs.BoardHideFolders = !C.Prefs.BoardHideFolders;
-			C.Save();
-			ApplyDisplayOptions();
-		}, !C.Prefs.BoardHideGroups);
-		action("自动分组", () =>
-		{
-			C.AutoGroupApps();
-		}, arg3: true);
-		action("管理分组", () =>
-		{
-			C.ManageGroups();
-		}, arg3: true);
 		action("工作区", () =>
 		{
 			C.ManageWorkspaces();
@@ -2841,7 +2529,7 @@ public class BoardWindow : GlassWindow
 		try
 		{
 			int num = BoardIconRules.Columns((Tiles.ActualWidth > 0.0) ? Tiles.ActualWidth : (Width - 104.0), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
-			int num2 = BoardIconRules.Rows((Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight : (Height - (double)(C.Prefs.BoardHideGroups ? 180 : 258)), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
+			int num2 = BoardIconRules.Rows((Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight : (Height - 180.0), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
 			if (iconsDirty || columns != num || Tiles.Rows != num2)
 			{
 				iconsDirty = false;

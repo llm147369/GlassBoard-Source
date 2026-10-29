@@ -3,11 +3,8 @@
     "AutoCheckUpdates": true,
     "AutoDesktopImport": true,
     "AutoGameMode": false,
-    "AutoGrouping": true,
     "AutoHideTaskbar": false,
     "BoardDismissOnDeactivate": true,
-    "BoardHideFolders": false,
-    "BoardHideGroups": true,
     "BoardHideSearch": true,
     "BoardIconGap": 12,
     "BoardIconSize": 54,
@@ -93,7 +90,6 @@
         "Radius": 20,
         "Unify": true
     },
-    "Groups": [],
     "HideDesktopIcons": false,
     "HideTaskbar": false,
     "Hotkeys": [
@@ -142,7 +138,6 @@
     ],
     "Imported": false,
     "LastUpdateCheckUtc": 0,
-    "LearnedGroups": [],
     "Light": false,
     "OpacityPercent": 10,
     "PanelSize": 1,

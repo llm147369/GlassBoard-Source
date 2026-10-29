@@ -59,9 +59,6 @@ public class Preferences
 	public DockOptions Dock = new DockOptions();
 
 	[DataMember(EmitDefaultValue = false)]
-	public List<string> Groups = new List<string> { "创作", "办公", "游戏" };
-
-	[DataMember(EmitDefaultValue = false)]
 	public List<Workspace> Workspaces = new List<Workspace>();
 
 	[DataMember(EmitDefaultValue = false)]
@@ -69,9 +66,6 @@ public class Preferences
 
 	[DataMember(EmitDefaultValue = false)]
 	public WidgetOptions Widgets = new WidgetOptions();
-
-	[DataMember]
-	public bool AutoGrouping = true;
 
 	[DataMember]
 	public bool AutoCheckUpdates;
@@ -88,12 +82,6 @@ public class Preferences
 
 	[DataMember]
 	public bool BoardHideSearch;
-
-	[DataMember]
-	public bool BoardHideGroups;
-
-	[DataMember]
-	public bool BoardHideFolders;
 
 	[DataMember]
 	public bool GameMode;
@@ -122,15 +110,11 @@ public class Preferences
 	public long LastUpdateCheckUtc;
 
 	[DataMember]
-	public Dictionary<string, string> LearnedGroups = new Dictionary<string, string>();
-
-	[DataMember]
 	public bool HotkeyMigrationConflict;
 
 	[OnDeserializing]
 	private void Defaults(StreamingContext context)
 	{
-		AutoGrouping = true;
 		AutoDesktopImport = true;
 		BoardIconSize = 48.0;
 		BoardIconGap = 5.0;
@@ -174,10 +158,6 @@ public class Preferences
 				SystemIconImages.Remove(key);
 			}
 		}
-		if (LearnedGroups == null)
-		{
-			LearnedGroups = new Dictionary<string, string>();
-		}
 		if (RemovedIdentities == null)
 		{
 			RemovedIdentities = new List<string>();
@@ -193,7 +173,6 @@ public class Preferences
 			{
 				app.Name = Path.GetFileNameWithoutExtension(app.Path);
 			}
-			FeatureRules.NormalizeMemberships(app);
 		}
 		Apps = EntryRules.NormalizeEntries(Apps);
 		RemovalRules.ReconcileActive(this);
@@ -219,7 +198,6 @@ public class Preferences
 		}
 		Dock.Normalize();
 		DockLayoutRules.SyncApps(this);
-		Groups = FeatureRules.Groups(Groups, Apps);
 		if (Workspaces == null)
 		{
 			Workspaces = new List<Workspace>();

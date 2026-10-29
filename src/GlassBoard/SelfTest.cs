@@ -371,7 +371,12 @@ public static class SelfTest
 		Controller controller = new Controller(desktop: false);
 		try
 		{
-			controller.Prefs.Groups.Add("内存检查分组");
+			Entry probe = new Entry
+			{
+				Name = "内存检查",
+				Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe")
+			};
+			controller.Prefs.Apps.Add(probe);
 			controller.Board.Open();
 			if (!controller.Board.HasView || !controller.Board.IsVisible)
 			{
@@ -390,7 +395,7 @@ public static class SelfTest
 			}
 			controller.Board.Render();
 			controller.Board.Open();
-			if (!controller.Board.HasView || !controller.Board.IsVisible || !controller.Prefs.Groups.Contains("内存检查分组"))
+			if (!controller.Board.HasView || !controller.Board.IsVisible || !controller.Prefs.Apps.Contains(probe))
 			{
 				throw new Exception("面板重开或配置保留失败");
 			}

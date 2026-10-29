@@ -20,10 +20,10 @@ public static class UpdateRules
 
 	public const long MaxArchive = 16777216L;
 
-	private static readonly HashSet<string> allowed = new HashSet<string>(new string[23]
+	private static readonly HashSet<string> allowed = new HashSet<string>(new string[21]
 	{
 		"GlassBoard.exe", "GlassBoard.Updater.exe", "GlassBoard.exe.config", "Interop.UIAutomationClient.dll", "README.md", "Start.cmd", "CheckMemory.cmd", "CheckWindows.cmd", "CollectDiagnostics.cmd", "RecoverWidgets.cmd",
-		"RestoreDesktop.cmd", "SHA256SUMS.txt", "THIRD_PARTY_NOTICES.md", "data/AppGroups.tsv", "data/分组对照说明.md", "lib/NPSMLib.dll", "licenses/NPSMLib_LICENSE.txt", "licenses/now-playing-service_LICENSE.txt", "src/CheckMemory.ps1", "src/CheckWindows.ps1",
+		"RestoreDesktop.cmd", "SHA256SUMS.txt", "THIRD_PARTY_NOTICES.md", "lib/NPSMLib.dll", "licenses/NPSMLib_LICENSE.txt", "licenses/now-playing-service_LICENSE.txt", "src/CheckMemory.ps1", "src/CheckWindows.ps1",
 		"src/CollectDiagnostics.ps1", "src/MediaBridge.ps1", "src/NativeMediaBridge.ps1"
 	}, StringComparer.Ordinal);
 

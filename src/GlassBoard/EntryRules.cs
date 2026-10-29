@@ -7,7 +7,7 @@ namespace GlassBoard;
 
 public static class EntryRules
 {
-	public static RemovalBatch Remove(Preferences prefs, IEnumerable<string> paths, string group = null)
+	public static RemovalBatch Remove(Preferences prefs, IEnumerable<string> paths)
 	{
 		HashSet<string> wanted = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
 		RemovalBatch removalBatch = new RemovalBatch();
@@ -18,39 +18,21 @@ public static class EntryRules
 			{
 				continue;
 			}
-			if (group != null && group != "全部" && FeatureRules.InGroup(a, group) && FeatureRules.Memberships(a).Count() > 1)
+			removalBatch.Items.Add(new RemovedItem
 			{
-				removalBatch.Items.Add(new RemovedItem
-				{
-					Entry = FeatureRules.Copy(a),
-					Index = i,
-					MembershipOnly = true,
-					RemovedGroup = group
-				});
-				FeatureRules.RemoveMembership(a, group);
-				wanted.Remove(a.Path);
-			}
-			else
-			{
-				removalBatch.Items.Add(new RemovedItem
-				{
-					Entry = a,
-					Index = i,
-					WasRemoved = prefs.Removed.Any((string p) => string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase))
-				});
-			}
+				Entry = a,
+				Index = i,
+				WasRemoved = prefs.Removed.Any((string p) => string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase))
+			});
 		}
 		prefs.Apps.RemoveAll((Entry entry) => wanted.Contains(entry.Path));
 		foreach (RemovedItem item in removalBatch.Items)
 		{
-			if (!item.MembershipOnly)
+			if (!item.WasRemoved)
 			{
-				if (!item.WasRemoved)
-				{
-					prefs.Removed.Add(item.Entry.Path);
-				}
-				RemovalRules.Remember(prefs, item.Entry);
+				prefs.Removed.Add(item.Entry.Path);
 			}
+			RemovalRules.Remember(prefs, item.Entry);
 		}
 		return removalBatch;
 	}
@@ -64,26 +46,6 @@ public static class EntryRules
 		}
 		foreach (RemovedItem item in batch.Items.OrderBy((RemovedItem x) => x.Index))
 		{
-			if (item.MembershipOnly)
-			{
-				Entry entry = prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, item.Entry.Path, StringComparison.OrdinalIgnoreCase));
-				if (entry != null)
-				{
-					if (!string.IsNullOrWhiteSpace(item.RemovedGroup))
-					{
-						FeatureRules.AddMembership(entry, item.RemovedGroup);
-					}
-					else
-					{
-						foreach (string item2 in FeatureRules.Memberships(item.Entry))
-						{
-							FeatureRules.AddMembership(entry, item2);
-						}
-					}
-					num++;
-					continue;
-				}
-			}
 			if (!prefs.Apps.Any((Entry a) => string.Equals(a.Path, item.Entry.Path, StringComparison.OrdinalIgnoreCase)))
 			{
 				prefs.Apps.Insert(Math.Min(item.Index, prefs.Apps.Count), item.Entry);
@@ -94,7 +56,6 @@ public static class EntryRules
 				RemovalRules.Forget(prefs, item.Entry);
 			}
 		}
-		prefs.Groups = FeatureRules.Groups(prefs.Groups, prefs.Apps);
 		return num;
 	}
 
@@ -113,16 +74,11 @@ public static class EntryRules
 				item.Path = EntryPathRules.Normalize(item.Path);
 				item.IsFolder = true;
 			}
-			FeatureRules.NormalizeMemberships(item);
 			if (!dictionary.TryGetValue(item.Path, out var value))
 			{
 				dictionary.Add(item.Path, item);
 				list.Add(item);
 				continue;
-			}
-			foreach (string item2 in FeatureRules.Memberships(item))
-			{
-				FeatureRules.AddMembership(value, item2);
 			}
 			value.Pinned |= item.Pinned;
 			value.IsFolder |= item.IsFolder;

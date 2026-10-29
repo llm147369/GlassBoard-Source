@@ -119,11 +119,11 @@ public static class DesktopWatcher
 				string[] others = existing.Where((string p) => !ProgramExtensions.Contains(Path.GetExtension(p), StringComparer.OrdinalIgnoreCase)).ToArray();
 				if (programs.Length > 0)
 				{
-					controller.Add(programs, manual: false, targetGroup: null);
+					controller.Add(programs, manual: false);
 				}
 				if (others.Length > 0)
 				{
-					controller.Add(others, manual: true, targetGroup: null);
+					controller.Add(others, manual: true);
 				}
 			}
 			catch (Exception ex)

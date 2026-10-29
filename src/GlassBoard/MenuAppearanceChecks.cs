@@ -44,11 +44,11 @@ public static class MenuAppearanceChecks
 			ContextMenu contextMenu = MenuTheme.Create(flag);
 			MenuItem menuItem = new MenuItem
 			{
-				Header = "移动到分组"
+				Header = "子菜单标题"
 			};
 			MenuItem menuItem2 = new MenuItem
 			{
-				Header = "创作 / 中文长分组名称"
+				Header = "创作 / 中文长标题名称"
 			};
 			MenuItem menuItem3 = new MenuItem
 			{
@@ -141,7 +141,7 @@ public static class MenuAppearanceChecks
 				menuItem2.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
 				if (!clicked)
 				{
-					throw new Exception("分组菜单点击事件丢失");
+					throw new Exception("子菜单点击事件丢失");
 				}
 				Slider slider = new Slider
 				{

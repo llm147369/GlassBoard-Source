@@ -196,7 +196,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard-Source v0.9.20.2 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.3 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -479,7 +479,6 @@ public class Controller
 	{
 		Save();
 		Dock.Refresh();
-		Board.SyncGroups();
 		Board.Render();
 		RefreshWidgets();
 	}
@@ -670,12 +669,8 @@ public class Controller
 		}
 	}
 
-	public void Add(IEnumerable<string> paths, bool manual = true, string targetGroup = null)
+	public void Add(IEnumerable<string> paths, bool manual = true)
 	{
-		if (manual && targetGroup == null && Board.IsVisible)
-		{
-			targetGroup = Board.CurrentGroup;
-		}
 		if (!manual)
 		{
 			MigrateRemovalIdentities();
@@ -692,10 +687,6 @@ public class Controller
 			Entry entry = Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(EntryPathRules.Normalize(a.Path), path, StringComparison.OrdinalIgnoreCase));
 			if (entry != null)
 			{
-				if (manual && targetGroup != null && targetGroup != "全部")
-				{
-					num += FeatureRules.AddShared(Prefs, new string[1] { entry.Path }, targetGroup);
-				}
 				continue;
 			}
 			Entry entry2 = new Entry
@@ -712,7 +703,6 @@ public class Controller
 				{
 					RemovalRules.Forget(Prefs, entry2);
 				}
-				entry2.Group = FeatureRules.ImportGroup(Prefs, entry2, manual ? targetGroup : null);
 				Prefs.Apps.Add(entry2);
 				num++;
 			}
@@ -749,9 +739,9 @@ public class Controller
 		Board.SetGlassOpacity(Prefs.OpacityPercent.Value);
 	}
 
-	public void Remove(Entry a, string scope = null)
+	public void Remove(Entry a)
 	{
-		RemoveMany(new string[1] { a.Path }, scope);
+		RemoveMany(new string[1] { a.Path });
 	}
 
 	// 开机时把回收站入口补进面板；用户手动移除（移除记录仍在）后不再补回
@@ -791,11 +781,10 @@ public class Controller
 		return num;
 	}
 
-	public void RemoveMany(IEnumerable<string> paths, string scope = null)
+	public void RemoveMany(IEnumerable<string> paths)
 	{
-		string group = scope ?? (Board.IsVisible ? Board.CurrentGroup : "全部");
 		HashSet<string> targets = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
-		targets.RemoveWhere((string path) => !Prefs.Apps.Any((Entry a) => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase) && FeatureRules.InGroup(a, group)));
+		targets.RemoveWhere((string path) => !Prefs.Apps.Any((Entry a) => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase)));
 		int num = Prefs.Apps.Count((Entry a) => targets.Contains(a.Path));
 		if (num == 0)
 		{
@@ -804,7 +793,7 @@ public class Controller
 		Board.ModalBusy = true;
 		try
 		{
-			string messageBoxText = "从「" + group + "」移除已选的 " + num + " 个入口？\n" + ((group == "全部") ? "本次从所有分组与 Dock 移除，原软件和磁盘文件保留。" : "同一软件在其他组中的入口保留；原软件和磁盘文件保留。") + "\n移除后可点击「撤销」。";
+			string messageBoxText = "移除已选的 " + num + " 个入口？\n本次从面板与 Dock 移除，原软件和磁盘文件保留。\n移除后可点击「撤销」。";
 			if ((Board.IsVisible ? System.Windows.MessageBox.Show(Board, messageBoxText, "GlassBoard-Source", MessageBoxButton.YesNo) : System.Windows.MessageBox.Show(messageBoxText, "GlassBoard-Source", MessageBoxButton.YesNo)) != MessageBoxResult.Yes)
 			{
 				return;
@@ -814,7 +803,7 @@ public class Controller
 				LaunchInfoService.Enrich(item);
 			}
 			BoardEditState before = BeginBoardEdit();
-			EntryRules.Remove(Prefs, targets, group);
+			EntryRules.Remove(Prefs, targets);
 			EndBoardEdit(before, "移除入口");
 			Board.FinishSelection();
 			Refresh();
@@ -1060,7 +1049,8 @@ public class Controller
 		}
 	}
 
-	public System.Windows.Controls.ContextMenu Menu(Entry a, string scope = "全部", string tint = "", int opacityPercent = 100)	{
+	public System.Windows.Controls.ContextMenu Menu(Entry a, string tint = "", int opacityPercent = 100)
+	{
 		System.Windows.Controls.ContextMenu menu = MenuTheme.Create(Prefs.Light, Prefs.Dock.Accent, tint, opacityPercent);
 		Action<string, Action> action = (string title, Action action2) =>
 		{
@@ -1114,62 +1104,33 @@ public class Controller
 		{
 			Pin(a);
 		});
-		if (scope == "Dock")
+		action("前移一位", () =>
 		{
-			action("添加软件或文件到 Dock", () =>
+			int num = Prefs.Apps.IndexOf(a);
+			if (num > 0)
 			{
-				ChooseDockFiles();
-			});
-			AddDockWindowMenus(menu, a);
-		}
-		else
+				Prefs.Apps.RemoveAt(num);
+				Prefs.Apps.Insert(num - 1, a);
+				Refresh();
+			}
+		});
+		action("后移一位", () =>
 		{
-			action("前移一位", () =>
+			int num = Prefs.Apps.IndexOf(a);
+			if (num < Prefs.Apps.Count - 1)
 			{
-				int num = Prefs.Apps.IndexOf(a);
-				if (num > 0)
-				{
-					Prefs.Apps.RemoveAt(num);
-					Prefs.Apps.Insert(num - 1, a);
-					Refresh();
-				}
-			});
-			action("后移一位", () =>
-			{
-				int num = Prefs.Apps.IndexOf(a);
-				if (num < Prefs.Apps.Count - 1)
-				{
-					Prefs.Apps.RemoveAt(num);
-					Prefs.Apps.Insert(num + 1, a);
-					Refresh();
-				}
-			});
-		}
+				Prefs.Apps.RemoveAt(num);
+				Prefs.Apps.Insert(num + 1, a);
+				Refresh();
+			}
+		});
 		action("修改名称与图标", () =>
 		{
 			Customize(a);
 		});
-		System.Windows.Controls.MenuItem menuItem = new System.Windows.Controls.MenuItem
-		{
-			Header = "移动到分组"
-		};
-		foreach (string item in new string[1] { "未分组" }.Concat(Prefs.Groups))
-		{
-			string name = item;
-			System.Windows.Controls.MenuItem menuItem2 = new System.Windows.Controls.MenuItem
-			{
-				Header = name
-			};
-			menuItem2.Click += (object s, RoutedEventArgs e) =>
-			{
-				TransferEntries(new string[1] { a.Path }, (scope == "Dock") ? "全部" : scope, name);
-			};
-			menuItem.Items.Add(menuItem2);
-		}
-		menu.Items.Add(menuItem);
 		action("移除入口", () =>
 		{
-			Remove(a, (scope == "Dock") ? "全部" : scope);
+			Remove(a);
 		});
 		return menu;
 	}
@@ -1579,7 +1540,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.2",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.3",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -1907,20 +1868,9 @@ public class Controller
 				Prefs.BoardDismissOnDeactivate = boardDismissOnDeactivate;
 				Save();
 			});
-			func3(stackPanel2, "新增软件自动识别分组", Prefs.AutoGrouping, (bool autoGrouping) =>
-			{
-				Prefs.AutoGrouping = autoGrouping;
-				Save();
-			});
 			func3(stackPanel2, "隐藏大面板搜索栏", Prefs.BoardHideSearch, (bool boardHideSearch) =>
 			{
 				Prefs.BoardHideSearch = boardHideSearch;
-				Save();
-				Board.ApplyDisplayOptions();
-			});
-			func3(stackPanel2, "隐藏大面板分组栏，直接显示全部图标", Prefs.BoardHideGroups, (bool boardHideGroups) =>
-			{
-				Prefs.BoardHideGroups = boardHideGroups;
 				Save();
 				Board.ApplyDisplayOptions();
 			});
@@ -1975,17 +1925,9 @@ public class Controller
 					w.Close();
 				}
 			}));
-			wrapPanel.Children.Add(FeatureUi.Button("管理分组", () =>
-			{
-				ManageGroups(w);
-			}));
 			wrapPanel.Children.Add(FeatureUi.Button("创作工作区", () =>
 			{
 				ManageWorkspaces(w);
-			}));
-			wrapPanel.Children.Add(FeatureUi.Button("自动分组未分组软件", () =>
-			{
-				AutoGroupApps(w);
 			}));
 			wrapPanel.Children.Add(FeatureUi.Button("重置面板位置和尺寸", () =>
 			{
@@ -2846,7 +2788,7 @@ public class Controller
 				TextWrapping = TextWrapping.Wrap
 			});
 			BuildGameSettings(stackPanel6);
-			stackPanel6.Children.Add(FeatureUi.Button("找回旧版入口与分组", () =>
+			stackPanel6.Children.Add(FeatureUi.Button("找回旧版入口", () =>
 			{
 				RecoverHistoricalEntries(w);
 			}));
@@ -2887,7 +2829,7 @@ public class Controller
 			});
 			stackPanel6.Children.Add(new TextBlock
 			{
-				Text = "备份布局、分组、快捷键、组件、便签、外观方案与自定义图标。软件与音乐文件保留在原位置；开机启动按当前电脑设置保留。",
+				Text = "备份布局、快捷键、组件、便签、外观方案与自定义图标。软件与音乐文件保留在原位置；开机启动按当前电脑设置保留。",
 				TextWrapping = TextWrapping.Wrap,
 				Foreground = System.Windows.Media.Brushes.LightGray
 			});
@@ -3092,7 +3034,7 @@ public class Controller
 				System.Windows.MessageBox.Show(owner, "历史配置中没有找到缺失入口。若旧版已多次覆盖配置，仍可能需要从你保留的完整备份中恢复。", "找回旧版入口");
 				return;
 			}
-			Window w = FeatureUi.Dialog("找回旧版入口与分组", owner, 760.0, 580.0);
+			Window w = FeatureUi.Dialog("找回旧版入口", owner, 760.0, 580.0);
 			DockPanel dockPanel = new DockPanel
 			{
 				Margin = new Thickness(22.0)
@@ -3100,7 +3042,7 @@ public class Controller
 			w.Content = dockPanel;
 			TextBlock element = new TextBlock
 			{
-				Text = "从升级前配置、安全副本和完整备份中找回入口或分组归属。勾选后合并到当前布局；当前 DIY 保留。标注为已移除的入口默认不勾选。",
+				Text = "从升级前配置、安全副本和完整备份中找回入口。勾选后合并到当前布局；当前 DIY 保留。标注为已移除的入口默认不勾选。",
 				TextWrapping = TextWrapping.Wrap,
 				Margin = new Thickness(0.0, 0.0, 0.0, 14.0)
 			};
@@ -3123,7 +3065,7 @@ public class Controller
 				System.Windows.Controls.CheckBox checkBox = new System.Windows.Controls.CheckBox();
 				checkBox.Content = new TextBlock
 				{
-					Text = item.Name + " · " + string.Join("、", FeatureRules.Memberships(item)) + (flag ? " 【曾移除】" : "") + "\n" + item.Path,
+					Text = item.Name + (flag ? " 【曾移除】" : "") + "\n" + item.Path,
 					TextWrapping = TextWrapping.Wrap
 				};
 				checkBox.IsChecked = !flag;
@@ -3161,7 +3103,7 @@ public class Controller
 					int num = EntryRecoveryRules.Restore(Prefs, list2);
 					EndBoardEdit(before, "找回旧版入口");
 					Refresh();
-					System.Windows.MessageBox.Show(w, "已合并 " + num + " 个入口及分组归属。", "找回完成");
+					System.Windows.MessageBox.Show(w, "已合并 " + num + " 个入口。", "找回完成");
 					w.Close();
 				}
 			}));
@@ -3614,7 +3556,7 @@ public class Controller
 			{
 				return;
 			}
-			Add(openFileDialog.FileNames, manual: true, "全部");
+			Add(openFileDialog.FileNames, manual: true);
 			BoardEditState before = BeginBoardEdit();
 			string[] fileNames = openFileDialog.FileNames;
 			foreach (string path in fileNames)
@@ -3645,7 +3587,7 @@ public class Controller
 			{
 				return;
 			}
-			Add(new string[1] { text }, manual: true, "全部");
+			Add(new string[1] { text }, manual: true);
 			BoardEditState before = BeginBoardEdit();
 			Entry entry = Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, EntryPathRules.Normalize(text), StringComparison.OrdinalIgnoreCase));
 			if (entry != null && !entry.Pinned && Prefs.Apps.Count((Entry a) => a.Pinned) < 20)
@@ -3892,16 +3834,6 @@ public class Controller
 		}
 	}
 
-	public void TransferEntries(string[] paths, string from, string to)
-	{
-		BoardEditState before = BeginBoardEdit();
-		int num = FeatureRules.Transfer(Prefs, paths, from, to);
-		EndBoardEdit(before, (from == "全部") ? "添加到分组" : "移动分组");
-		Board.FinishSelection();
-		Refresh();
-		Board.SetStatus("已处理 " + num + " 个入口 · 可按 Ctrl+Z 撤销");
-	}
-
 	public void ReorderEntry(string path, Entry target)
 	{
 		Entry entry = Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase));
@@ -3925,7 +3857,7 @@ public class Controller
 		{
 			return false;
 		}
-		// 安全网：分组/搜索等过滤视图下页内顺序与 Apps 切片不一致，直接放弃提交（交由 Render 复原）
+		// 安全网：过滤视图下页内顺序与 Apps 切片不一致，直接放弃提交（交由 Render 复原）
 		HashSet<string> seqSet = new HashSet<string>(sequence, StringComparer.OrdinalIgnoreCase);
 		if (seqSet.Count != sliceNow.Count || sliceNow.Any((Entry a) => !seqSet.Contains(a.Path)))
 		{
@@ -3998,7 +3930,7 @@ public class Controller
 			{
 				FlushBackupState();
 				BackupFiles.Create(Store.Folder, saveFileDialog.FileName);
-				System.Windows.MessageBox.Show(OwnerWindow, "布局、分组、快捷键、组件、便签、外观方案与自定义图标已备份。", "备份完成");
+				System.Windows.MessageBox.Show(OwnerWindow, "布局、快捷键、组件、便签、外观方案与自定义图标已备份。", "备份完成");
 			}
 		}
 		catch (Exception ex)
@@ -4031,7 +3963,7 @@ public class Controller
 				return;
 			}
 			BackupFiles.Read(openFileDialog.FileName);
-			if (System.Windows.MessageBox.Show(OwnerWindow, "恢复此备份中的布局、分组、快捷键与便签？\n当前配置会先自动保存为恢复前备份。开机启动开关按当前电脑保留。", "恢复完整备份", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+			if (System.Windows.MessageBox.Show(OwnerWindow, "恢复此备份中的布局、快捷键与便签？\n当前配置会先自动保存为恢复前备份。开机启动开关按当前电脑保留。", "恢复完整备份", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
 			{
 				FlushBackupState();
 				string text = Path.Combine(Store.Folder, "backups", "恢复前_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".gbbackup");
@@ -4364,228 +4296,6 @@ public class Controller
 					EndBoardEdit(before, "自定义名称与图标");
 					Refresh();
 					w.Close();
-				}
-			}));
-			w.ShowDialog();
-		}
-		finally
-		{
-			Board.ModalBusy = modalBusy;
-		}
-	}
-
-	public void AddExistingToGroup(string group)
-	{
-		if (group == "全部")
-		{
-			return;
-		}
-		bool modalBusy = Board.ModalBusy;
-		Board.ModalBusy = true;
-		try
-		{
-			Window w = FeatureUi.Dialog("添加已有图标到「" + group + "」", Board, 680.0, 620.0);
-			DockPanel dockPanel = new DockPanel
-			{
-				Margin = new Thickness(22.0)
-			};
-			w.Content = dockPanel;
-			StackPanel stackPanel = new StackPanel();
-			DockPanel.SetDock(stackPanel, System.Windows.Controls.Dock.Top);
-			dockPanel.Children.Add(stackPanel);
-			stackPanel.Children.Add(new TextBlock
-			{
-				Text = "同一软件可以出现在多个分组",
-				FontSize = 18.0,
-				Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
-			});
-			stackPanel.Children.Add(new TextBlock
-			{
-				Text = ((group == "未分组") ? "选择后会移回未分组。" : "添加后保留原有分组；全部视图只显示一次。"),
-				Foreground = System.Windows.Media.Brushes.LightGray,
-				Margin = new Thickness(0.0, 0.0, 0.0, 10.0)
-			});
-			System.Windows.Controls.TextBox query = new System.Windows.Controls.TextBox
-			{
-				MinHeight = 38.0,
-				ToolTip = "搜索已有软件",
-				Margin = new Thickness(0.0, 0.0, 0.0, 12.0)
-			};
-			stackPanel.Children.Add(query);
-			WrapPanel wrapPanel = new WrapPanel();
-			DockPanel.SetDock(wrapPanel, System.Windows.Controls.Dock.Bottom);
-			dockPanel.Children.Add(wrapPanel);
-			System.Windows.Controls.ListBox list = new System.Windows.Controls.ListBox
-			{
-				Margin = new Thickness(0.0, 0.0, 0.0, 12.0)
-			};
-			dockPanel.Children.Add(list);
-			List<Entry> candidates = Prefs.Apps.Where((Entry a) => !FeatureRules.InGroup(a, group)).ToList();
-			HashSet<string> selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-			Action fill = () =>
-			{
-				list.Items.Clear();
-				foreach (Entry item in candidates.Where((Entry a) => LayoutRules.Matches(a.Name, query.Text.Trim())))
-				{
-					Entry entry = item;
-					System.Windows.Controls.CheckBox checkBox = new System.Windows.Controls.CheckBox
-					{
-						Content = entry.Name + "  ·  " + string.Join(" / ", FeatureRules.Memberships(entry)),
-						IsChecked = selected.Contains(entry.Path),
-						Margin = new Thickness(7.0),
-						ToolTip = entry.Path
-					};
-					checkBox.Checked += (object ss, RoutedEventArgs ee) =>
-					{
-						selected.Add(entry.Path);
-					};
-					checkBox.Unchecked += (object ss, RoutedEventArgs ee) =>
-					{
-						selected.Remove(entry.Path);
-					};
-					list.Items.Add(checkBox);
-				}
-			};
-			query.TextChanged += (object ss, TextChangedEventArgs ee) =>
-			{
-				fill();
-			};
-			wrapPanel.Children.Add(FeatureUi.Button("全选结果", () =>
-			{
-				foreach (Entry item2 in candidates.Where((Entry a) => LayoutRules.Matches(a.Name, query.Text.Trim())))
-				{
-					selected.Add(item2.Path);
-				}
-				fill();
-			}));
-			wrapPanel.Children.Add(FeatureUi.Button("取消全选", () =>
-			{
-				selected.Clear();
-				fill();
-			}));
-			wrapPanel.Children.Add(FeatureUi.Button("添加到本组", () =>
-			{
-				BoardEditState before = BeginBoardEdit();
-				int num = FeatureRules.AddShared(Prefs, selected, group);
-				EndBoardEdit(before, "添加已有图标");
-				Refresh();
-				Board.ClearSearch();
-				Board.SetStatus("已添加 " + num + " 个已有图标到「" + group + "」");
-				w.Close();
-			}));
-			wrapPanel.Children.Add(FeatureUi.Button("关闭", () =>
-			{
-				w.Close();
-			}));
-			fill();
-			w.ShowDialog();
-		}
-		finally
-		{
-			Board.ModalBusy = modalBusy;
-		}
-	}
-
-	public void AutoGroupApps(Window owner = null)
-	{
-		BoardEditState before = BeginBoardEdit();
-		AutoGroupRules.ReloadCatalog();
-		foreach (Entry item in Prefs.Apps.Where((Entry a) => FeatureRules.GroupName(a) == "未分组"))
-		{
-			LaunchInfoService.Enrich(item);
-		}
-		int num = AutoGroupRules.ApplyUnassigned(Prefs);
-		EndBoardEdit(before, "自动分组");
-		Refresh();
-		int num2 = Prefs.Apps.Count((Entry a) => FeatureRules.GroupName(a) == "未分组");
-		System.Windows.MessageBox.Show(owner ?? OwnerWindow, "已自动分组 " + num + " 个软件。\n还有 " + num2 + " 个未识别，可手动移动到分组。已有手动分组已保留。", "GlassBoard-Source");
-	}
-
-	public void ManageGroups(Window owner = null)
-	{
-		bool modalBusy = Board.ModalBusy;
-		Board.ModalBusy = true;
-		try
-		{
-			Window w = FeatureUi.Dialog("软件分组", owner ?? OwnerWindow, 520.0, 450.0);
-			DockPanel dockPanel = new DockPanel
-			{
-				Margin = new Thickness(22.0)
-			};
-			w.Content = dockPanel;
-			WrapPanel wrapPanel = new WrapPanel();
-			DockPanel.SetDock(wrapPanel, System.Windows.Controls.Dock.Bottom);
-			dockPanel.Children.Add(wrapPanel);
-			System.Windows.Controls.ListBox list = new System.Windows.Controls.ListBox
-			{
-				Margin = new Thickness(0.0, 0.0, 0.0, 14.0)
-			};
-			dockPanel.Children.Add(list);
-			Action reload = () =>
-			{
-				string text = list.SelectedItem as string;
-				list.ItemsSource = null;
-				list.ItemsSource = Prefs.Groups.ToList();
-				if (text != null)
-				{
-					list.SelectedItem = text;
-				}
-			};
-			reload();
-			wrapPanel.Children.Add(FeatureUi.Button("新增", () =>
-			{
-				string name = FeatureUi.Ask(w, "新分组名称");
-				if (name != null)
-				{
-					if (name == "全部" || name == "未分组" || name.Length > 32 || Prefs.Groups.Any((string g) => g.Equals(name, StringComparison.CurrentCultureIgnoreCase)))
-					{
-						System.Windows.MessageBox.Show(w, "名称重复、过长或属于内置分类。");
-					}
-					else
-					{
-						BoardEditState before = BeginBoardEdit();
-						Prefs.Groups.Add(name);
-						EndBoardEdit(before, "新增分组");
-						Refresh();
-						reload();
-					}
-				}
-			}));
-			wrapPanel.Children.Add(FeatureUi.Button("改名", () =>
-			{
-				if (list.SelectedItem is string text)
-				{
-					string text2 = FeatureUi.Ask(w, "分组改名", text);
-					if (text2 != null)
-					{
-						try
-						{
-							if (text2.Length > 32)
-							{
-								throw new ArgumentException("名称最多 32 个字");
-							}
-							BoardEditState before = BeginBoardEdit();
-							FeatureRules.RenameGroup(Prefs, text, text2);
-							EndBoardEdit(before, "重命名分组");
-							Refresh();
-							reload();
-						}
-						catch (Exception ex)
-						{
-							System.Windows.MessageBox.Show(w, ex.Message);
-						}
-					}
-				}
-			}));
-			wrapPanel.Children.Add(FeatureUi.Button("删除分组", () =>
-			{
-				if (list.SelectedItem is string text && System.Windows.MessageBox.Show(w, "删除分组「" + text + "」？入口保留并移到未分组。", "GlassBoard-Source", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
-				{
-					BoardEditState before = BeginBoardEdit();
-					FeatureRules.DeleteGroup(Prefs, text);
-					EndBoardEdit(before, "删除分组");
-					Refresh();
-					reload();
 				}
 			}));
 			w.ShowDialog();

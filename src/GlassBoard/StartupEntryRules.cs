@@ -1,11 +1,18 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace GlassBoard;
 
 public static class StartupEntryRules
 {
+	private static string Canonical(string name)
+	{
+		return new string((name ?? "").Normalize(NormalizationForm.FormKC).ToLowerInvariant().Where(char.IsLetterOrDigit)
+			.ToArray());
+	}
+
 	public static string Leaf(string path)
 	{
 		path = (path ?? "").Replace('\\', '/');
@@ -30,7 +37,7 @@ public static class StartupEntryRules
 
 	public static bool Auxiliary(string path)
 	{
-		string name = AutoGroupRules.Canonical(Stem(path));
+		string name = Canonical(Stem(path));
 		if (name.StartsWith("unins") || name.StartsWith("uninstall") || name.Contains("卸载") || name.EndsWith("updater") || name.Contains("crashreport") || name.Contains("crashpad"))
 		{
 			return true;
@@ -40,7 +47,7 @@ public static class StartupEntryRules
 			"update", "updater", "autoupdate", "setup", "install", "installer", "crashreporter", "crashreportclient", "crashpadhandler", "cefsubprocess",
 			"qtwebengineprocess", "unitycrashhandler64", "unitycrashhandler32", "werfault", "vc_redist", "vcredist", "dxsetup", "dxwebsetup", "dxdiag", "readme",
 			"license", "help", "说明", "帮助", "repair", "修复", "reportbug", "feedback"
-		}.Any((string x) => name == AutoGroupRules.Canonical(x) || name.StartsWith(AutoGroupRules.Canonical(x) + "64") || name.StartsWith(AutoGroupRules.Canonical(x) + "32"));
+		}.Any((string x) => name == Canonical(x) || name.StartsWith(Canonical(x) + "64") || name.StartsWith(Canonical(x) + "32"));
 	}
 
 	public static bool GameUri(string value)

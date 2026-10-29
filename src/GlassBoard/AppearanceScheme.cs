@@ -19,12 +19,6 @@ public class AppearanceScheme
 	public bool BoardHideSearch;
 
 	[DataMember]
-	public bool BoardHideGroups;
-
-	[DataMember]
-	public bool BoardHideFolders;
-
-	[DataMember]
 	public int PanelSize;
 
 	[DataMember]
@@ -53,9 +47,6 @@ public class AppearanceScheme
 
 	[DataMember]
 	public List<Entry> Apps;
-
-	[DataMember]
-	public List<string> Groups;
 
 	[DataMember(EmitDefaultValue = false)]
 	public List<string> DockOrder;
