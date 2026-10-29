@@ -1650,18 +1650,20 @@ public class BoardWindow : GlassWindow
 			ToolTip = a.Name,
 			AllowDrop = true
 		};
-		// 右键菜单按需创建：打开面板时不再为每个磁贴预建整棵菜单。
-		// ~50 个磁贴 × 全量 ContextMenu（含子菜单与样式）是打开首帧卡顿的主要来源。
-		tile.ContextMenuOpening += (object s, ContextMenuEventArgs e) =>
+		// 右键直接弹系统原生菜单（资源管理器同款：打开/管理员运行/属性/固定等）。
+		// 不再使用内置菜单，也避免 ContextMenuOpening 惰性赋值导致的“第一次右键不弹”问题。
+		tile.PreviewMouseRightButtonUp += (object s, MouseButtonEventArgs e2) =>
 		{
+			e2.Handled = true;
 			if (editing)
 			{
 				return; // 多选模式下不弹右键菜单（与原逻辑一致）
 			}
-			if (tile.ContextMenu == null)
+			CloseMediaPreview();
+			Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(delegate
 			{
-				tile.ContextMenu = C.Menu(a, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
-			}
+				ShellContextMenu.ShowAtCursor(a.Path, this);
+			}));
 		};
 		Grid grid = new Grid();
 		tile.Child = grid;
