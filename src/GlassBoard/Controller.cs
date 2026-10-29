@@ -196,7 +196,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard-Source v0.9.20.6 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.7 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1541,7 +1541,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.6",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.7",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -1768,37 +1768,26 @@ public class Controller
 				g.Material.Kind = kind;
 				liveGlobal();
 			});
-			func4(stackPanel2, "玻璃色调", new string[7] { "跟随强调色", "雾白", "雾蓝", "暖灰", "墨蓝", "雾紫", "自定义…" }, 0, (int tint) =>
+			string[] tintNames = new string[7] { "跟随强调色", "雾白", "雾蓝", "暖灰", "墨蓝", "雾紫", "自定义…" };
+			string[] tintValues = new string[7] { "", "#E4E9F2", "#A9C4EB", "#C9C2B4", "#16213A", "#B7A6E8", "" };
+			int tintIndex = Array.IndexOf(tintValues, g.Material.Tint ?? "");
+			if (tintIndex < 0)
 			{
-				switch (tint)
+				tintIndex = (string.IsNullOrEmpty(g.Material.Tint) ? 0 : 6);
+			}
+			func4(stackPanel2, "玻璃色调", tintNames, tintIndex, (int tint) =>
+			{
+				if (tint == 6)
 				{
-					case 0:
-						g.Material.Tint = "";
-						break;
-					case 1:
-						g.Material.Tint = "#E4E9F2";
-						break;
-					case 2:
-						g.Material.Tint = "#A9C4EB";
-						break;
-					case 3:
-						g.Material.Tint = "#C9C2B4";
-						break;
-					case 4:
-						g.Material.Tint = "#16213A";
-						break;
-					case 5:
-						g.Material.Tint = "#B7A6E8";
-						break;
-					default:
-						{
-							string custom = FeatureUi.Ask(w, "自定义玻璃色调", "输入 #RRGGBB 十六进制颜色（留空 = 跟随强调色）：");
-							if (custom != null)
-							{
-								g.Material.Tint = custom.Trim();
-							}
-							break;
-						}
+					string custom = FeatureUi.Ask(w, "自定义玻璃色调", "输入 #RRGGBB 十六进制颜色（留空 = 跟随强调色）：");
+					if (custom != null)
+					{
+						g.Material.Tint = custom.Trim();
+					}
+				}
+				else
+				{
+					g.Material.Tint = tintValues[tint];
 				}
 				g.Material.Normalize();
 				liveGlobal();
@@ -2034,7 +2023,7 @@ public class Controller
 			func4(stackPanel3, "强调色", new string[6] { "晴空蓝", "雾紫", "薄荷绿", "暖金", "玫瑰粉", "月光灰" }, draft.Accent, (int accent) =>
 			{
 				draft.Accent = accent;
-				live();
+				liveGlobal();
 			});
 			func3(stackPanel3, "显示分隔线", draft.ShowSeparator, (bool showSeparator) =>
 			{

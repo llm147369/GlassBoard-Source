@@ -225,7 +225,7 @@ public sealed class WidgetWindow : GlassWindow
 			{
 				WidgetStyle widgetStyle = StyleFor(text);
 				double num = WidgetSizing.Background(M.C.Prefs.Widgets, M.C.Prefs.Widgets.Position(PanelId));
-				item.Background = ((widgetStyle.Frameless || num == 0.0) ? null : GlassMaterials.Fill(CurrentMaterial, LightTheme, num));
+				item.Background = ((widgetStyle.Frameless || num == 0.0) ? null : GlassMaterials.Fill(CurrentMaterial, LightTheme, num, AccentIndex));
 				item.BorderBrush = (widgetStyle.Frameless ? null : Polish.Line(LightTheme));
 				item.BorderThickness = new Thickness((!widgetStyle.Frameless) ? 1 : 0);
 				PaintCard(item, text);

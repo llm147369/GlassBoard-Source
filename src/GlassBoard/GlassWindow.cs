@@ -67,6 +67,8 @@ public class GlassWindow : Window
 
 	protected MaterialOptions CurrentMaterial = new MaterialOptions();
 
+	protected int AccentIndex;
+
 	protected double MaterialBlur
 	{
 		get
@@ -91,6 +93,7 @@ public class GlassWindow : Window
 	{
 		BlurRadius = options.BlurRadius;
 		EdgeStrength = options.EdgeStrength;
+		AccentIndex = options.Accent;
 		CurrentMaterial = (material ?? options.Material ?? new MaterialOptions()).Copy();
 	}
 
@@ -516,7 +519,7 @@ public class GlassWindow : Window
 	public void SetGlassOpacity(double percent)
 	{
 		GlassPercent = LayoutRules.GlassOpacity(percent);
-		string sig = (LightTheme ? 1 : 0) + "|" + CurrentMaterial.Kind + "|" + CurrentMaterial.Gloss + "|" + CurrentMaterial.Grain + "|" + CurrentMaterial.Tint + "|" + CurrentMaterial.Shadow;
+		string sig = (LightTheme ? 1 : 0) + "|" + CurrentMaterial.Kind + "|" + CurrentMaterial.Gloss + "|" + CurrentMaterial.Grain + "|" + CurrentMaterial.Tint + "|" + AccentIndex + "|" + CurrentMaterial.Shadow;
 		if (glassApplied && sig == materialSig && Math.Abs(GlassPercent - lastGlassPercent) < 0.001)
 		{
 			return;
@@ -534,7 +537,7 @@ public class GlassWindow : Window
 				Color = Colors.Black
 			};
 		}
-		Surface.Background = GlassMaterials.Fill(CurrentMaterial, LightTheme, GlassPercent);
+		Surface.Background = GlassMaterials.Fill(CurrentMaterial, LightTheme, GlassPercent, AccentIndex);
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? System.Windows.Media.Brushes.Transparent : Polish.Line(LightTheme));
 		Surface.Effect = ((GlassPercent == 0.0 || !CurrentMaterial.Shadow || SlowRender) ? null : surfaceShadow);
 		foreach (Border item in from b in Root.Children.OfType<Border>()

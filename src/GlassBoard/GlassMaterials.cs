@@ -8,7 +8,7 @@ public static class GlassMaterials
 {
 	private static ImageSource grain;
 
-	public static Brush Fill(MaterialOptions options, bool light, double percent)
+	public static Brush Fill(MaterialOptions options, bool light, double percent, int accent = 0)
 	{
 		if (percent <= 0.0)
 		{
@@ -18,6 +18,9 @@ public static class GlassMaterials
 		if (string.IsNullOrEmpty(options.Tint))
 		{
 			color = (light ? Color.FromRgb(234, 237, 244) : Color.FromRgb(24, 26, 32));
+			// "跟随强调色"：把强调色以 12% 掺入玻璃底色（与菜单同源思路），切换强调色时玻璃可见变化
+			Color accentColor = IconPacks.AccentColor(accent);
+			color = Color.FromRgb((byte)((double)color.R + ((double)(int)accentColor.R - (double)color.R) * 0.12), (byte)((double)color.G + ((double)(int)accentColor.G - (double)color.G) * 0.12), (byte)((double)color.B + ((double)(int)accentColor.B - (double)color.B) * 0.12));
 		}
 		else
 		{
