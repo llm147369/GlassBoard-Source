@@ -22,6 +22,7 @@ data/*
 unins000.*
 SHA256SUMS.txt
 *.cmd
+!src/CheckLag.cmd
 *.bat
 
 # 根目录即便携版：编译好的主程序随仓库分发（拉取即用，无需安装 SDK）
