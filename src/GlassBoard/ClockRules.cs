@@ -92,6 +92,6 @@ public static class ClockRules
 		{
 			return "闹钟 " + clockAlarm.DueLocal.ToString("M/d HH:mm") + " · " + clockAlarm.Label;
 		}
-		return "点击 ••• 设置闹钟和倒计时";
+		return "";
 	}
 }

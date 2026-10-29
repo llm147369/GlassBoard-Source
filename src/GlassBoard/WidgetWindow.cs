@@ -472,8 +472,17 @@ public sealed class WidgetWindow : GlassWindow
 		}
 		if (clockStatus != null)
 		{
-			SetText(clockStatus, ClockRules.Display(M.C.Prefs.Widgets, DateTime.UtcNow));
-			clockStatus.ToolTip = clockStatus.Text;
+			string clockStatusText = ClockRules.Display(M.C.Prefs.Widgets, DateTime.UtcNow);
+			if (string.IsNullOrEmpty(clockStatusText))
+			{
+				clockStatus.Visibility = Visibility.Collapsed;
+			}
+			else
+			{
+				clockStatus.Visibility = Visibility.Visible;
+				SetText(clockStatus, clockStatusText);
+				clockStatus.ToolTip = clockStatusText;
+			}
 		}
 	}
 
@@ -901,6 +910,19 @@ public sealed class WidgetWindow : GlassWindow
 	private ContextMenu WidgetMenu(string kind)
 	{
 		ContextMenu contextMenu = MenuTheme.Create(LightTheme, M.C.Prefs.Dock.Accent, M.C.Prefs.Widgets.Material.Tint, (int)WidgetSizing.Background(M.C.Prefs.Widgets, M.C.Prefs.Widgets.Position(PanelId)));
+		if (kind == "clock")
+		{
+			MenuItem menuItem = new MenuItem
+			{
+				Header = "闹钟与倒计时"
+			};
+			menuItem.Click += (object ss, RoutedEventArgs ee) =>
+			{
+				ClockSettings();
+			};
+			contextMenu.Items.Add(menuItem);
+			contextMenu.Items.Add(new Separator());
+		}
 		if (kind == "music")
 		{
 			MenuItem menuItem2 = new MenuItem
