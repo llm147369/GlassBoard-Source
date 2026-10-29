@@ -200,11 +200,13 @@ public static class Program
 				}
 				ConfigImport.TryRun();
 				Store.Trace("START phase=config-import ms=" + (Environment.TickCount - ProcessStartTick));
+				HealthMonitor.Start();
 				Application application = new Application();
 				application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
 				Controller controller = null;
 				application.Exit += (object s, ExitEventArgs e) =>
 				{
+					HealthMonitor.Shutdown();
 					try
 					{
 						// 隐藏桌面图标是持久偏好：退出时保留隐藏状态，下次启动免广播、
@@ -226,6 +228,7 @@ public static class Program
 				};
 				application.DispatcherUnhandledException += (object s, DispatcherUnhandledExceptionEventArgs e) =>
 				{
+					HealthMonitor.Report("界面异常", e.Exception?.ToString() ?? "未知");
 					Store.Log(e.Exception);
 					if (controller != null)
 					{
@@ -253,6 +256,7 @@ public static class Program
 			}
 			catch (Exception ex5)
 			{
+				HealthMonitor.Report("启动失败", ex5.ToString());
 				Store.Log(ex5);
 				MessageBox.Show("启动失败：" + ex5.Message, "GlassBoard-Source");
 				return 1;
