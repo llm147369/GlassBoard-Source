@@ -901,19 +901,6 @@ public sealed class WidgetWindow : GlassWindow
 	private ContextMenu WidgetMenu(string kind)
 	{
 		ContextMenu contextMenu = MenuTheme.Create(LightTheme, M.C.Prefs.Dock.Accent, M.C.Prefs.Widgets.Material.Tint, (int)WidgetSizing.Background(M.C.Prefs.Widgets, M.C.Prefs.Widgets.Position(PanelId)));
-		if (kind == "clock")
-		{
-			MenuItem menuItem = new MenuItem
-			{
-				Header = "闹钟与倒计时"
-			};
-			menuItem.Click += (object ss, RoutedEventArgs ee) =>
-			{
-				ClockSettings();
-			};
-			contextMenu.Items.Add(menuItem);
-			contextMenu.Items.Add(new Separator());
-		}
 		if (kind == "music")
 		{
 			MenuItem menuItem2 = new MenuItem
@@ -2206,20 +2193,6 @@ public sealed class WidgetWindow : GlassWindow
 		}
 		else
 		{
-			Grid grid4 = new Grid();
-			grid4.ColumnDefinitions.Add(new ColumnDefinition());
-			grid4.ColumnDefinitions.Add(new ColumnDefinition
-			{
-				Width = GridLength.Auto
-			});
-			weekday = ClockText(12.0, "Consolas");
-			weekday.FontWeight = FontWeights.Bold;
-			grid4.Children.Add(weekday);
-			TextBlock textBlock3 = ClockText(10.0, "Consolas");
-			textBlock3.Text = (s.Hour24 ? "24 H" : "12 H");
-			Grid.SetColumn(textBlock3, 1);
-			grid4.Children.Add(textBlock3);
-			body.Children.Add(grid4);
 			clock.FontFamily = new FontFamily(text ?? "Consolas");
 			clock.FontSize = s.ClockSize * 1.08;
 			body.Children.Add(clock);
