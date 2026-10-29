@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -196,13 +196,36 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard-Source v0.9.20.9 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.10 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
 		RefreshTrayMenu();
 		Store.Trace("START phase=tray ms=" + (Environment.TickCount - Program.ProcessStartTick));
-		TryAutoUpdate();
+		Tray.DoubleClick += (object s, EventArgs e) =>
+		{
+			Toggle(force: true);
+		};
+		// 先完成 Dock 的首帧显示。更新检查、通知监听、桌面同步与组件恢复都放到
+		// Dispatcher 空闲时执行，避免把开机启动的首个可见画面压在非关键初始化后面。
+		Dock.Refresh();
+		if (!GlassSuppressed)
+		{
+			Dock.Show();
+		}
+		Dock.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(CompleteDeferredStartup));
+	}
+
+	private void CompleteDeferredStartup()
+	{
+		try
+		{
+			TryAutoUpdate();
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 		try
 		{
 			// 应用通知红点：监听系统通知（Win10/11）。无权限或系统不支持时功能自动停用并记日志。
@@ -222,15 +245,6 @@ public class Controller
 			Store.Log(ex);
 		}
 		Store.Trace("START phase=services ms=" + (Environment.TickCount - Program.ProcessStartTick));
-		Tray.DoubleClick += (object s, EventArgs e) =>
-		{
-			Toggle(force: true);
-		};
-		Dock.Refresh();
-		if (!GlassSuppressed)
-		{
-			Dock.Show();
-		}
 		if (Prefs.HotkeyMigrationConflict)
 		{
 			Tray.ShowBalloonTip(4500, "快捷键升级提示", "原有组合与 Ctrl+Alt+H 冲突，已保留原设置并关闭新增项。可在设置中录制新组合。", ToolTipIcon.Info);
@@ -1541,7 +1555,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.9",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.10",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
