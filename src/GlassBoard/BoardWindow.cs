@@ -90,12 +90,6 @@ public class BoardWindow : GlassWindow
 
 	private ContextMenu iconMenu;
 
-	private bool iconSizeSync;
-
-	private Slider boardIconSlider;
-
-	private TextBlock iconSizeText;
-
 	private Thumb moveGrip;
 
 	private Thumb resizeGrip;
@@ -366,19 +360,6 @@ public class BoardWindow : GlassWindow
 
 	public void RefreshIcons()
 	{
-		if (boardIconSlider != null)
-		{
-			iconSizeSync = true;
-			try
-			{
-				boardIconSlider.Value = C.Prefs.BoardIconSize;
-				iconSizeText.Text = "图标 " + Math.Round(C.Prefs.BoardIconSize) + " px";
-			}
-			finally
-			{
-				iconSizeSync = false;
-			}
-		}
 		iconsDirty = true;
 		QueueSizeRefresh();
 	}
@@ -533,9 +514,8 @@ public class BoardWindow : GlassWindow
 		layout = null;
 		bulkBar = null;
 		bulkRow = null;
-		selectionCount = (iconSizeText = null);
+		selectionCount = null;
 		selectAll = (clearSelection = (deleteSelected = (undoRemoval = (editSelection = null))));
-		boardIconSlider = null;
 		dragEntry = null;
 		return true;
 	}
@@ -806,50 +786,6 @@ public class BoardWindow : GlassWindow
 		};
 		Grid.SetRow(wrapPanel, 1);
 		layout.Children.Add(wrapPanel);
-		StackPanel stackPanel = new StackPanel
-		{
-			Orientation = Orientation.Horizontal,
-			VerticalAlignment = VerticalAlignment.Center,
-			Margin = new Thickness(6.0, 0.0, 8.0, 0.0)
-		};
-		iconSizeText = new TextBlock
-		{
-			Text = "图标 " + Math.Round(C.Prefs.BoardIconSize) + " px",
-			Foreground = TextBrush,
-			VerticalAlignment = VerticalAlignment.Center,
-			Width = 75.0
-		};
-		stackPanel.Children.Add(iconSizeText);
-		boardIconSlider = new Slider
-		{
-			Minimum = 28.0,
-			Maximum = 80.0,
-			Value = C.Prefs.BoardIconSize,
-			Width = 110.0,
-			TickFrequency = 2.0,
-			IsSnapToTickEnabled = true,
-			ToolTip = "缩小图标，让每页容纳更多入口"
-		};
-		boardIconSlider.ValueChanged += (object s, RoutedPropertyChangedEventArgs<double> e) =>
-		{
-			if (!iconSizeSync)
-			{
-				C.Prefs.BoardIconSize = boardIconSlider.Value;
-				iconSizeText.Text = "图标 " + Math.Round(boardIconSlider.Value) + " px";
-				RefreshIcons();
-				C.Save();
-			}
-		};
-		stackPanel.Children.Add(boardIconSlider);
-		wrapPanel.Children.Add(stackPanel);
-		wrapPanel.Children.Add(Button("添加文件夹", (object s, RoutedEventArgs e) =>
-		{
-			C.AddFolder();
-		}, 100.0));
-		wrapPanel.Children.Add(Button("更多", (object s, RoutedEventArgs e) =>
-		{
-			MoreMenu();
-		}, 68.0));
 		bulkBar = new WrapPanel
 		{
 			VerticalAlignment = VerticalAlignment.Center,
