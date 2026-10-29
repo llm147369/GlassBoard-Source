@@ -115,10 +115,10 @@ public static class ShellContextMenu
 	private static extern IntPtr CreatePopupMenu();
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
-	private static extern bool AppendMenu(IntPtr hMenu, uint uFlags, uint uIDNewItem, string lpNewItem);
+	private static extern bool AppendMenu(IntPtr hMenu, uint uFlags, IntPtr uIDNewItem, string lpNewItem);
 
-	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
-	private static extern bool AppendMenu(IntPtr hMenu, uint uFlags, uint uIDNewItem, IntPtr hSubMenu);
+	[DllImport("user32.dll")]
+	private static extern bool AppendMenu(IntPtr hMenu, uint uFlags, IntPtr uIDNewItem, IntPtr hSubMenu);
 
 	[DllImport("user32.dll")]
 	private static extern bool DestroyMenu(IntPtr hMenu);
@@ -445,7 +445,7 @@ public static class ShellContextMenu
 		{
 			if (entry.Separator)
 			{
-				AppendMenu(hmenu, MF_SEPARATOR, 0, (string)null);
+				AppendMenu(hmenu, MF_SEPARATOR, IntPtr.Zero, (string)null);
 				continue;
 			}
 			uint flags = 0;
@@ -462,12 +462,13 @@ public static class ShellContextMenu
 				IntPtr sub = RebuildMenu(entry.Sub);
 				if (sub != IntPtr.Zero)
 				{
-					AppendMenu(hmenu, flags | MF_POPUP, entry.Id, sub);
+					// Win32 约定：MF_POPUP 时 uIDNewItem 必须是子菜单句柄，lpNewItem 忽略
+					AppendMenu(hmenu, flags | MF_POPUP, sub, IntPtr.Zero);
 				}
 			}
 			else
 			{
-				AppendMenu(hmenu, flags, entry.Id, entry.Text ?? "");
+				AppendMenu(hmenu, flags, new IntPtr((int)entry.Id), entry.Text ?? "");
 			}
 		}
 		return hmenu;
