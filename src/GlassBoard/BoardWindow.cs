@@ -1662,7 +1662,14 @@ public class BoardWindow : GlassWindow
 			CloseMediaPreview();
 			Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(delegate
 			{
-				ShellContextMenu.ShowAtCursor(a.Path, this);
+				ShellContextMenu.ShowAtCursor(a.Path, this, delegate
+				{
+					// 原生菜单构建失败（路径不可解析/无 Shell 菜单）时回退内置菜单，保证右键永远有响应
+					System.Windows.Controls.ContextMenu menu = C.Menu(a, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
+					menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+					menu.PlacementTarget = tile;
+					menu.IsOpen = true;
+				});
 			}));
 		};
 		Grid grid = new Grid();

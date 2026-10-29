@@ -114,6 +114,12 @@ public static class ShellContextMenu
 	[DllImport("user32.dll")]
 	private static extern IntPtr CreatePopupMenu();
 
+	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+	private static extern bool AppendMenu(IntPtr hMenu, uint uFlags, uint uIDNewItem, string lpNewItem);
+
+	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+	private static extern bool AppendMenu(IntPtr hMenu, uint uFlags, uint uIDNewItem, IntPtr hSubMenu);
+
 	[DllImport("user32.dll")]
 	private static extern bool DestroyMenu(IntPtr hMenu);
 
@@ -147,6 +153,10 @@ public static class ShellContextMenu
 	private const uint MFT_SEPARATOR = 0x0800;
 	private const uint MFS_DISABLED = 0x0003;
 	private const uint MFS_CHECKED = 0x0008;
+	private const uint MF_SEPARATOR = 0x0800;
+	private const uint MF_GRAYED = 0x0001;
+	private const uint MF_CHECKED = 0x0008;
+	private const uint MF_POPUP = 0x0010;
 
 	/// <summary>原生菜单追踪期间为 true；大面板/控制中心据此抑制失焦自动隐藏。</summary>
 	public static volatile bool Active;
@@ -423,11 +433,52 @@ public static class ShellContextMenu
 		}
 	}
 
-	private static int ShowNative(string path, IntPtr hwnd)
+	// 用宿主线程构建出的模型在 UI 线程重建纯 Win32 菜单（保留 id/禁用/勾选/子菜单，不依赖 Shell 扩展渲染）。
+	private static IntPtr RebuildMenu(List<ShellMenuEntry> model)
 	{
-		IntPtr pidl;
-		IContextMenu menu;
-		IntPtr hmenu = Prepare(path, out pidl, out menu);
+		IntPtr hmenu = CreatePopupMenu();
+		if (hmenu == IntPtr.Zero)
+		{
+			return IntPtr.Zero;
+		}
+		foreach (ShellMenuEntry entry in model)
+		{
+			if (entry.Separator)
+			{
+				AppendMenu(hmenu, MF_SEPARATOR, 0, (string)null);
+				continue;
+			}
+			uint flags = 0;
+			if (entry.Disabled)
+			{
+				flags |= MF_GRAYED;
+			}
+			if (entry.Checked)
+			{
+				flags |= MF_CHECKED;
+			}
+			if (entry.Sub != null && entry.Sub.Count > 0)
+			{
+				IntPtr sub = RebuildMenu(entry.Sub);
+				if (sub != IntPtr.Zero)
+				{
+					AppendMenu(hmenu, flags | MF_POPUP, entry.Id, sub);
+				}
+			}
+			else
+			{
+				AppendMenu(hmenu, flags, entry.Id, entry.Text ?? "");
+			}
+		}
+		return hmenu;
+	}
+
+	// 必须在 owner 所属的 UI 线程调用：TrackPopupMenuEx 从后台线程（含 WPF Dispatcher 宿主线程）调用时
+	// 菜单窗口根本不会创建、立即返回 0（已用 MenuTest 实测矩阵证实）。菜单模型构建仍留在宿主线程，
+	// 因此第三方扩展卡死不会冻结 UI；只有最后的菜单追踪阶段占用 UI 线程（与资源管理器一致）。
+	private static int TrackNative(string path, List<ShellMenuEntry> model, IntPtr hwnd)
+	{
+		IntPtr hmenu = RebuildMenu(model);
 		if (hmenu == IntPtr.Zero)
 		{
 			return 0;
@@ -447,30 +498,23 @@ public static class ShellContextMenu
 			}
 			finally
 			{
-				Active = false;
+				// 延迟复位：菜单打开期间排队的 Deactivated 事件（Input 优先级）先于 Idle 处理，
+				// 保证面板/控制中心的失焦自动隐藏在菜单存续与关闭瞬间都不误判。
+				Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(delegate
+				{
+					Active = false;
+				}));
 			}
 			Store.Trace("SHELLMENU track=" + cmd);
-			if (cmd != 0 && menu != null)
+			if (cmd != 0)
 			{
-				CMINVOKECOMMANDINFO info = new CMINVOKECOMMANDINFO
-				{
-					cbSize = Marshal.SizeOf(typeof(CMINVOKECOMMANDINFO)),
-					hwnd = hwnd,
-					lpVerb = new IntPtr(cmd - 1),
-					nShow = 1
-				};
-				menu.InvokeCommand(ref info);
+				InvokeAsync(path, (uint)cmd, hwnd);
 			}
 			return cmd;
 		}
 		finally
 		{
 			DestroyMenu(hmenu);
-			if (menu != null)
-			{
-				Marshal.ReleaseComObject(menu);
-			}
-			ILFree(pidl);
 		}
 	}
 
@@ -529,24 +573,46 @@ public static class ShellContextMenu
 		});
 	}
 
-	/// <summary>在鼠标当前位置弹出 path 的原生右键菜单（宿主线程执行，UI 不阻塞）。owner 提供消息窗口。</summary>
-	public static void ShowAtCursor(string path, Window owner)
+	/// <summary>
+	/// 在鼠标当前位置弹出 path 的原生右键菜单：模型在宿主线程异步构建（挂死防护），
+	/// 菜单追踪在 owner 的 UI 线程执行（原生菜单的硬性要求）；构建失败或菜单为空时调用 fallback。
+	/// </summary>
+	public static void ShowAtCursor(string path, Window owner, Action fallback = null)
 	{
 		if (!CanShell(path))
 		{
+			fallback?.Invoke();
 			return;
 		}
-		IntPtr hwnd = ((owner == null) ? IntPtr.Zero : new WindowInteropHelper(owner).Handle);
-		ThreadPool.QueueUserWorkItem(delegate
+		if (owner == null)
 		{
-			try
+			fallback?.Invoke();
+			return;
+		}
+		IntPtr hwnd = new WindowInteropHelper(owner).Handle;
+		BuildAsync(path, delegate (List<ShellMenuEntry> model)
+		{
+			owner.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(delegate
 			{
-				Run(() => ShowNative(path, hwnd), 6000);
-			}
-			catch (Exception ex)
+				try
+				{
+					int cmd = TrackNative(path, model, hwnd);
+					if (cmd == 0 && model.Count == 0)
+					{
+						fallback?.Invoke();
+					}
+				}
+				catch (Exception ex)
+				{
+					Store.Trace("SHELLMENU track error " + ex.Message);
+				}
+			}));
+		}, delegate
+		{
+			owner.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(delegate
 			{
-				Store.Trace("SHELLMENU error " + ex.Message);
-			}
+				fallback?.Invoke();
+			}));
 		});
 	}
 }
