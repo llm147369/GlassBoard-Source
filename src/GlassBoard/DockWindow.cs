@@ -1179,7 +1179,9 @@ public class DockWindow : GlassWindow
 				Stretch = Stretch.Uniform
 			};
 			RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
-			sp.Children[0] = image;
+			// WPF 的 Children[i]=x 赋值会抛「索引已经在使用」；必须先移除再插入。
+			sp.Children.RemoveAt(0);
+			sp.Children.Insert(0, image);
 			notifyIcons[entry.Path] = image;
 		}
 	}

@@ -1960,12 +1960,10 @@ public class BoardWindow : GlassWindow
 		RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
 		if (panel.Children.Count > 0)
 		{
-			panel.Children[0] = image;
+			// WPF 的 Children[i]=x 赋值会抛「索引已经在使用」；必须先移除再插入。
+			panel.Children.RemoveAt(0);
 		}
-		else
-		{
-			panel.Children.Insert(0, image);
-		}
+		panel.Children.Insert(0, image);
 	}
 
 	private FrameworkElement Tile(Entry a, int index, bool animate)
