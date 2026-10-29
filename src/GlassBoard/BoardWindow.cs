@@ -926,15 +926,6 @@ public class BoardWindow : GlassWindow
 			ChangePage(1);
 		}, 40.0));
 		Grid grid4 = new Grid();
-		grid4.ColumnDefinitions.Add(new ColumnDefinition());
-		grid4.ColumnDefinitions.Add(new ColumnDefinition
-		{
-			Width = new GridLength(230.0)
-		});
-		grid4.ColumnDefinitions.Add(new ColumnDefinition
-		{
-			Width = GridLength.Auto
-		});
 		Grid.SetRow(grid4, 5);
 		layout.Children.Add(grid4);
 		Status = new TextBlock
@@ -945,134 +936,8 @@ public class BoardWindow : GlassWindow
 			TextTrimming = TextTrimming.CharacterEllipsis,
 			VerticalAlignment = VerticalAlignment.Center
 		};
-		StackPanel stackPanel3 = new StackPanel
-		{
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		stackPanel3.Children.Add(Status);
-
-		grid4.Children.Add(stackPanel3);
-		StackPanel stackPanel4 = new StackPanel
-		{
-			Orientation = Orientation.Horizontal,
-			VerticalAlignment = VerticalAlignment.Center,
-			HorizontalAlignment = HorizontalAlignment.Right
-		};
-		Grid.SetColumn(stackPanel4, 1);
-		grid4.Children.Add(stackPanel4);
-		// 系统区：此电脑 / 回收站 / 设置（原 Dock 上的入口收纳至此，跟随 Dock 主题）
-		StackPanel sysZone = new StackPanel
-		{
-			Orientation = Orientation.Horizontal,
-			VerticalAlignment = VerticalAlignment.Center,
-			HorizontalAlignment = HorizontalAlignment.Right,
-			Margin = new Thickness(12.0, 0.0, 0.0, 0.0)
-		};
-		Grid.SetColumn(sysZone, 2);
-		grid4.Children.Add(sysZone);
-		sysZone.Children.Add(SysEntry("computer", "此电脑", delegate
-		{
-			Native.Computer();
-		}));
-		sysZone.Children.Add(SysEntry("recycle", "回收站", delegate
-		{
-			try
-			{
-				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
-				{
-					UseShellExecute = true
-				});
-			}
-			catch
-			{
-			}
-		}));
-		sysZone.Children.Add(SysEntry("settings", "设置", delegate
-		{
-			C.Settings();
-		}));
-		TextBlock amount = new TextBlock
-		{
-			Text = "透明度 " + Math.Round(100.0 - GlassPercent) + "%",
-			Foreground = MutedBrush,
-			Width = 83.0,
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		stackPanel4.Children.Add(amount);
-		Slider transparency = new Slider
-		{
-			Minimum = 0.0,
-			Maximum = 100.0,
-			Value = 100.0 - GlassPercent,
-			Width = 140.0,
-			TickFrequency = 5.0,
-			IsSnapToTickEnabled = true,
-			ToolTip = "只改变玻璃背景，图标和文字保持清晰"
-		};
-		stackPanel4.Children.Add(transparency);
-		transparency.ValueChanged += (object s, RoutedPropertyChangedEventArgs<double> e) =>
-		{
-			C.Opacity(100.0 - transparency.Value);
-			amount.Text = "透明度 " + Math.Round(transparency.Value) + "%";
-			C.Save();
-		};
+		grid4.Children.Add(Status);
 		Render(animate: true);
-	}
-
-	// 页脚系统入口：图标 + 文字 + 卡片底，跟随 Dock 主题（明暗 + 强调色）
-	private Border SysEntry(string kind, string title, Action action)
-	{
-		SolidColorBrush restBg = new SolidColorBrush(LightTheme ? System.Windows.Media.Color.FromArgb(28, 25, 28, 34) : System.Windows.Media.Color.FromArgb(24, byte.MaxValue, byte.MaxValue, byte.MaxValue));
-		SolidColorBrush restLine = new SolidColorBrush(LightTheme ? System.Windows.Media.Color.FromArgb(56, 25, 28, 34) : System.Windows.Media.Color.FromArgb(46, byte.MaxValue, byte.MaxValue, byte.MaxValue));
-		SolidColorBrush hoverBg = new SolidColorBrush(LightTheme ? System.Windows.Media.Color.FromArgb(46, 25, 28, 34) : System.Windows.Media.Color.FromArgb(42, byte.MaxValue, byte.MaxValue, byte.MaxValue));
-		Border entry = new Border
-		{
-			Padding = new Thickness(7.0, 3.0, 7.0, 3.0),
-			CornerRadius = new CornerRadius(8.0),
-			BorderThickness = new Thickness(1.0),
-			Background = restBg,
-			BorderBrush = restLine,
-			Cursor = Cursors.Hand,
-			VerticalAlignment = VerticalAlignment.Center,
-			Margin = new Thickness(2.0, 0.0, 2.0, 0.0)
-		};
-		StackPanel stack = new StackPanel
-		{
-			Orientation = Orientation.Horizontal,
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		ContentControl icon = new ContentControl
-		{
-			Content = IconPacks.Glyph(kind, C.Prefs.Dock.IconPack, C.Prefs.Dock.Accent, TextBrush, 15.0),
-			Width = 15.0,
-			Height = 15.0,
-			IsHitTestVisible = false
-		};
-		stack.Children.Add(icon);
-		TextBlock text = new TextBlock
-		{
-			Text = title,
-			FontSize = 12.0,
-			Foreground = TextBrush,
-			Margin = new Thickness(5.0, 0.0, 0.0, 0.0),
-			VerticalAlignment = VerticalAlignment.Center,
-			IsHitTestVisible = false
-		};
-		stack.Children.Add(text);
-		entry.Child = stack;
-		entry.MouseEnter += (object s, System.Windows.Input.MouseEventArgs e) =>
-		{
-			entry.Background = hoverBg;
-		};
-		entry.MouseLeave += (object s, System.Windows.Input.MouseEventArgs e) =>
-		{
-			entry.Background = restBg;
-		};
-		entry.MouseLeftButtonUp += (object s, System.Windows.Input.MouseButtonEventArgs e) =>
-		{
-			action();
-		};
-		return entry;
 	}
 
 	private List<Entry> Filtered()
