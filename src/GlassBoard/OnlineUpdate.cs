@@ -466,6 +466,15 @@ public static class OnlineUpdate
 			UseShellExecute = false,
 			CreateNoWindow = true
 		});
+		// 更新重启属于正常退出：先标记会话结束，否则组件窗口的 Closed 事件会把每个
+		// 组件当作"用户主动关闭"而全部禁用并保存——每次在线更新后组件配置全部丢失。
+		foreach (Window window in Application.Current.Windows)
+		{
+			if (window is WidgetWindow widgetWindow)
+			{
+				widgetWindow.MarkSessionEnding();
+			}
+		}
 		Application.Current.Shutdown();
 	}
 }
