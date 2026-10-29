@@ -31,7 +31,9 @@ foreach ($p in $gb) {
     try {
         $proc = [System.Diagnostics.Process]::GetProcessById([int]$p.ProcessId)
         $cpu = ' CPU=' + [math]::Round($proc.TotalProcessorTime.TotalSeconds, 1) + 's'
-        Say ('  PID {0}  {1}  启动={2}  内存={3}MB{4}' -f $p.ProcessId, $role, $proc.StartTime.ToString('HH:mm:ss'), [math]::Round($proc.WorkingSet64 / 1MB, 0), $cpu)
+        $wsMB = [math]::Round($proc.WorkingSet64 / 1MB, 0)
+        Say ('  PID {0}  {1}  启动={2}  内存={3}MB{4}' -f $p.ProcessId, $role, $proc.StartTime.ToString('HH:mm:ss'), $wsMB, $cpu)
+        if ($role -eq '主进程' -and $wsMB -gt 300) { $flags.Add('主进程内存 ' + [string]$wsMB + 'MB 偏高：重启后若持续增长，留意虚拟显示适配器/高 DPI 渲染，把 error.log 发来排查') }
         $proc.Dispose()
     } catch { Say ('  PID {0}  {1}（进程已变化）' -f $p.ProcessId, $role) }
 }
@@ -67,7 +69,9 @@ if (-not (Test-Path -LiteralPath $sessionLog)) {
         $avgT = [math]::Round(($board | Measure-Object Total -Average).Average, 0)
         $maxB = ($board | Measure-Object Build -Maximum).Maximum
         $maxD = ($board | Measure-Object Backdrop -Maximum).Maximum
-        Say ('  面板打开 {0} 次: 平均 {1}ms / 最慢 {2}ms（其中磁贴重建最慢 {3}ms、背景捕获最慢 {4}ms）' -f $board.Count, $avgT, $maxT, $maxB, $maxD)
+        $lastBoard = $board[-1]
+        Say ('  面板打开 {0} 次: 平均 {1}ms / 最慢 {2}ms / 最近 {3}ms（磁贴重建最慢 {4}ms、背景捕获最慢 {5}ms）' -f $board.Count, $avgT, $maxT, $lastBoard.Total, $maxB, $maxD)
+        if ($board.Count -le 3) { Say '  提示: 日志里只有前几次打开记录（冷缓存），多开几次面板再跑本脚本对比' }
         if ($maxT -ge 600) { $flags.Add('面板打开最慢 {0}ms：此机存在明显卡顿，重建慢=磁盘/杀软，捕获慢=显卡/壁纸软件' -f $maxT) }
         elseif ($maxT -ge 350) { $flags.Add('面板打开最慢 {0}ms：中等偏慢' -f $maxT) }
         $slow = @($board | Where-Object { $_.Total -ge 300 } | Select-Object -First 5 | ForEach-Object { '    total=' + $_.Total + 'ms build=' + $_.Build + 'ms backdrop=' + $_.Backdrop + 'ms' })
@@ -85,7 +89,7 @@ if (-not (Test-Path -LiteralPath $sessionLog)) {
 
     # 启动与预热
     $starts = @($content | Select-String -Pattern 'START phase=controller ms=(\d+)' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value })
-    if ($starts.Count -gt 0) { Say ('  启动到控制器就绪: 最慢 {0}ms（冷启动 3s 内都算正常）' -f ($starts | Measure-Object -Maximum).Maximum) }
+    if ($starts.Count -gt 0) { Say ('  启动到控制器就绪: 最近 {0}ms / 最慢 {1}ms（冷启动 3s 内都算正常）' -f $starts[-1], ($starts | Measure-Object -Maximum).Maximum) }
     $warms = @($content | Select-String -Pattern 'WARM icons done n=(\d+)' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value })
     if ($warms.Count -gt 0) { Say ('  图标预热完成记录 {0} 条（异步化后不再阻塞界面）' -f $warms.Count) }
     $inits = @($content | Select-String -Pattern 'WINDOW init cls=(\S+) ms=(\d+)')
