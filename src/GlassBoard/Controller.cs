@@ -196,7 +196,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard-Source v0.9.20.8 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.9 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1541,7 +1541,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.8",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.9",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -3422,6 +3422,10 @@ public class Controller
 					action("24 小时制", s.Hour24, (bool v) =>
 					{
 						s.Hour24 = v;
+					});
+					action2("显示时区", TimeZones.Labels, TimeZones.Index(Prefs.Widgets.TimeZoneId), (int v) =>
+					{
+						Prefs.Widgets.TimeZoneId = TimeZones.List[v].Id;
 					});
 				}
 				if (k == "music")

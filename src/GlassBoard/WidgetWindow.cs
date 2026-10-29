@@ -451,7 +451,7 @@ public sealed class WidgetWindow : GlassWindow
 	private void ClockTick()
 	{
 		WidgetStyle widgetStyle = StyleFor("clock");
-		DateTime now = DateTime.Now;
+		DateTime now = TimeZones.Now(M.C.Prefs.Widgets.TimeZoneId);
 		CultureInfo cultureInfo = CultureInfo.GetCultureInfo("en-US");
 		SetText(clock, now.ToString(widgetStyle.Hour24 ? "HH:mm:ss" : "hh:mm:ss tt", cultureInfo));
 		SetText(clockHours, now.ToString(widgetStyle.Hour24 ? "HH" : "hh"));
@@ -1252,7 +1252,7 @@ public sealed class WidgetWindow : GlassWindow
 	private void ClockSettings()
 	{
 		WidgetOptions o = M.C.Prefs.Widgets;
-		Window w = FeatureUi.Dialog("闹钟与倒计时", this, 540.0, 650.0);
+		Window w = FeatureUi.Dialog("时钟 · 闹钟与倒计时", this, 540.0, 650.0);
 		StackPanel stackPanel = new StackPanel
 		{
 			Margin = new Thickness(24.0)
@@ -1262,6 +1262,29 @@ public sealed class WidgetWindow : GlassWindow
 			Content = stackPanel,
 			VerticalScrollBarVisibility = ScrollBarVisibility.Hidden
 		};
+		stackPanel.Children.Add(new TextBlock
+		{
+			Text = "时区",
+			FontSize = 21.0,
+			Margin = new Thickness(0.0, 0.0, 0.0, 12.0)
+		});
+		System.Windows.Controls.ComboBox timeZone = new System.Windows.Controls.ComboBox
+		{
+			ItemsSource = TimeZones.Labels,
+			SelectedIndex = TimeZones.Index(o.TimeZoneId),
+			MinHeight = 34.0,
+			Margin = new Thickness(0.0, 0.0, 0.0, 16.0)
+		};
+		timeZone.SelectionChanged += (object s, SelectionChangedEventArgs e) =>
+		{
+			if (timeZone.SelectedIndex >= 0)
+			{
+				o.TimeZoneId = TimeZones.List[timeZone.SelectedIndex].Id;
+				M.C.Save();
+				ClockTick();
+			}
+		};
+		stackPanel.Children.Add(timeZone);
 		stackPanel.Children.Add(new TextBlock
 		{
 			Text = "闹钟",

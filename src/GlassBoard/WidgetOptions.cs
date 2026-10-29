@@ -78,6 +78,9 @@ public class WidgetOptions
 	public string City = "";
 
 	[DataMember]
+	public string TimeZoneId = "";
+
+	[DataMember]
 	public double Volume = 0.6;
 
 	[DataMember]
@@ -97,6 +100,7 @@ public class WidgetOptions
 	{
 		AutoNativeMediaCompatibility = true;
 		City = "";
+		TimeZoneId = "";
 		Volume = 0.6;
 		OpacityPercent = 72.0;
 		MusicMode = "system";
@@ -123,6 +127,7 @@ public class WidgetOptions
 		{
 			City = City.Substring(0, 100);
 		}
+		TimeZoneId = (TimeZones.Valid(TimeZoneId) ? (TimeZoneId ?? "") : "");
 		Volume = LayoutRules.Clamp(Volume, 0.0, 1.0, 0.6);
 		OpacityPercent = LayoutRules.Clamp(OpacityPercent, 0.0, 100.0, 72.0);
 		ClockPanel = Panel(ClockPanel);
