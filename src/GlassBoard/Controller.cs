@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -196,7 +196,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard-Source v0.9.20.7 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.8 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1541,7 +1541,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.7",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.8",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -1628,6 +1628,54 @@ public class Controller
 			StackPanel stackPanel5 = func("桌面组件");
 			StackPanel stackPanel6 = func("通用");
 			StackPanel creatorPage = func("支持创作者");
+			StackPanel feedbackPage = func("在线反馈");
+			feedbackPage.Children.Add(new TextBlock
+			{
+				Text = "有想法、想改样式，或发现了 Bug？\n打开在线反馈页直接提交，支持截图（≤2MB），我会通过邮件收到每一条反馈。\n\n小提示：提交问题前，可以先用其他 AI 帮你排查确认，让描述更准确、修复更快。",
+				TextWrapping = TextWrapping.Wrap,
+				Foreground = System.Windows.Media.Brushes.LightGray,
+				FontSize = 14.0,
+				LineHeight = 24.0,
+				Margin = new Thickness(0.0, 0.0, 0.0, 14.0)
+			});
+			WrapPanel feedbackButtons = new WrapPanel();
+			System.Windows.Controls.Button feedbackOpen = new System.Windows.Controls.Button
+			{
+				Content = "打开在线反馈页",
+				Padding = new Thickness(24.0, 10.0, 24.0, 10.0),
+				Cursor = System.Windows.Input.Cursors.Hand
+			};
+			feedbackOpen.Click += (object s, RoutedEventArgs e) =>
+			{
+				try
+				{
+					Process.Start("https://usbi.cn/feedback");
+				}
+				catch
+				{
+				}
+			};
+			System.Windows.Controls.Button feedbackCopy = new System.Windows.Controls.Button
+			{
+				Content = "复制链接",
+				Padding = new Thickness(20.0, 10.0, 20.0, 10.0),
+				Margin = new Thickness(10.0, 0.0, 0.0, 0.0),
+				Cursor = System.Windows.Input.Cursors.Hand
+			};
+			feedbackCopy.Click += (object s, RoutedEventArgs e) =>
+			{
+				try
+				{
+					System.Windows.Clipboard.SetText("https://usbi.cn/feedback");
+					feedbackCopy.Content = "已复制";
+				}
+				catch
+				{
+				}
+			};
+			feedbackButtons.Children.Add(feedbackOpen);
+			feedbackButtons.Children.Add(feedbackCopy);
+			feedbackPage.Children.Add(feedbackButtons);
 			bool creatorLoaded = false;
 			Action loadCreator = () =>
 			{

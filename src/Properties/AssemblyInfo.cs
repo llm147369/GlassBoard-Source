@@ -1,7 +1,7 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
 [assembly: AssemblyTitle("GlassBoard-Source")]
-[assembly: AssemblyFileVersion("0.9.20.7")]
-[assembly: AssemblyVersion("0.9.20.7")]
+[assembly: AssemblyFileVersion("0.9.20.8")]
+[assembly: AssemblyVersion("0.9.20.8")]
