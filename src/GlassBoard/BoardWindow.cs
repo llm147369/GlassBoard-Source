@@ -301,7 +301,7 @@ public class BoardWindow : GlassWindow
 			{
 				Rect workArea = SystemParameters.WorkArea;
 				Width = Math.Max(Math.Min(860.0, workArea.Width - 32.0), Math.Min(workArea.Width - 32.0, Width + e.HorizontalChange));
-				Height = Math.Max(Math.Min(560.0, workArea.Height - 32.0), Math.Min(workArea.Height - 32.0, Height + e.VerticalChange));
+				Height = Math.Max(Math.Min(240.0, workArea.Height - 32.0), Math.Min(workArea.Height - 32.0, Height + e.VerticalChange));
 				Left = FeatureRules.Position(Left, workArea.Left, workArea.Width, Width);
 				Top = FeatureRules.Position(Top, workArea.Top, workArea.Height, Height);
 			}
@@ -553,9 +553,9 @@ public class BoardWindow : GlassWindow
 			PlacementOptions placement = C.Prefs.Placement;
 			Width = Math.Min(placement.PanelWidth ?? num, workArea.Width - 32.0);
 			Height = Math.Min(placement.PanelHeight ?? num2, workArea.Height - 32.0);
-			Height = Math.Max(Math.Min(400.0, workArea.Height - 130.0), Height);
+			// 滚动模式下最小高度放宽到 240：原 400/560 下限是分页时代的约束，改为按内容自适应
+			Height = Math.Max(Math.Min(240.0, workArea.Height - 32.0), Height);
 			Width = Math.Max(Math.Min(860.0, workArea.Width - 32.0), Width);
-			Height = Math.Max(Math.Min(560.0, workArea.Height - 32.0), Height);
 			Left = FeatureRules.Position(placement.PanelLeft ?? (workArea.Left + (workArea.Width - Width) / 2.0), workArea.Left, workArea.Width, Width);
 			Top = FeatureRules.Position(placement.PanelTop ?? (workArea.Top + (workArea.Height - C.Dock.Height - Height) / 2.0), workArea.Top, workArea.Height, Height);
 			Thumb thumb = moveGrip;
@@ -572,6 +572,16 @@ public class BoardWindow : GlassWindow
 			Polish.Apply(this, LightTheme);
 			BuildForSize();
 			buildMs = openTimer.ElapsedMilliseconds;
+			if (placement.PanelHeight == null && C.Prefs.PanelSize != 2)
+			{
+				// 面板高度贴着内容走：ScrollViewer 里的 UniformGrid 按完整内容测量，得到整格网高度；
+				// 用户手动调整过尺寸（PanelHeight 已保存）或全屏模式（PanelSize 2）时不干预。
+				UpdateLayout();
+				double rowsHeight = ((Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight : (C.Prefs.BoardIconSize + 48.0));
+				double fitHeight = 55.0 + 32.0 + 8.0 + rowsHeight;
+				Height = Math.Min(Math.Max(fitHeight, 240.0), Math.Min(num2, workArea.Height - 32.0));
+				Top = FeatureRules.Position(placement.PanelTop ?? (workArea.Top + (workArea.Height - C.Dock.Height - Height) / 2.0), workArea.Top, workArea.Height, Height);
+			}
 			Backdrop(C.Prefs.Light);
 			backdropMs = openTimer.ElapsedMilliseconds - buildMs;
 			Show();
