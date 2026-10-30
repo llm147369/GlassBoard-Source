@@ -1108,14 +1108,19 @@ public static class RunningWindows
 			string path = window.Path ?? "";
 			if (InvokeTrayButton(names))
 			{
-				Thread.Sleep(600);
-				List<IntPtr> visible = VisibleWindowsOf(path);
-				if (visible.Count > 0)
+				// 轮询确认窗口真的被唤出（部分应用启动较慢）；没出现则继续后面的兜底步骤，
+				// 而不是直接宣告成功——否则点击就白吞了。
+				for (int i = 0; i < 3; i++)
 				{
-					ActivateHandle(visible[0]);
+					Thread.Sleep(500);
+					List<IntPtr> visible = VisibleWindowsOf(path);
+					if (visible.Count > 0)
+					{
+						ActivateHandle(visible[0]);
+						Store.Trace("WAKETRAY tray-invoke ok");
+						return true;
+					}
 				}
-				Store.Trace("WAKETRAY tray-invoke ok");
-				return true;
 			}
 			IntPtr known = IntPtr.Zero;
 			lock (scanGate)
@@ -1211,8 +1216,9 @@ public static class RunningWindows
 		return result;
 	}
 
-	// 在系统托盘区域（含溢出区）找名称匹配的图标按钮并单击。Win11 托盘是 XAML 岛，
-	// UIA 挂在 TrayNotifyWnd 上仍可枚举到按钮；经典 ToolbarWindow32 则用鼠标坐标点击。
+	// 在系统托盘区域（含 Win11 溢出区）找名称匹配的图标按钮并单击：
+	// 1) 先匹配主托盘区可见按钮；2) 图标在溢出区时先点「显示隐藏的图标」再点。
+	// 坐标点击带任务栏范围校验，不会把鼠标甩到别处。
 	private static bool InvokeTrayButton(string[] names)
 	{
 		if (names == null || names.Length == 0)
@@ -1220,46 +1226,145 @@ public static class RunningWindows
 			return false;
 		}
 		List<string> candidates = names.Where((string n) => !string.IsNullOrWhiteSpace(n)).Select((string n) => n.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-		bool Matches(string name)
+		if (TryUiaClick(candidates, includeOffscreen: false))
 		{
-			if (string.IsNullOrWhiteSpace(name))
+			return true;
+		}
+		if (OpenOverflow())
+		{
+			Thread.Sleep(400);
+			if (TryUiaClick(candidates, includeOffscreen: true))
 			{
-				return false;
+				return true;
 			}
-			foreach (string candidate in candidates)
+			try
 			{
-				if (candidate.Length < 3)
-				{
-					continue;
-				}
-				if (name.IndexOf(candidate, StringComparison.OrdinalIgnoreCase) >= 0 || candidate.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+				keybd_event(27, 0, 0u, UIntPtr.Zero);
+				keybd_event(27, 0, 2u, UIntPtr.Zero);
+			}
+			catch
+			{
+			}
+		}
+		return false;
+	}
+
+	// 托盘按钮名称匹配：两档——先全等（避免「QQ」误点「QQ音乐」），再双向包含（「微信」vs「微信 (2)」）。
+	// 注意 2 字中文名（微信/QQ）必须参与匹配，旧实现 Length<3 直接跳过导致微信永远匹配不上。
+	private static bool MatchesTrayButton(List<string> candidates, string name, bool exact)
+	{
+		if (string.IsNullOrWhiteSpace(name))
+		{
+			return false;
+		}
+		foreach (string candidate in candidates)
+		{
+			if (candidate.Length < 2)
+			{
+				continue;
+			}
+			if (exact)
+			{
+				if (name.Equals(candidate, StringComparison.OrdinalIgnoreCase))
 				{
 					return true;
 				}
 			}
-			return false;
+			else if (name.IndexOf(candidate, StringComparison.OrdinalIgnoreCase) >= 0 || candidate.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+			{
+				return true;
+			}
 		}
+		return false;
+	}
+
+	// UIA 枚举托盘按钮并单击匹配项。includeOffscreen=true 时含溢出区按钮（须先打开溢出区）。
+	private static bool TryUiaClick(List<string> candidates, bool includeOffscreen)
+	{
 		try
 		{
 			IntPtr shell = FindWindow("Shell_TrayWnd", null);
-			if (shell != IntPtr.Zero)
+			if (shell == IntPtr.Zero)
 			{
-				IntPtr notify = FindWindowEx(shell, IntPtr.Zero, "TrayNotifyWnd", null);
-				if (notify != IntPtr.Zero)
+				return false;
+			}
+			IntPtr notify = FindWindowEx(shell, IntPtr.Zero, "TrayNotifyWnd", null);
+			if (notify == IntPtr.Zero)
+			{
+				return false;
+			}
+			AutomationElement notifyElement = AutomationElement.FromHandle(notify);
+			AutomationElementCollection buttons = notifyElement.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+			for (int pass = 0; pass < 2; pass++)
+			{
+				foreach (AutomationElement button in buttons)
 				{
-					AutomationElement notifyElement = AutomationElement.FromHandle(notify);
-					AutomationElementCollection buttons = notifyElement.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
-					foreach (AutomationElement button in buttons)
+					if (!includeOffscreen)
 					{
-						if (!Matches(button.Current.Name))
+						try
 						{
-							continue;
+							if ((bool)button.GetCurrentPropertyValue(AutomationElement.IsOffscreenProperty))
+							{
+								continue;
+							}
 						}
-						if (InvokeElement(button))
+						catch
 						{
-							return true;
 						}
 					}
+					string text = "";
+					try
+					{
+						text = button.Current.Name;
+					}
+					catch
+					{
+					}
+					if (MatchesTrayButton(candidates, text, pass == 0) && InvokeElement(button))
+					{
+						return true;
+					}
+				}
+			}
+		}
+		catch
+		{
+		}
+		return false;
+	}
+
+	// 打开托盘溢出区（点「显示隐藏的图标」箭头按钮，Win10/11 通用）。
+	private static bool OpenOverflow()
+	{
+		try
+		{
+			IntPtr shell = FindWindow("Shell_TrayWnd", null);
+			if (shell == IntPtr.Zero)
+			{
+				return false;
+			}
+			IntPtr notify = FindWindowEx(shell, IntPtr.Zero, "TrayNotifyWnd", null);
+			if (notify == IntPtr.Zero)
+			{
+				return false;
+			}
+			AutomationElement notifyElement = AutomationElement.FromHandle(notify);
+			AutomationElementCollection buttons = notifyElement.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+			foreach (AutomationElement button in buttons)
+			{
+				string text = "";
+				string text2 = "";
+				try
+				{
+					text = button.Current.Name;
+					text2 = button.Current.AutomationId;
+				}
+				catch
+				{
+				}
+				if (text.IndexOf("隐藏的图标", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("hidden icons", StringComparison.OrdinalIgnoreCase) >= 0 || text2.IndexOf("Notification Chevron", StringComparison.OrdinalIgnoreCase) >= 0)
+				{
+					return InvokeElement(button);
 				}
 			}
 		}
