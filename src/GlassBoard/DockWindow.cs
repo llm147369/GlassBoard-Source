@@ -2409,14 +2409,7 @@ public class DockWindow : GlassWindow
 		}
 		if (target.Tray)
 		{
-			// 纯托盘程序（无可见窗口）：先尝试恢复隐藏窗口 / 模拟单击托盘图标唤醒，
-			// 都不行才退回重新启动（单实例应用启动后不会弹新窗口，最后手段）。
-			string[] names = group.Windows.Select((RunningWindow w) => w.Title).Concat(new string[1] { group.Name }).Concat(group.Windows.Select((RunningWindow w) => System.IO.Path.GetFileNameWithoutExtension(w.Path))).Where((string n) => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-			if (RunningWindows.WakeTray(target, names))
-			{
-				C.Board.CollapseSmooth();
-				return;
-			}
+			// 纯托盘程序（无可见窗口）：直接重新启动
 			try
 			{
 				Process.Start(target.Path);
@@ -2424,7 +2417,7 @@ public class DockWindow : GlassWindow
 			catch
 			{
 			}
-			ShowTaskHint("正在唤醒 " + group.Name);
+			ShowTaskHint("正在启动 " + group.Name);
 			return;
 		}
 		RunningWindows.Scan();
