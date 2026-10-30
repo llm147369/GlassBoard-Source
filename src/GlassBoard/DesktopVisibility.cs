@@ -25,6 +25,13 @@ public static class DesktopVisibility
 		public int Bottom;
 	}
 
+	private struct POINT
+	{
+		public int X;
+
+		public int Y;
+	}
+
 	private struct APPBARDATA
 	{
 		public uint Size;
@@ -56,6 +63,13 @@ public static class DesktopVisibility
 
 	// 任务栏窗口隐藏节流：explorer 重启重建窗口时避免高频拉扯（comctl32 崩溃循环防护）。
 	private static readonly Dictionary<long, DateTime> lastHide = new Dictionary<long, DateTime>();
+
+	// 用户正在与任务栏/开始菜单/搜索交互的最后时刻（TickCount）：交互期间与之后的宽限期
+	// 内暂停一切压制（SW_HIDE 与 AppBar 重断言），避免开始菜单/搜索卡顿和动态壁纸黑屏。
+	private static int lastInteractionTick;
+
+	// AppBar 状态重断言冷却：工作区变化会触发桌面与动态壁纸层重新布局（黑屏），限制频率。
+	private static int lastAppBarTick;
 
 	// 任务栏"闪现"防护：ABS_AUTOHIDE 只是为了释放全屏工作区，但 Explorer 的自动隐藏
 	// 状态机在鼠标触及屏幕底边时仍会自己把 Shell_TrayWnd 重新显示出来（我们只是 SW_HIDE
@@ -101,6 +115,15 @@ public static class DesktopVisibility
 
 	[DllImport("user32.dll")]
 	private static extern bool EnumWindows(EnumCallback callback, IntPtr data);
+
+	[DllImport("user32.dll")]
+	private static extern bool GetCursorPos(out POINT pt);
+
+	[DllImport("user32.dll")]
+	private static extern bool GetWindowRect(IntPtr h, out RECT rect);
+
+	[DllImport("user32.dll")]
+	private static extern IntPtr GetForegroundWindow();
 
 	[DllImport("user32.dll")]
 	private static extern bool EnumChildWindows(IntPtr parent, EnumCallback callback, IntPtr data);
@@ -584,6 +607,40 @@ public static class DesktopVisibility
 		lastRehide.Clear();
 	}
 
+	// 用户正在与任务栏区域交互：前台是开始菜单/搜索/任务栏本身，或鼠标悬停在已显示的任务栏上。
+	// 此时 Explorer 的状态机正在驱动显示动画，任何 SW_HIDE/AppBar 变更都会拉扯它
+	// （开始菜单与搜索卡顿、动态壁纸黑屏），必须完全放手。
+	private static bool TaskbarInteractionActive()
+	{
+		IntPtr foreground = GetForegroundWindow();
+		if (foreground != IntPtr.Zero)
+		{
+			string cls = Class(foreground);
+			if (cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd" || cls == "Windows.UI.Core.CoreWindow" || cls == "StartMenuDocked" || cls == "SearchApp" || cls == "Shell_CharmWindow")
+			{
+				return true;
+			}
+		}
+		if (GetCursorPos(out POINT pt))
+		{
+			foreach (IntPtr item in Taskbars())
+			{
+				if (IsWindowVisible(item) && GetWindowRect(item, out RECT rect) && pt.X >= rect.Left && pt.X < rect.Right && pt.Y >= rect.Top && pt.Y < rect.Bottom)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	// 交互结束后给 Explorer 状态机一个宽限期收尾动画（开始菜单关闭、任务栏自动隐藏回落），
+	// 宽限期内不压制，过期后由维护循环接管。
+	private static bool InteractionGraceActive()
+	{
+		return Environment.TickCount - lastInteractionTick < 8000;
+	}
+
 	// 任务栏被 Explorer 重新显示时立即压回（WinEvent 回调线程，仅罕见事件）。
 	private static void OnReveal(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
 	{
@@ -599,6 +656,17 @@ public static class DesktopVisibility
 				return;
 			}
 			if (!IsWindowVisible(hwnd) || ShellBooting(hwnd))
+			{
+				return;
+			}
+			if (TaskbarInteractionActive())
+			{
+				// 用户在任务栏上（悬停显示/开始菜单打开）：交给 Explorer 的 ABS_AUTOHIDE
+				// 状态机自行管理，鼠标离开后它会自己收起，不再 SW_HIDE 拉扯。
+				lastInteractionTick = Environment.TickCount;
+				return;
+			}
+			if (InteractionGraceActive())
 			{
 				return;
 			}
@@ -645,11 +713,25 @@ public static class DesktopVisibility
 			}
 			if (taskbarHidden == true)
 			{
+				// 用户正在打开/使用开始菜单、搜索或任务栏：完全放手（Explorer 状态机正在
+				// 驱动显示动画，此时 SW_HIDE 或工作区变化会让开始菜单卡顿、动态壁纸黑屏）。
+				if (TaskbarInteractionActive())
+				{
+					lastInteractionTick = Environment.TickCount;
+					return;
+				}
+				// 交互刚结束的宽限期：等 Explorer 的自动隐藏动画收尾，不立即压制。
+				if (InteractionGraceActive())
+				{
+					return;
+				}
 				// explorer 重启/其他软件改动后可能清掉 ABS_AUTOHIDE：重新断言，保持工作区全屏。
+				// 冷却 5 秒：工作区变化会触发桌面与壁纸层重新布局，频繁翻转必黑屏。
 				try
 				{
-					if (originalAppBarState.HasValue && (AppBarState() & 1u) == 0)
+					if (originalAppBarState.HasValue && (AppBarState() & 1u) == 0 && Environment.TickCount - lastAppBarTick > 5000)
 					{
+						lastAppBarTick = Environment.TickCount;
 						ApplyAppBarState(originalAppBarState.Value | 1u);
 					}
 				}
