@@ -47,6 +47,8 @@ public class BoardWindow : GlassWindow
 
 	private Point dragStart;
 
+	private bool folderDragging;
+
 	private Entry dragEntry;
 
 	// 搜索栏宿主边框：设置里「隐藏大面板搜索栏」开关控制其可见性
@@ -846,7 +848,7 @@ public class BoardWindow : GlassWindow
 		tileScroller.DragOver += (object s, DragEventArgs e) =>
 		{
 			// 磁贴排满时网格没有空位，滚到内容下方空白处仍可作为落点（追加到末尾）
-			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == tileScroller)
+			if ((DraggedEntries(e.Data).Length != 0 || (currentFolder == "" && DraggedFolder(e.Data) != null)) && e.OriginalSource == tileScroller)
 			{
 				e.Effects = DragDropEffects.Move;
 				e.Handled = true;
@@ -854,7 +856,18 @@ public class BoardWindow : GlassWindow
 		};
 		tileScroller.Drop += (object s, DragEventArgs e) =>
 		{
-			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == tileScroller)
+			if (e.OriginalSource != tileScroller)
+			{
+				return;
+			}
+			if (currentFolder == "" && DraggedFolder(e.Data) != null)
+			{
+				HideInsertMarker();
+				C.MoveFolderTo(DraggedFolder(e.Data), int.MaxValue);
+				e.Handled = true;
+				return;
+			}
+			if (DraggedEntries(e.Data).Length != 0)
 			{
 				HideInsertMarker();
 				List<string> seq = CurrentPageSequence().Where((string p) => !DraggedEntries(e.Data).Any((string d) => string.Equals(d, p, StringComparison.OrdinalIgnoreCase))).ToList();
@@ -873,7 +886,19 @@ public class BoardWindow : GlassWindow
 		// 容器级拖放：任意空格 / 末尾都可落点，悬停时其他图标实时让位；贴边自动滚动
 		Tiles.DragOver += (object s, DragEventArgs e) =>
 		{
-			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == Tiles)
+			if (e.OriginalSource != Tiles)
+			{
+				return;
+			}
+			if (currentFolder == "" && DraggedFolder(e.Data) != null)
+			{
+				AutoScrollFor(e.GetPosition(tileScroller));
+				ShowInsertMarker(InsertIndexFor(e.GetPosition(Tiles)));
+				e.Effects = DragDropEffects.Move;
+				e.Handled = true;
+				return;
+			}
+			if (DraggedEntries(e.Data).Length != 0)
 			{
 				AutoScrollFor(e.GetPosition(tileScroller));
 				int idx = InsertIndexFor(e.GetPosition(Tiles));
@@ -888,7 +913,18 @@ public class BoardWindow : GlassWindow
 		};
 		Tiles.Drop += (object s, DragEventArgs e) =>
 		{
-			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == Tiles)
+			if (e.OriginalSource != Tiles)
+			{
+				return;
+			}
+			if (currentFolder == "" && DraggedFolder(e.Data) != null)
+			{
+				HideInsertMarker();
+				MoveFolderToCell(DraggedFolder(e.Data), InsertIndexFor(e.GetPosition(Tiles)));
+				e.Handled = true;
+				return;
+			}
+			if (DraggedEntries(e.Data).Length != 0)
 			{
 				HideInsertMarker();
 				if (!C.ReorderView(CurrentPageSequence()))
@@ -950,6 +986,13 @@ public class BoardWindow : GlassWindow
 	private List<Entry> Filtered()
 	{
 		return C.Prefs.Apps.Where((Entry a) => string.Equals(a.Folder ?? "", currentFolder, StringComparison.OrdinalIgnoreCase)).ToList();
+	}
+
+	// 文件夹第一个成员在当前视图列表里的下标；空文件夹返回极大值（排在末尾）
+	private int FirstMemberIndex(string name, List<Entry> list)
+	{
+		int idx = list.FindIndex((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase));
+		return (idx < 0) ? int.MaxValue : idx;
 	}
 
 	// 文件夹名列表（按首次出现顺序，忽略大小写去重）
@@ -1543,15 +1586,31 @@ public class BoardWindow : GlassWindow
 			Status.Text = "共 " + list.Count + " 个入口" + ((folderNames != null && folderNames.Count != 0) ? (" · " + folderNames.Count + " 个文件夹") : "") + " · 拖动图标到另一个图标上可创建文件夹";
 		}
 		int num2 = 0;
+		List<string> renderedFolders = new List<string>();
 		foreach (Entry item in list)
 		{
+			if (folderNames != null)
+			{
+				// 文件夹磁贴插在第一个成员图标之后：位置随成员自然排序，拖动成员或拖动整个文件夹格都会联动
+				foreach (string name in folderNames)
+				{
+					if (!renderedFolders.Contains(name) && FirstMemberIndex(name, list) <= num2)
+					{
+						Tiles.Children.Add(TileFolder(name, num2++, animate));
+						renderedFolders.Add(name);
+					}
+				}
+			}
 			Tiles.Children.Add(Tile(item, num2++, animate));
 		}
 		if (folderNames != null)
 		{
 			foreach (string name in folderNames)
 			{
-				Tiles.Children.Add(TileFolder(name, num2++, animate));
+				if (!renderedFolders.Contains(name))
+				{
+					Tiles.Children.Add(TileFolder(name, num2++, animate));
+				}
 			}
 		}
 		RefreshFolderBar();
@@ -2080,6 +2139,21 @@ public class BoardWindow : GlassWindow
 				}
 				return;
 			}
+			string folder = DraggedFolder(e.Data);
+			if (currentFolder == "" && folder != null)
+			{
+				// 文件夹格拖过应用图标：显示插入线，落点=文件夹整体移动到该图标前/后
+				AutoScrollFor(e.GetPosition(tileScroller));
+				int idx2 = Tiles.Children.IndexOf(tile);
+				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
+				{
+					idx2++;
+				}
+				ShowInsertMarker(idx2);
+				e.Effects = DragDropEffects.Move;
+				e.Handled = true;
+				return;
+			}
 			if (DraggedEntries(e.Data).Length != 0)
 			{
 				AutoScrollFor(e.GetPosition(tileScroller));
@@ -2119,6 +2193,19 @@ public class BoardWindow : GlassWindow
 						select a.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 					C.DeleteToRecycleBin(real);
 				}
+				return;
+			}
+			string folder = DraggedFolder(e.Data);
+			if (currentFolder == "" && folder != null)
+			{
+				HideInsertMarker();
+				int idx2 = Tiles.Children.IndexOf(tile);
+				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
+				{
+					idx2++;
+				}
+				MoveFolderToCell(folder, idx2);
+				e.Handled = true;
 				return;
 			}
 			string[] array = DraggedEntries(e.Data);
@@ -2186,11 +2273,10 @@ public class BoardWindow : GlassWindow
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		grid.Children.Add(stackPanel);
-		// 迷你图标格：细边框只包住图标区（名称在框外）；只显示实际成员数（最多 4 个），
-		// 成员图标统一小尺寸，不再有撑高整格的大图标
+		// 迷你图标格：细边框只包住图标区（名称在框外）；**高度恒定 2 行**（与应用图标区等高，
+		// 成员多少都不压缩格子）；只显示实际成员数（最多 4 个），成员图标统一小尺寸
 		double mini = Math.Max(8.0, (C.Prefs.BoardIconSize - 4.0) / 2.0);
 		int shown = Math.Min(4, members.Count);
-		int rowCount = ((shown > 2) ? 2 : 1);
 		Border miniBox = new Border
 		{
 			BorderThickness = new Thickness(1.0),
@@ -2214,14 +2300,14 @@ public class BoardWindow : GlassWindow
 				Width = new GridLength(mini)
 			});
 		}
-		for (int r = 0; r < rowCount; r++)
+		for (int r = 0; r < 2; r++)
 		{
 			miniGrid.RowDefinitions.Add(new RowDefinition
 			{
 				Height = new GridLength(mini)
 			});
 		}
-		double iconSize = mini - 4.0;
+		double iconSize = mini - 6.0;
 		if (shown == 0)
 		{
 			// 空文件夹：一个半透明占位图标，保持格子形状
@@ -2237,6 +2323,7 @@ public class BoardWindow : GlassWindow
 				HorizontalAlignment = HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Center
 			};
+			Grid.SetRowSpan(empty, 2);
 			Grid.SetColumnSpan(empty, 2);
 			miniGrid.Children.Add(empty);
 		}
@@ -2255,19 +2342,20 @@ public class BoardWindow : GlassWindow
 				HorizontalAlignment = HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Center
 			};
-			// 布局：1 个居中；2 个并排；3 个上 2 下 1（底部居中）；4 个 2×2
-			if (shown == 1 || (shown == 3 && i == 2))
+			// 布局（格子高度恒定 2 行）：1 个居中；2 个并排垂直居中；3 个上 2 下 1（底部居中）；4 个 2×2
+			if (shown <= 2)
 			{
-				Grid.SetColumnSpan(placeholder, 2);
-			}
-			if (shown >= 3)
-			{
-				Grid.SetRow(placeholder, i / 2);
-				Grid.SetColumn(placeholder, i % 2);
+				Grid.SetRowSpan(placeholder, 2);
+				Grid.SetColumn(placeholder, i);
 			}
 			else
 			{
-				Grid.SetColumn(placeholder, i);
+				Grid.SetRow(placeholder, i / 2);
+				Grid.SetColumn(placeholder, i % 2);
+				if (shown == 3 && i == 2)
+				{
+					Grid.SetColumnSpan(placeholder, 2);
+				}
 			}
 			miniGrid.Children.Add(placeholder);
 			Action<ImageSource> fill = delegate (ImageSource img)
@@ -2369,11 +2457,50 @@ public class BoardWindow : GlassWindow
 		}
 		tile.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
 		{
-			OpenFolder(name);
+			if (!folderDragging)
+			{
+				OpenFolder(name);
+			}
+			folderDragging = false;
+		};
+		Point folderDragStart = default(Point);
+		tile.MouseLeftButtonDown += (object s, MouseButtonEventArgs e) =>
+		{
+			folderDragStart = e.GetPosition(this);
+			folderDragging = false;
+		};
+		tile.MouseMove += (object s, MouseEventArgs e) =>
+		{
+			// 文件夹格可整格拖动调位（把文件夹整体移动到新位置）
+			if (e.LeftButton == MouseButtonState.Pressed && !folderDragging)
+			{
+				Point position = e.GetPosition(this);
+				if (Math.Abs(position.X - folderDragStart.X) + Math.Abs(position.Y - folderDragStart.Y) > 10.0)
+				{
+					folderDragging = true;
+					StartFolderDrag(tile, name);
+				}
+			}
 		};
 		tile.DragOver += (object s, DragEventArgs e) =>
 		{
-			if (currentFolder == "" && DraggedEntries(e.Data).Length != 0)
+			if (currentFolder != "")
+			{
+				return;
+			}
+			string folder = DraggedFolder(e.Data);
+			if (folder != null)
+			{
+				int idx = Tiles.Children.IndexOf(tile);
+				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
+				{
+					idx++;
+				}
+				ShowInsertMarker(idx);
+				e.Effects = DragDropEffects.Move;
+				e.Handled = true;
+			}
+			else if (DraggedEntries(e.Data).Length != 0)
 			{
 				e.Effects = DragDropEffects.Move;
 				e.Handled = true;
@@ -2383,6 +2510,19 @@ public class BoardWindow : GlassWindow
 		{
 			if (currentFolder != "")
 			{
+				return;
+			}
+			string folder = DraggedFolder(e.Data);
+			if (folder != null)
+			{
+				HideInsertMarker();
+				int idx = Tiles.Children.IndexOf(tile);
+				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
+				{
+					idx++;
+				}
+				MoveFolderToCell(folder, idx);
+				e.Handled = true;
 				return;
 			}
 			string[] array = DraggedEntries(e.Data);
@@ -2416,6 +2556,59 @@ public class BoardWindow : GlassWindow
 			return new string[1] { (string)data.GetData("GlassBoard.Entry") };
 		}
 		return new string[0];
+	}
+
+	// 文件夹格拖动的数据（"GlassBoard.Folder" = 文件夹名）；不是文件夹拖拽返回 null
+	private string DraggedFolder(IDataObject data)
+	{
+		if (data.GetDataPresent("GlassBoard.Folder"))
+		{
+			return data.GetData("GlassBoard.Folder") as string;
+		}
+		return null;
+	}
+
+	// 启动文件夹格拖拽（整格移动=把文件夹连同全部成员移动到新位置）
+	private void StartFolderDrag(FrameworkElement tile, string name)
+	{
+		DataObject dataObject = new DataObject();
+		dataObject.SetData("GlassBoard.Folder", name);
+		dragPreviewText.Text = "移动文件夹 · " + name;
+		bool modalBusy = ModalBusy;
+		ModalBusy = true;
+		activeDrag = true;
+		C.Dock.BeginBoardPinDrag();
+		try
+		{
+			DragDrop.DoDragDrop(tile, dataObject, DragDropEffects.Move);
+		}
+		finally
+		{
+			C.Dock.EndBoardPinDrag();
+			EndDragPreview();
+			ModalBusy = modalBusy;
+			Render();
+		}
+	}
+
+	// 文件夹整体移动到单元格位置：cellIndex 是容器子元素序号（含文件夹格占位），换算成应用序列插入位置后提交
+	private void MoveFolderToCell(string name, int cellIndex)
+	{
+		if (currentFolder != "")
+		{
+			return;
+		}
+		List<Border> items = Tiles.Children.OfType<Border>().ToList();
+		int appIndex = 0;
+		int limit = Math.Max(0, Math.Min(cellIndex, items.Count));
+		for (int i = 0; i < limit; i++)
+		{
+			if (items[i].Tag is Entry)
+			{
+				appIndex++;
+			}
+		}
+		C.MoveFolderTo(name, appIndex);
 	}
 
 	// 按落点（相对 Tiles 的坐标）换算插入位置：行优先，越界时取末尾（追加）
@@ -2649,8 +2842,9 @@ public class BoardWindow : GlassWindow
 		PreviewDragOver += (object s, DragEventArgs e) =>
 		{
 			string[] array = DraggedEntries(e.Data);
+			string folder = DraggedFolder(e.Data);
 			bool dataPresent = e.Data.GetDataPresent(DataFormats.FileDrop);
-			if (array.Length != 0 || dataPresent)
+			if (array.Length != 0 || dataPresent || folder != null)
 			{
 				activeDrag = true;
 				Point position = e.GetPosition(Root);
@@ -2660,6 +2854,10 @@ public class BoardWindow : GlassWindow
 					{
 						string[] array2 = (string[])e.Data.GetData(DataFormats.FileDrop);
 						dragPreviewText.Text = ((array2.Length == 1) ? Path.GetFileName(array2[0]) : ("添加 " + array2.Length + " 个文件"));
+					}
+					else if (folder != null)
+					{
+						dragPreviewText.Text = "移动文件夹 · " + folder;
 					}
 					else
 					{

@@ -196,7 +196,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard-Source v0.9.20.27 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.28 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1612,7 +1612,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.27",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.28",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -4067,6 +4067,29 @@ public class Controller
 		Refresh();
 		Board.Render(animate: true);
 		return true;
+	}
+
+	// 把文件夹（连同其全部成员）整体移动到应用列表的指定位置；文件夹磁贴位置始终跟随成员。
+	public void MoveFolderTo(string name, int targetIndex)
+	{
+		List<Entry> members = Prefs.Apps.Where((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase)).ToList();
+		if (members.Count == 0)
+		{
+			return;
+		}
+		BoardEditState before = BeginBoardEdit();
+		foreach (Entry m in members)
+		{
+			Prefs.Apps.Remove(m);
+		}
+		int insertAt = Math.Max(0, Math.Min(targetIndex, Prefs.Apps.Count));
+		for (int i = 0; i < members.Count; i++)
+		{
+			Prefs.Apps.Insert(insertAt + i, members[i]);
+		}
+		EndBoardEdit(before, "调整文件夹位置");
+		Refresh();
+		Board.Render(animate: true);
 	}
 
 	private void FlushBackupState()
