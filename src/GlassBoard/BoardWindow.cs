@@ -2157,8 +2157,8 @@ public class BoardWindow : GlassWindow
 		{
 			Tag = name,
 			Background = Brushes.Transparent,
-			BorderThickness = new Thickness(1.0),
-			BorderBrush = Brushes.Transparent,
+			BorderThickness = new Thickness(1.5),
+			BorderBrush = new SolidColorBrush(Color.FromArgb(100, ((SolidColorBrush)TextBrush).Color.R, ((SolidColorBrush)TextBrush).Color.G, ((SolidColorBrush)TextBrush).Color.B)),
 			CornerRadius = new CornerRadius(18.0),
 			Margin = new Thickness(C.Prefs.BoardIconGap),
 			Padding = new Thickness(4.0),
@@ -2188,7 +2188,8 @@ public class BoardWindow : GlassWindow
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		grid.Children.Add(stackPanel);
-		// 2×2 迷你图标格：总高与应用图标区等高（格子同尺寸，不撑高整行）；先挂到面板再回填，缓存命中时同步替换占位符
+		// 2×2 迷你图标格：总高与应用图标区等高（格子同尺寸，不撑高整行）；
+		// 只显示实际成员数（最多 4 个），不再渲染空占位格；成员图标尺寸统一
 		double mini = Math.Max(8.0, (C.Prefs.BoardIconSize - 4.0) / 2.0);
 		Grid miniGrid = new Grid
 		{
@@ -2207,26 +2208,64 @@ public class BoardWindow : GlassWindow
 				Height = new GridLength(mini)
 			});
 		}
-		for (int i = 0; i < 4; i++)
+		int shown = Math.Min(4, members.Count);
+		if (shown == 0)
 		{
-			int cell = i;
-			Entry member = ((i < members.Count) ? members[i] : null);
+			// 空文件夹：一个半透明占位图标，保持格子形状
+			TextBlock empty = new TextBlock
+			{
+				Text = "▣",
+				Foreground = TextBrush,
+				Opacity = 0.25,
+				FontSize = (2.0 * mini - 4.0) * 0.75,
+				Width = 2.0 * mini - 4.0,
+				Height = 2.0 * mini - 4.0,
+				TextAlignment = TextAlignment.Center,
+				HorizontalAlignment = HorizontalAlignment.Center,
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			Grid.SetRowSpan(empty, 2);
+			Grid.SetColumnSpan(empty, 2);
+			miniGrid.Children.Add(empty);
+		}
+		double iconSize = ((shown == 1) ? (2.0 * mini - 4.0) : (mini - 4.0));
+		for (int i = 0; i < shown; i++)
+		{
+			Entry member = members[i];
 			TextBlock placeholder = new TextBlock
 			{
 				Text = "▣",
 				Foreground = TextBrush,
-				FontSize = mini * 0.62,
+				Opacity = 0.75,
+				FontSize = iconSize * 0.75,
+				Width = iconSize,
+				Height = iconSize,
+				TextAlignment = TextAlignment.Center,
 				HorizontalAlignment = HorizontalAlignment.Center,
-				VerticalAlignment = VerticalAlignment.Center,
-				Opacity = ((member != null) ? 0.75 : 0.25)
+				VerticalAlignment = VerticalAlignment.Center
 			};
-			Grid.SetRow(placeholder, i / 2);
-			Grid.SetColumn(placeholder, i % 2);
-			miniGrid.Children.Add(placeholder);
-			if (member == null)
+			// 布局：1 个占满整格；2 个左右各半列（垂直居中）；3 个上 2 下 1（底部居中）；4 个 2×2
+			if (shown == 1)
 			{
-				continue;
+				Grid.SetRowSpan(placeholder, 2);
+				Grid.SetColumnSpan(placeholder, 2);
 			}
+			else if (shown == 2)
+			{
+				Grid.SetRow(placeholder, 0);
+				Grid.SetColumn(placeholder, i);
+				Grid.SetRowSpan(placeholder, 2);
+			}
+			else
+			{
+				Grid.SetRow(placeholder, i / 2);
+				Grid.SetColumn(placeholder, i % 2);
+				if (shown == 3 && i == 2)
+				{
+					Grid.SetColumnSpan(placeholder, 2);
+				}
+			}
+			miniGrid.Children.Add(placeholder);
 			Action<ImageSource> fill = delegate (ImageSource img)
 			{
 				if (img == null || miniGrid.Parent == null)
@@ -2236,16 +2275,18 @@ public class BoardWindow : GlassWindow
 				System.Windows.Controls.Image image = new System.Windows.Controls.Image
 				{
 					Source = img,
-					Width = mini - 4.0,
-					Height = mini - 4.0,
+					Width = iconSize,
+					Height = iconSize,
 					HorizontalAlignment = HorizontalAlignment.Center,
 					VerticalAlignment = VerticalAlignment.Center
 				};
 				RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
-				Grid.SetRow(image, cell / 2);
-				Grid.SetColumn(image, cell % 2);
-				miniGrid.Children.RemoveAt(cell);
-				miniGrid.Children.Insert(cell, image);
+				Grid.SetRow(image, Grid.GetRow(placeholder));
+				Grid.SetColumn(image, Grid.GetColumn(placeholder));
+				Grid.SetRowSpan(image, Grid.GetRowSpan(placeholder));
+				Grid.SetColumnSpan(image, Grid.GetColumnSpan(placeholder));
+				miniGrid.Children.Remove(placeholder);
+				miniGrid.Children.Add(image);
 			};
 			ImageSource source = IconPipeline.Request(member, C.Prefs.Dock.ShowShortcutOverlays, true, true, fill);
 			if (source != null)

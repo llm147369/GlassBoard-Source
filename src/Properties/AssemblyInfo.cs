@@ -3,5 +3,5 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 [assembly: AssemblyTitle("GlassBoard-Source")]
-[assembly: AssemblyFileVersion("0.9.20.25")]
-[assembly: AssemblyVersion("0.9.20.25")]
+[assembly: AssemblyFileVersion("0.9.20.26")]
+[assembly: AssemblyVersion("0.9.20.26")]
