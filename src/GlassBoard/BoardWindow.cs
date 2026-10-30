@@ -82,8 +82,6 @@ public class BoardWindow : GlassWindow
 
 	private Button deleteSelected;
 
-	private Button undoRemoval;
-
 	private Button editSelection;
 
 	private ContextMenu iconMenu;
@@ -512,7 +510,7 @@ public class BoardWindow : GlassWindow
 		bulkBar = null;
 		bulkRow = null;
 		selectionCount = null;
-		selectAll = (clearSelection = (deleteSelected = (undoRemoval = (editSelection = null))));
+		selectAll = (clearSelection = (deleteSelected = (editSelection = null)));
 		dragEntry = null;
 		return true;
 	}
@@ -778,12 +776,6 @@ public class BoardWindow : GlassWindow
 		}, 32.0);
 		Grid.SetColumn(element2, 5);
 		grid.Children.Add(element2);
-		WrapPanel wrapPanel = new WrapPanel
-		{
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		Grid.SetRow(wrapPanel, 1);
-		layout.Children.Add(wrapPanel);
 		bulkBar = new WrapPanel
 		{
 			VerticalAlignment = VerticalAlignment.Center,
@@ -809,11 +801,6 @@ public class BoardWindow : GlassWindow
 		}, 112.0);
 		deleteSelected.Foreground = new SolidColorBrush(Color.FromRgb(byte.MaxValue, 155, 155));
 		bulkBar.Children.Add(deleteSelected);
-		undoRemoval = Button("撤销", (object s, RoutedEventArgs e) =>
-		{
-			C.UndoBoard();
-		}, 72.0);
-		wrapPanel.Children.Add(undoRemoval);
 		selectionCount = new TextBlock
 		{
 			Foreground = MutedBrush,
@@ -855,6 +842,30 @@ public class BoardWindow : GlassWindow
 			AllowDrop = true
 		};
 		tileScroller.Content = Tiles;
+		tileScroller.AllowDrop = true;
+		tileScroller.DragOver += (object s, DragEventArgs e) =>
+		{
+			// 磁贴排满时网格没有空位，滚到内容下方空白处仍可作为落点（追加到末尾）
+			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == tileScroller)
+			{
+				e.Effects = DragDropEffects.Move;
+				e.Handled = true;
+			}
+		};
+		tileScroller.Drop += (object s, DragEventArgs e) =>
+		{
+			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == tileScroller)
+			{
+				HideInsertMarker();
+				List<string> seq = CurrentPageSequence().Where((string p) => !DraggedEntries(e.Data).Any((string d) => string.Equals(d, p, StringComparison.OrdinalIgnoreCase))).ToList();
+				seq.AddRange(DraggedEntries(e.Data));
+				if (!C.ReorderView(seq.ToArray()))
+				{
+					Render();
+				}
+				e.Handled = true;
+			}
+		};
 		Tiles.SizeChanged += (object s, SizeChangedEventArgs e) =>
 		{
 			QueueSizeRefresh();
@@ -973,13 +984,12 @@ public class BoardWindow : GlassWindow
 			{
 				folderBar.Children.Add(FolderChip("📁 " + name + "（" + FolderCount(name) + "）", name));
 			}
-			folderBar.Children.Add(FolderChip("＋ 新建文件夹", null, createChip: true));
 		}
 		folderBar.Visibility = ((folderBar.Children.Count > 0) ? Visibility.Visible : Visibility.Collapsed);
 	}
 
 	// 文件夹 chip：单击打开；拖入图标移入；右键打开 / 重命名 / 一键解散。
-	private Border FolderChip(string text, string folderName, bool createChip = false)
+	private Border FolderChip(string text, string folderName)
 	{
 		Border chip = new Border
 		{
@@ -1002,10 +1012,6 @@ public class BoardWindow : GlassWindow
 		chip.Child = label;
 		chip.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
 		{
-			if (createChip)
-			{
-				return; // 新建文件夹只能通过拖入创建（文件夹由内容派生，空文件夹不显示）
-			}
 			OpenFolder(folderName);
 		};
 		chip.DragOver += (object s, DragEventArgs e) =>
@@ -1021,17 +1027,6 @@ public class BoardWindow : GlassWindow
 			string[] paths = DraggedEntries(e.Data);
 			if (paths.Length == 0)
 			{
-				return;
-			}
-			if (createChip)
-			{
-				string name = FeatureUi.Ask(this, "新建文件夹", "新文件夹");
-				if (string.IsNullOrWhiteSpace(name))
-				{
-					return;
-				}
-				MoveEntriesToFolder(paths, name.Trim());
-				OpenFolder(name.Trim());
 				return;
 			}
 			MoveEntriesToFolder(paths, folderName);
@@ -1521,9 +1516,6 @@ public class BoardWindow : GlassWindow
 		clearSelection.IsEnabled = editing && selected.Count > 0;
 		deleteSelected.IsEnabled = editing && selected.Count > 0;
 		deleteSelected.Content = "移除已选（" + selected.Count + "）";
-		undoRemoval.IsEnabled = C.CanUndoRemoval;
-		undoRemoval.ToolTip = "撤销：" + C.UndoLabel + " · Ctrl+Z";
-		undoRemoval.Visibility = ((!C.CanUndoRemoval) ? Visibility.Collapsed : Visibility.Visible);
 		selectionCount.Text = (editing ? ("已选 " + selected.Count + " · 滚动保留") : "可撤销最近操作");
 	}
 
@@ -2123,7 +2115,20 @@ public class BoardWindow : GlassWindow
 			if (array.Length != 0)
 			{
 				HideInsertMarker();
-				if (!C.ReorderView(CurrentPageSequence()))
+				if (currentFolder == "")
+				{
+					// 手机式：拖到另一个图标上自动创建文件夹（重名则并入），把双方一起放进去
+					List<string> paths = array.Where((string p) => !string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)).ToList();
+					if (paths.Count == 0)
+					{
+						e.Handled = true; // 拖到自己身上：无操作
+						return;
+					}
+					paths.Add(a.Path);
+					MoveEntriesToFolder(paths.ToArray(), "文件夹");
+					OpenFolder("文件夹");
+				}
+				else if (!C.ReorderView(CurrentPageSequence()))
 				{
 					Render();
 				}
