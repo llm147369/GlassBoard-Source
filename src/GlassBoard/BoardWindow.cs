@@ -826,7 +826,7 @@ public class BoardWindow : GlassWindow
 		dockPanel.Children.Add(grid3);
 		tileScroller = new ScrollViewer
 		{
-			VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+			VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
 			HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
 			ClipToBounds = true,
 			PanningMode = PanningMode.VerticalFirst,
