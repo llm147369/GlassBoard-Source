@@ -56,6 +56,11 @@ public static class RunningWindows
 	// 连点两次会把刚弹出的窗口又收回去，且窗口尚未出现在扫描里无法识别"已在前台"）。
 	private static readonly BoundedCache<string, int> wakeTick = new BoundedCache<string, int>(96, StringComparer.OrdinalIgnoreCase);
 
+	// 唤醒用：路径 → 最近扫描见过的真实窗口句柄。唤醒托盘程序时只恢复这个句柄，
+	// 绝不盲目恢复进程的全部隐藏窗口——Qt/Chromium 内部桩窗口被恢复后会变成"幽灵弹窗"，
+	// 还会让唤醒误判成功，导致托盘单击永不执行、主窗口唤不回。
+	private static readonly Dictionary<string, IntPtr> knownWindows = new Dictionary<string, IntPtr>(StringComparer.OrdinalIgnoreCase);
+
 	// —— 进程元数据缓存：路径 / AppUserModelID 按 pid 缓存，避免每次窗口枚举都 OpenProcess ——
 	private struct ProcessMeta
 	{
@@ -117,6 +122,20 @@ public static class RunningWindows
 
 	[DllImport("user32.dll")]
 	private static extern bool IsWindow(IntPtr window);
+
+	[DllImport("user32.dll")]
+	private static extern bool GetWindowRect(IntPtr window, out RECT rect);
+
+	private struct RECT
+	{
+		public int Left;
+
+		public int Top;
+
+		public int Right;
+
+		public int Bottom;
+	}
 
 	[DllImport("user32.dll")]
 	private static extern bool IsIconic(IntPtr window);
@@ -562,6 +581,7 @@ public static class RunningWindows
 	{
 		List<RunningWindow> next = new List<RunningWindow>();
 		Dictionary<uint, string> byPid = new Dictionary<uint, string>();
+		Dictionary<string, IntPtr> remembered = new Dictionary<string, IntPtr>(StringComparer.OrdinalIgnoreCase);
 		int own = Process.GetCurrentProcess().Id;
 		EnumWindows((IntPtr handle, IntPtr value) =>
 		{
@@ -628,6 +648,10 @@ public static class RunningWindows
 				Title = stringBuilder.ToString(),
 				AppUserModelId = Aumid(id)
 			});
+			if (!string.IsNullOrEmpty(value3))
+			{
+				remembered[value3] = handle;
+			}
 			return true;
 		}, IntPtr.Zero);
 		List<RunningWindow> tray;
@@ -641,6 +665,10 @@ public static class RunningWindows
 		{
 			windows.Clear();
 			windows.AddRange(next);
+			foreach (KeyValuePair<string, IntPtr> item in remembered)
+			{
+				knownWindows[item.Key] = item.Value;
+			}
 		}
 		if (RenderDiagnostics.Verbose)
 		{
@@ -1054,11 +1082,12 @@ public static class RunningWindows
 		}
 	}
 
-	// 唤醒纯托盘程序（无可见窗口，如 FlClash）：
-	// 1) 先尝试恢复该进程的隐藏窗口（很多应用"关闭"只是隐藏，句柄仍在）；
-	// 2) 仍无窗口时用 UIA 找到系统托盘里对应的图标并模拟单击（等同用户手动点托盘图标），
-	//    程序会自己弹回主窗口——单实例应用也吃这一套，不会触发重复启动。
-	// 返回是否已唤醒（false 时调用方退回 Process.Start 兜底）。
+	// 唤醒纯托盘程序（无可见窗口，如微信/FlClash）。安全链：只恢复"真实窗口"，绝不盲目
+	// 恢复进程的全部隐藏窗口（Qt/Chromium 内部桩窗口被恢复后会产生"幽灵弹窗"，且会
+	// 误判为唤醒成功，导致托盘单击永不执行、主窗口唤不回）：
+	// 1) 最近扫描见过的真实窗口句柄（路径索引；微信"关窗进托盘"后主窗口仍存活）；
+	// 2) UIA 单击系统托盘图标（主窗口被销毁的应用靠它唤回；坐标点击有任务栏范围校验）；
+	// 3) 托盘扫描记下的隐藏窗口（标题曾与托盘名匹配，等价于真实主窗口）。
 	public static bool WakeTray(RunningWindow window, string[] names)
 	{
 		if (window == null)
@@ -1067,49 +1096,58 @@ public static class RunningWindows
 		}
 		try
 		{
-			// 多进程应用（微信 4.x 是 Qt 多进程架构）：按路径收集全部存活 pid，
-			// 恢复其中任意一个进程的隐藏窗口都能唤出主窗口。
-			HashSet<int> pids = LivePidsOf(new string[1] { window.Path });
-			pids.Add((int)window.ProcessId);
-			// 1) 隐藏窗口恢复
-			List<IntPtr> hidden = new List<IntPtr>();
-			EnumWindows((IntPtr handle, IntPtr value) =>
+			string path = window.Path ?? "";
+			IntPtr known = IntPtr.Zero;
+			lock (scanGate)
 			{
-				uint owner;
-				GetWindowThreadProcessId(handle, out owner);
-				if (pids.Contains((int)owner) && !IsWindowVisible(handle) && (GetWindowLong(handle, -20) & 0x80) == 0)
+				if (knownWindows.TryGetValue(path, out var handle) && IsWindow(handle) && !IsWindowVisible(handle))
 				{
-					hidden.Add(handle);
+					known = handle;
 				}
-				return true;
-			}, IntPtr.Zero);
-			foreach (IntPtr handle2 in hidden)
-			{
-				ShowWindowAsync(handle2, 9);
 			}
-			Thread.Sleep(500);
-			List<IntPtr> visible = new List<IntPtr>();
-			EnumWindows((IntPtr handle, IntPtr value) =>
+			if (known != IntPtr.Zero)
 			{
-				uint owner;
-				GetWindowThreadProcessId(handle, out owner);
-				if (pids.Contains((int)owner) && IsWindowVisible(handle) && !IsIconic(handle) && (GetWindowLong(handle, -20) & 0x80) == 0)
+				ShowWindowAsync(known, 9);
+				Thread.Sleep(600);
+				if (IsWindowVisible(known) && !IsIconic(known))
 				{
-					visible.Add(handle);
+					ActivateHandle(known);
+					Store.Trace("WAKETRAY known-window hwnd=" + known.ToInt64());
+					return true;
 				}
-				return true;
-			}, IntPtr.Zero);
-			if (visible.Count > 0)
-			{
-				ActivateHandle(visible[0]);
-				Store.Trace("WAKETRAY hidden-window hwnd=" + visible[0].ToInt64());
-				return true;
 			}
-			// 2) UIA 模拟单击托盘图标
 			if (InvokeTrayButton(names))
 			{
 				Store.Trace("WAKETRAY tray-invoke ok");
 				return true;
+			}
+			List<IntPtr> candidates = new List<IntPtr>();
+			lock (scanGate)
+			{
+				foreach (RunningWindow w in windows)
+				{
+					if (w.Tray && w.Handle != IntPtr.Zero && string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase) && !IsWindowVisible(w.Handle))
+					{
+						candidates.Add(w.Handle);
+					}
+				}
+			}
+			foreach (IntPtr handle2 in candidates)
+			{
+				ShowWindowAsync(handle2, 9);
+			}
+			if (candidates.Count > 0)
+			{
+				Thread.Sleep(500);
+				foreach (IntPtr handle3 in candidates)
+				{
+					if (IsWindowVisible(handle3) && !IsIconic(handle3))
+					{
+						ActivateHandle(handle3);
+						Store.Trace("WAKETRAY tray-window hwnd=" + handle3.ToInt64());
+						return true;
+					}
+				}
 			}
 		}
 		catch (Exception ex)
@@ -1193,7 +1231,9 @@ public static class RunningWindows
 		try
 		{
 			System.Windows.Point point = element.GetClickablePoint();
-			if (point.X > 0.0 || point.Y > 0.0)
+			// 坐标模拟点击必须落在任务栏矩形内（含副屏）：UIA 在图标失效/溢出区收起时
+			// 可能返回过期坐标，直接点击会把鼠标甩到别处误点其他应用。
+			if ((point.X > 0.0 || point.Y > 0.0) && PointInTaskbar(point))
 			{
 				SetCursorPos((int)point.X, (int)point.Y);
 				mouse_event(2u, 0u, 0u, 0u, UIntPtr.Zero);
@@ -1203,6 +1243,25 @@ public static class RunningWindows
 		}
 		catch
 		{
+		}
+		return false;
+	}
+
+	// 任务栏坐标安全校验：点击点必须位于某个任务栏窗口（主屏/副屏）的矩形内。
+	private static bool PointInTaskbar(System.Windows.Point point)
+	{
+		foreach (string text in new string[2] { "Shell_TrayWnd", "Shell_SecondaryTrayWnd" })
+		{
+			IntPtr intPtr = FindWindow(text, null);
+			while (intPtr != IntPtr.Zero)
+			{
+				RECT rect;
+				if (GetWindowRect(intPtr, out rect) && point.X >= (double)rect.Left && point.X <= (double)rect.Right && point.Y >= (double)rect.Top && point.Y <= (double)rect.Bottom)
+				{
+					return true;
+				}
+				intPtr = FindWindowEx(IntPtr.Zero, intPtr, text, null);
+			}
 		}
 		return false;
 	}
@@ -1418,7 +1477,7 @@ public static class RunningWindows
 		foreach (string p in paths)
 		{
 			string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(p);
-			if (!string.IsNullOrEmpty(fileNameWithoutExtension))
+			if (!string.IsNullOrEmpty(fileNameWithoutExtension) && !GenericExeNames.Any((string n) => n.Equals(fileNameWithoutExtension, StringComparison.OrdinalIgnoreCase)))
 			{
 				names.Add(fileNameWithoutExtension);
 			}
@@ -1474,7 +1533,7 @@ public static class RunningWindows
 				names.Add(resident.Title.Trim());
 			}
 			string name2 = Path.GetFileNameWithoutExtension(resident.Path);
-			if (!string.IsNullOrEmpty(name2))
+			if (!string.IsNullOrEmpty(name2) && !GenericExeNames.Any((string n) => n.Equals(name2, StringComparison.OrdinalIgnoreCase)))
 			{
 				names.Add(name2);
 			}
@@ -1550,6 +1609,9 @@ public static class RunningWindows
 	{
 		Scan();
 		List<RunningWindow> list = For(entry);
+		// 隐藏/托盘窗口不算"可见匹配"：匹配全是隐藏窗口时改走唤醒路径，
+		// 否则 ActivateHandle 对不可见窗口无效，点击毫无反应（微信关窗进托盘场景）。
+		list.RemoveAll((RunningWindow w) => !IsWindowVisible(w.Handle));
 		if (list.Count == 0)
 		{
 			// 进程仍驻留（微信等"关窗进托盘"应用）：唤醒而不是让 Launch 新开进程，
