@@ -2188,13 +2188,14 @@ public class BoardWindow : GlassWindow
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		grid.Children.Add(stackPanel);
-		// 2×2 迷你图标格：▣ 占位先渲染，真图标由后台管线回填（不阻塞滚动/拖动）
-		double mini = Math.Max(20.0, C.Prefs.BoardIconSize * 0.42);
+		// 2×2 迷你图标格：总高与应用图标区等高（格子同尺寸，不撑高整行）；先挂到面板再回填，缓存命中时同步替换占位符
+		double mini = Math.Max(8.0, (C.Prefs.BoardIconSize - 4.0) / 2.0);
 		Grid miniGrid = new Grid
 		{
 			HorizontalAlignment = HorizontalAlignment.Center,
 			Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
 		};
+		stackPanel.Children.Add(miniGrid);
 		for (int c = 0; c < 2; c++)
 		{
 			miniGrid.ColumnDefinitions.Add(new ColumnDefinition
@@ -2252,7 +2253,6 @@ public class BoardWindow : GlassWindow
 				fill(source);
 			}
 		}
-		stackPanel.Children.Add(miniGrid);
 		stackPanel.Children.Add(new TextBlock
 		{
 			Text = name + " · " + members.Count,
