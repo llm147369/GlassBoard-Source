@@ -1067,14 +1067,17 @@ public static class RunningWindows
 		}
 		try
 		{
-			int pid = (int)window.ProcessId;
+			// 多进程应用（微信 4.x 是 Qt 多进程架构）：按路径收集全部存活 pid，
+			// 恢复其中任意一个进程的隐藏窗口都能唤出主窗口。
+			HashSet<int> pids = LivePidsOf(new string[1] { window.Path });
+			pids.Add((int)window.ProcessId);
 			// 1) 隐藏窗口恢复
 			List<IntPtr> hidden = new List<IntPtr>();
 			EnumWindows((IntPtr handle, IntPtr value) =>
 			{
 				uint owner;
 				GetWindowThreadProcessId(handle, out owner);
-				if (owner == (uint)pid && !IsWindowVisible(handle) && (GetWindowLong(handle, -20) & 0x80) == 0)
+				if (pids.Contains((int)owner) && !IsWindowVisible(handle) && (GetWindowLong(handle, -20) & 0x80) == 0)
 				{
 					hidden.Add(handle);
 				}
@@ -1084,13 +1087,13 @@ public static class RunningWindows
 			{
 				ShowWindowAsync(handle2, 9);
 			}
-			Thread.Sleep(300);
+			Thread.Sleep(500);
 			List<IntPtr> visible = new List<IntPtr>();
 			EnumWindows((IntPtr handle, IntPtr value) =>
 			{
 				uint owner;
 				GetWindowThreadProcessId(handle, out owner);
-				if (owner == (uint)pid && IsWindowVisible(handle) && !IsIconic(handle) && (GetWindowLong(handle, -20) & 0x80) == 0)
+				if (pids.Contains((int)owner) && IsWindowVisible(handle) && !IsIconic(handle) && (GetWindowLong(handle, -20) & 0x80) == 0)
 				{
 					visible.Add(handle);
 				}
@@ -1387,7 +1390,73 @@ public static class RunningWindows
 				}
 			}
 		}
+		// 兜底：background 扫描可能因节流/过滤漏报，直接按 exe 名枚举存活进程
+		HashSet<int> pids = LivePidsOf(paths);
+		if (pids.Count > 0)
+		{
+			return new RunningWindow
+			{
+				Handle = IntPtr.Zero,
+				ProcessId = (uint)pids.First(),
+				Path = paths[0],
+				Tray = true
+			};
+		}
 		return null;
+	}
+
+	// 按入口 exe 路径/名字枚举存活进程（无窗口也可命中；多进程应用返回全部 pid）。
+	// 只在本 Dock 点击激活路径上调用，枚举成本可忽略。
+	private static HashSet<int> LivePidsOf(string[] paths)
+	{
+		HashSet<int> set = new HashSet<int>();
+		if (paths == null || paths.Length == 0)
+		{
+			return set;
+		}
+		HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		foreach (string p in paths)
+		{
+			string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(p);
+			if (!string.IsNullOrEmpty(fileNameWithoutExtension))
+			{
+				names.Add(fileNameWithoutExtension);
+			}
+		}
+		int session = Process.GetCurrentProcess().SessionId;
+		foreach (Process process in Process.GetProcesses())
+		{
+			try
+			{
+				if (process.Id == ownPid || process.SessionId != session || !names.Contains(process.ProcessName))
+				{
+					continue;
+				}
+				string path = ProcessPath((uint)process.Id);
+				if (string.IsNullOrEmpty(path))
+				{
+					continue;
+				}
+				if (paths.Contains(path, StringComparer.OrdinalIgnoreCase) || names.Contains(Path.GetFileNameWithoutExtension(path)))
+				{
+					set.Add(process.Id);
+				}
+			}
+			catch
+			{
+			}
+			finally
+			{
+				try
+				{
+					process.Dispose();
+				}
+				catch
+				{
+				}
+			}
+		}
+		return set;
 	}
 
 	// 唤醒用托盘名称：入口名 + 展开后的 exe 名（UIA 托盘按钮匹配是双向 Contains，中文名和英文名都要给）。
@@ -1499,6 +1568,7 @@ public static class RunningWindows
 					Store.Trace("ACTIVATE wake-tray ok entry=" + entry.Path + " pid=" + resident.ProcessId);
 					return true;
 				}
+				Store.Trace("ACTIVATE wake-tray fail entry=" + entry.Path + " pid=" + resident.ProcessId);
 			}
 			// launcher 入口（汽水音乐等）：入口路径与主程序窗口路径不一致，
 			// 用本 Dock 的启动记录找回窗口，让点击行为与普通应用完全一致。
