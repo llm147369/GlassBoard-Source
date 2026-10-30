@@ -2157,8 +2157,6 @@ public class BoardWindow : GlassWindow
 		{
 			Tag = name,
 			Background = Brushes.Transparent,
-			BorderThickness = new Thickness(1.5),
-			BorderBrush = new SolidColorBrush(Color.FromArgb(100, ((SolidColorBrush)TextBrush).Color.R, ((SolidColorBrush)TextBrush).Color.G, ((SolidColorBrush)TextBrush).Color.B)),
 			CornerRadius = new CornerRadius(18.0),
 			Margin = new Thickness(C.Prefs.BoardIconGap),
 			Padding = new Thickness(4.0),
@@ -2188,27 +2186,42 @@ public class BoardWindow : GlassWindow
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		grid.Children.Add(stackPanel);
-		// 2×2 迷你图标格：总高与应用图标区等高（格子同尺寸，不撑高整行）；
-		// 只显示实际成员数（最多 4 个），不再渲染空占位格；成员图标尺寸统一
+		// 迷你图标格：细边框只包住图标区（名称在框外）；只显示实际成员数（最多 4 个），
+		// 成员图标统一小尺寸，不再有撑高整格的大图标
 		double mini = Math.Max(8.0, (C.Prefs.BoardIconSize - 4.0) / 2.0);
+		int shown = Math.Min(4, members.Count);
+		int rowCount = ((shown > 2) ? 2 : 1);
+		Border miniBox = new Border
+		{
+			BorderThickness = new Thickness(1.0),
+			BorderBrush = new SolidColorBrush(Color.FromArgb(150, ((SolidColorBrush)TextBrush).Color.R, ((SolidColorBrush)TextBrush).Color.G, ((SolidColorBrush)TextBrush).Color.B)),
+			CornerRadius = new CornerRadius(10.0),
+			Padding = new Thickness(3.0),
+			HorizontalAlignment = HorizontalAlignment.Center,
+			Margin = new Thickness(0.0, 0.0, 0.0, 6.0)
+		};
+		stackPanel.Children.Add(miniBox);
 		Grid miniGrid = new Grid
 		{
 			HorizontalAlignment = HorizontalAlignment.Center,
-			Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
+			VerticalAlignment = VerticalAlignment.Center
 		};
-		stackPanel.Children.Add(miniGrid);
+		miniBox.Child = miniGrid;
 		for (int c = 0; c < 2; c++)
 		{
 			miniGrid.ColumnDefinitions.Add(new ColumnDefinition
 			{
 				Width = new GridLength(mini)
 			});
+		}
+		for (int r = 0; r < rowCount; r++)
+		{
 			miniGrid.RowDefinitions.Add(new RowDefinition
 			{
 				Height = new GridLength(mini)
 			});
 		}
-		int shown = Math.Min(4, members.Count);
+		double iconSize = mini - 4.0;
 		if (shown == 0)
 		{
 			// 空文件夹：一个半透明占位图标，保持格子形状
@@ -2217,18 +2230,16 @@ public class BoardWindow : GlassWindow
 				Text = "▣",
 				Foreground = TextBrush,
 				Opacity = 0.25,
-				FontSize = (2.0 * mini - 4.0) * 0.75,
-				Width = 2.0 * mini - 4.0,
-				Height = 2.0 * mini - 4.0,
+				FontSize = iconSize * 0.75,
+				Width = iconSize,
+				Height = iconSize,
 				TextAlignment = TextAlignment.Center,
 				HorizontalAlignment = HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Center
 			};
-			Grid.SetRowSpan(empty, 2);
 			Grid.SetColumnSpan(empty, 2);
 			miniGrid.Children.Add(empty);
 		}
-		double iconSize = ((shown == 1) ? (2.0 * mini - 4.0) : (mini - 4.0));
 		for (int i = 0; i < shown; i++)
 		{
 			Entry member = members[i];
@@ -2244,26 +2255,19 @@ public class BoardWindow : GlassWindow
 				HorizontalAlignment = HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Center
 			};
-			// 布局：1 个占满整格；2 个左右各半列（垂直居中）；3 个上 2 下 1（底部居中）；4 个 2×2
-			if (shown == 1)
+			// 布局：1 个居中；2 个并排；3 个上 2 下 1（底部居中）；4 个 2×2
+			if (shown == 1 || (shown == 3 && i == 2))
 			{
-				Grid.SetRowSpan(placeholder, 2);
 				Grid.SetColumnSpan(placeholder, 2);
 			}
-			else if (shown == 2)
-			{
-				Grid.SetRow(placeholder, 0);
-				Grid.SetColumn(placeholder, i);
-				Grid.SetRowSpan(placeholder, 2);
-			}
-			else
+			if (shown >= 3)
 			{
 				Grid.SetRow(placeholder, i / 2);
 				Grid.SetColumn(placeholder, i % 2);
-				if (shown == 3 && i == 2)
-				{
-					Grid.SetColumnSpan(placeholder, 2);
-				}
+			}
+			else
+			{
+				Grid.SetColumn(placeholder, i);
 			}
 			miniGrid.Children.Add(placeholder);
 			Action<ImageSource> fill = delegate (ImageSource img)
@@ -2312,8 +2316,6 @@ public class BoardWindow : GlassWindow
 		tile.RenderTransformOrigin = new Point(0.5, 0.5);
 		Action<bool> hover = (bool over) =>
 		{
-			Border border = tile;
-			border.Background = (over ? new SolidColorBrush(Color.FromArgb(24, byte.MaxValue, byte.MaxValue, byte.MaxValue)) : Brushes.Transparent);
 			if (MotionEnabled)
 			{
 				CubicEase easingFunction2 = new CubicEase
