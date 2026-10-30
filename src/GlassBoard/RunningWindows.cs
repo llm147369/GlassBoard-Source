@@ -126,6 +126,16 @@ public static class RunningWindows
 	[DllImport("user32.dll")]
 	private static extern bool GetWindowRect(IntPtr window, out RECT rect);
 
+	[DllImport("user32.dll")]
+	private static extern bool GetCursorPos(out POINT point);
+
+	private struct POINT
+	{
+		public int X;
+
+		public int Y;
+	}
+
 	private struct RECT
 	{
 		public int Left;
@@ -1082,11 +1092,10 @@ public static class RunningWindows
 		}
 	}
 
-	// 唤醒纯托盘程序（无可见窗口，如微信/FlClash）。安全链：只恢复"真实窗口"，绝不盲目
-	// 恢复进程的全部隐藏窗口（Qt/Chromium 内部桩窗口被恢复后会产生"幽灵弹窗"，且会
-	// 误判为唤醒成功，导致托盘单击永不执行、主窗口唤不回）：
-	// 1) 最近扫描见过的真实窗口句柄（路径索引；微信"关窗进托盘"后主窗口仍存活）；
-	// 2) UIA 单击系统托盘图标（主窗口被销毁的应用靠它唤回；坐标点击有任务栏范围校验）；
+	// 唤醒纯托盘程序（无可见窗口，如微信/FlClash）。安全链：
+	// 1) 托盘图标单击优先——应用自己的开/关逻辑。Qt 应用（微信）被裸 ShowWindow 恢复
+	//    出的窗口不重绘（白屏但位置正确），只有托盘单击能正确唤出并渲染；
+	// 2) 最近扫描见过的真实窗口句柄（非 Qt 窗口；微信"关窗进托盘"后主窗口仍存活）；
 	// 3) 托盘扫描记下的隐藏窗口（标题曾与托盘名匹配，等价于真实主窗口）。
 	public static bool WakeTray(RunningWindow window, string[] names)
 	{
@@ -1097,10 +1106,21 @@ public static class RunningWindows
 		try
 		{
 			string path = window.Path ?? "";
+			if (InvokeTrayButton(names))
+			{
+				Thread.Sleep(600);
+				List<IntPtr> visible = VisibleWindowsOf(path);
+				if (visible.Count > 0)
+				{
+					ActivateHandle(visible[0]);
+				}
+				Store.Trace("WAKETRAY tray-invoke ok");
+				return true;
+			}
 			IntPtr known = IntPtr.Zero;
 			lock (scanGate)
 			{
-				if (knownWindows.TryGetValue(path, out var handle) && IsWindow(handle) && !IsWindowVisible(handle))
+				if (knownWindows.TryGetValue(path, out var handle) && IsWindow(handle) && !IsWindowVisible(handle) && !IsQtWindow(handle))
 				{
 					known = handle;
 				}
@@ -1116,17 +1136,12 @@ public static class RunningWindows
 					return true;
 				}
 			}
-			if (InvokeTrayButton(names))
-			{
-				Store.Trace("WAKETRAY tray-invoke ok");
-				return true;
-			}
 			List<IntPtr> candidates = new List<IntPtr>();
 			lock (scanGate)
 			{
 				foreach (RunningWindow w in windows)
 				{
-					if (w.Tray && w.Handle != IntPtr.Zero && string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase) && !IsWindowVisible(w.Handle))
+					if (w.Tray && w.Handle != IntPtr.Zero && string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase) && !IsWindowVisible(w.Handle) && !IsQtWindow(w.Handle))
 					{
 						candidates.Add(w.Handle);
 					}
@@ -1149,12 +1164,51 @@ public static class RunningWindows
 					}
 				}
 			}
+			Store.Trace("WAKETRAY all-steps-failed entry-path=" + path);
 		}
 		catch (Exception ex)
 		{
 			Store.Log(ex);
 		}
 		return false;
+	}
+
+	// Qt 窗口（类名 Qt51514QWindowIcon 等）被裸 ShowWindow 恢复后不重绘（白屏），
+	// 只能靠托盘单击由应用自己唤出——唤醒链对这类窗口跳过直接恢复。
+	private static bool IsQtWindow(IntPtr handle)
+	{
+		StringBuilder stringBuilder = new StringBuilder(128);
+		if (GetClassName(handle, stringBuilder, stringBuilder.Capacity) == 0)
+		{
+			return false;
+		}
+		string text = stringBuilder.ToString();
+		return text.StartsWith("Qt", StringComparison.Ordinal) || text.IndexOf("QWindowIcon", StringComparison.Ordinal) >= 0;
+	}
+
+	// 该路径应用当前可见的窗口句柄（Z 序），供托盘单击后验证唤出结果。
+	private static List<IntPtr> VisibleWindowsOf(string path)
+	{
+		List<IntPtr> result = new List<IntPtr>();
+		if (string.IsNullOrEmpty(path))
+		{
+			return result;
+		}
+		HashSet<int> pids = LivePidsOf(new string[1] { path });
+		if (pids.Count == 0)
+		{
+			return result;
+		}
+		EnumWindows((IntPtr handle, IntPtr value) =>
+		{
+			GetWindowThreadProcessId(handle, out uint owner);
+			if (pids.Contains((int)owner) && IsWindowVisible(handle) && !IsIconic(handle) && (GetWindowLong(handle, -20) & 0x80) == 0)
+			{
+				result.Add(handle);
+			}
+			return true;
+		}, IntPtr.Zero);
+		return result;
 	}
 
 	// 在系统托盘区域（含溢出区）找名称匹配的图标按钮并单击。Win11 托盘是 XAML 岛，
@@ -1235,9 +1289,11 @@ public static class RunningWindows
 			// 可能返回过期坐标，直接点击会把鼠标甩到别处误点其他应用。
 			if ((point.X > 0.0 || point.Y > 0.0) && PointInTaskbar(point))
 			{
+				GetCursorPos(out POINT cursorPos);
 				SetCursorPos((int)point.X, (int)point.Y);
 				mouse_event(2u, 0u, 0u, 0u, UIntPtr.Zero);
 				mouse_event(4u, 0u, 0u, 0u, UIntPtr.Zero);
+				SetCursorPos(cursorPos.X, cursorPos.Y);
 				return true;
 			}
 		}
