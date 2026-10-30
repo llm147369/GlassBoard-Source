@@ -915,6 +915,12 @@ public class BoardWindow : GlassWindow
 			RenderTransform = new TranslateTransform()
 		};
 		grid3.Children.Add(insertMarker);
+		// 拖动期间禁用系统默认拖拽光标：每帧重画光标是拖拽「一帧一帧」感的主因之一，关掉后让位动画更跟手
+		DragDrop.AddGiveFeedbackHandler(this, (object s, GiveFeedbackEventArgs e) =>
+		{
+			e.UseDefaultCursors = false;
+			e.Handled = true;
+		});
 		Empty = new TextBlock
 		{
 			Text = "将软件、文档或文件夹拖到这里\n面板默认保持打开；按 Esc 收起，也可点击「批量添加」",
@@ -965,7 +971,7 @@ public class BoardWindow : GlassWindow
 		return C.Prefs.Apps.Count((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase));
 	}
 
-	// 文件夹栏：根视图显示全部文件夹 chip + 「新建文件夹」落点；文件夹视图显示「← 返回」。
+	// 文件夹栏：根视图为空（文件夹是网格里同尺寸的磁贴）；文件夹视图只显示「← 返回」。
 	private void RefreshFolderBar()
 	{
 		if (folderBar == null)
@@ -976,14 +982,6 @@ public class BoardWindow : GlassWindow
 		if (currentFolder != "")
 		{
 			folderBar.Children.Add(FolderChip("← 返回", null));
-			folderBar.Children.Add(FolderChip("📁 " + currentFolder + "（" + FolderCount(currentFolder) + "）", currentFolder));
-		}
-		else
-		{
-			foreach (string name in FolderNames())
-			{
-				folderBar.Children.Add(FolderChip("📁 " + name + "（" + FolderCount(name) + "）", name));
-			}
 		}
 		folderBar.Visibility = ((folderBar.Children.Count > 0) ? Visibility.Visible : Visibility.Collapsed);
 	}
@@ -1087,7 +1085,7 @@ public class BoardWindow : GlassWindow
 			Entry a = C.Prefs.Apps.FirstOrDefault((Entry x) => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase));
 			if (a != null && !string.Equals(a.Folder ?? "", folderName ?? "", StringComparison.OrdinalIgnoreCase))
 			{
-				a.Folder = folderName;
+				a.Folder = (folderName ?? "");
 				changed = true;
 			}
 		}
@@ -1151,11 +1149,11 @@ public class BoardWindow : GlassWindow
 		}
 		if (p.Y > tileScroller.ViewportHeight - 56.0)
 		{
-			tileScroller.ScrollToVerticalOffset(Math.Min(tileScroller.ScrollableHeight, tileScroller.VerticalOffset + 22.0));
+			tileScroller.ScrollToVerticalOffset(Math.Min(tileScroller.ScrollableHeight, tileScroller.VerticalOffset + 12.0));
 		}
 		else if (p.Y < 56.0)
 		{
-			tileScroller.ScrollToVerticalOffset(Math.Max(0.0, tileScroller.VerticalOffset - 22.0));
+			tileScroller.ScrollToVerticalOffset(Math.Max(0.0, tileScroller.VerticalOffset - 12.0));
 		}
 	}
 
@@ -1530,7 +1528,8 @@ public class BoardWindow : GlassWindow
 		UpdateSelectionBar();
 		Tiles.Children.Clear();
 		List<Entry> list = Filtered();
-		Empty.Visibility = ((list.Count != 0) ? Visibility.Collapsed : Visibility.Visible);
+		List<string> folderNames = ((currentFolder == "") ? FolderNames() : null);
+		Empty.Visibility = ((list.Count != 0 || (folderNames != null && folderNames.Count != 0)) ? Visibility.Collapsed : Visibility.Visible);
 		if (pendingStatus != null)
 		{
 			Status.Text = pendingStatus;
@@ -1539,10 +1538,21 @@ public class BoardWindow : GlassWindow
 		{
 			Status.Text = "文件夹「" + currentFolder + "」 · 拖动图标到「← 返回」可移出 · Esc 收起";
 		}
+		else
+		{
+			Status.Text = "共 " + list.Count + " 个入口" + ((folderNames != null && folderNames.Count != 0) ? (" · " + folderNames.Count + " 个文件夹") : "") + " · 拖动图标到另一个图标上可创建文件夹";
+		}
 		int num2 = 0;
 		foreach (Entry item in list)
 		{
 			Tiles.Children.Add(Tile(item, num2++, animate));
+		}
+		if (folderNames != null)
+		{
+			foreach (string name in folderNames)
+			{
+				Tiles.Children.Add(TileFolder(name, num2++, animate));
+			}
 		}
 		RefreshFolderBar();
 	}
@@ -2138,6 +2148,220 @@ public class BoardWindow : GlassWindow
 		return tile;
 	}
 
+	// 文件夹磁贴：与应用同尺寸的格子，格内 2×2 显示前 4 个成员图标（手机式收纳，成员不再单独出现在网格里）。
+	// 单击进入文件夹视图；右键打开 / 重命名 / 一键解散；拖图标到格子上 = 放入该文件夹。
+	private FrameworkElement TileFolder(string name, int index, bool animate)
+	{
+		List<Entry> members = C.Prefs.Apps.Where((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase)).ToList();
+		Border tile = new Border
+		{
+			Tag = name,
+			Background = Brushes.Transparent,
+			BorderThickness = new Thickness(1.0),
+			BorderBrush = Brushes.Transparent,
+			CornerRadius = new CornerRadius(18.0),
+			Margin = new Thickness(C.Prefs.BoardIconGap),
+			Padding = new Thickness(4.0),
+			Cursor = Cursors.Hand,
+			ToolTip = "文件夹 · " + name + "（" + members.Count + " 个）",
+			AllowDrop = true
+		};
+		tile.PreviewMouseRightButtonUp += (object s, MouseButtonEventArgs e2) =>
+		{
+			e2.Handled = true;
+			if (editing)
+			{
+				return;
+			}
+			ContextMenu menu = FolderMenu(name);
+			if (menu != null)
+			{
+				menu.Placement = PlacementMode.MousePoint;
+				menu.PlacementTarget = tile;
+				menu.IsOpen = true;
+			}
+		};
+		Grid grid = new Grid();
+		tile.Child = grid;
+		StackPanel stackPanel = new StackPanel
+		{
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		grid.Children.Add(stackPanel);
+		// 2×2 迷你图标格：▣ 占位先渲染，真图标由后台管线回填（不阻塞滚动/拖动）
+		double mini = Math.Max(20.0, C.Prefs.BoardIconSize * 0.42);
+		Grid miniGrid = new Grid
+		{
+			HorizontalAlignment = HorizontalAlignment.Center,
+			Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
+		};
+		for (int c = 0; c < 2; c++)
+		{
+			miniGrid.ColumnDefinitions.Add(new ColumnDefinition
+			{
+				Width = new GridLength(mini)
+			});
+			miniGrid.RowDefinitions.Add(new RowDefinition
+			{
+				Height = new GridLength(mini)
+			});
+		}
+		for (int i = 0; i < 4; i++)
+		{
+			int cell = i;
+			Entry member = ((i < members.Count) ? members[i] : null);
+			TextBlock placeholder = new TextBlock
+			{
+				Text = "▣",
+				Foreground = TextBrush,
+				FontSize = mini * 0.62,
+				HorizontalAlignment = HorizontalAlignment.Center,
+				VerticalAlignment = VerticalAlignment.Center,
+				Opacity = ((member != null) ? 0.75 : 0.25)
+			};
+			Grid.SetRow(placeholder, i / 2);
+			Grid.SetColumn(placeholder, i % 2);
+			miniGrid.Children.Add(placeholder);
+			if (member == null)
+			{
+				continue;
+			}
+			Action<ImageSource> fill = delegate (ImageSource img)
+			{
+				if (img == null || miniGrid.Parent == null)
+				{
+					return;
+				}
+				System.Windows.Controls.Image image = new System.Windows.Controls.Image
+				{
+					Source = img,
+					Width = mini - 4.0,
+					Height = mini - 4.0,
+					HorizontalAlignment = HorizontalAlignment.Center,
+					VerticalAlignment = VerticalAlignment.Center
+				};
+				RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+				Grid.SetRow(image, cell / 2);
+				Grid.SetColumn(image, cell % 2);
+				miniGrid.Children.RemoveAt(cell);
+				miniGrid.Children.Insert(cell, image);
+			};
+			ImageSource source = IconPipeline.Request(member, C.Prefs.Dock.ShowShortcutOverlays, true, true, fill);
+			if (source != null)
+			{
+				fill(source);
+			}
+		}
+		stackPanel.Children.Add(miniGrid);
+		stackPanel.Children.Add(new TextBlock
+		{
+			Text = name + " · " + members.Count,
+			Foreground = TextBrush,
+			FontSize = 12.0,
+			TextAlignment = TextAlignment.Center,
+			TextTrimming = TextTrimming.CharacterEllipsis,
+			MaxWidth = Math.Max(20.0, ((Tiles.ActualWidth > 0.0) ? Tiles.ActualWidth : (Width - 104.0)) / (double)columns - 2.0 * C.Prefs.BoardIconGap - 10.0)
+		});
+		ScaleTransform scale = new ScaleTransform(1.0, 1.0);
+		TranslateTransform lift = new TranslateTransform();
+		TransformGroup transformGroup = new TransformGroup();
+		transformGroup.Children.Add(scale);
+		transformGroup.Children.Add(lift);
+		tile.RenderTransform = transformGroup;
+		tile.RenderTransformOrigin = new Point(0.5, 0.5);
+		Action<bool> hover = (bool over) =>
+		{
+			Border border = tile;
+			border.Background = (over ? new SolidColorBrush(Color.FromArgb(24, byte.MaxValue, byte.MaxValue, byte.MaxValue)) : Brushes.Transparent);
+			if (MotionEnabled)
+			{
+				CubicEase easingFunction2 = new CubicEase
+				{
+					EasingMode = EasingMode.EaseOut
+				};
+				scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(over ? (1.0 + 0.025 * MotionLevel) : 1.0, TimeSpan.FromMilliseconds(170.0))
+				{
+					EasingFunction = easingFunction2
+				});
+				scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(over ? (1.0 + 0.025 * MotionLevel) : 1.0, TimeSpan.FromMilliseconds(170.0))
+				{
+					EasingFunction = easingFunction2
+				});
+				lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(over ? (-3.0 * MotionLevel) : 0.0, TimeSpan.FromMilliseconds(170.0))
+				{
+					EasingFunction = easingFunction2
+				});
+			}
+		};
+		tile.MouseEnter += (object s, MouseEventArgs e) =>
+		{
+			if (activeDrag)
+			{
+				return;
+			}
+			hover(obj: true);
+		};
+		tile.MouseLeave += (object s, MouseEventArgs e) =>
+		{
+			hover(obj: false);
+		};
+		if (animate && MotionEnabled)
+		{
+			CubicEase easingFunction = new CubicEase
+			{
+				EasingMode = EasingMode.EaseOut
+			};
+			TimeSpan value = TimeSpan.FromMilliseconds(Math.Min(index, 14) * 12);
+			tile.Opacity = 0.0;
+			tile.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(190.0))
+			{
+				BeginTime = value,
+				EasingFunction = easingFunction
+			});
+			lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(9.0 * MotionLevel, 0.0, TimeSpan.FromMilliseconds(230.0))
+			{
+				BeginTime = value,
+				EasingFunction = easingFunction
+			});
+		}
+		tile.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+		{
+			OpenFolder(name);
+		};
+		tile.DragOver += (object s, DragEventArgs e) =>
+		{
+			if (currentFolder == "" && DraggedEntries(e.Data).Length != 0)
+			{
+				e.Effects = DragDropEffects.Move;
+				e.Handled = true;
+			}
+		};
+		tile.Drop += (object s, DragEventArgs e) =>
+		{
+			if (currentFolder != "")
+			{
+				return;
+			}
+			string[] array = DraggedEntries(e.Data);
+			if (array.Length == 0)
+			{
+				return;
+			}
+			HideInsertMarker();
+			List<string> paths = array.Where((string p) =>
+			{
+				Entry x = C.Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, p, StringComparison.OrdinalIgnoreCase));
+				return x != null && !string.Equals(x.Folder ?? "", name, StringComparison.OrdinalIgnoreCase);
+			}).ToList();
+			if (paths.Count != 0)
+			{
+				MoveEntriesToFolder(paths.ToArray(), name);
+			}
+			e.Handled = true;
+		};
+		return tile;
+	}
+
 	private string[] DraggedEntries(IDataObject data)
 	{
 		if (data.GetDataPresent("GlassBoard.Entries"))
@@ -2270,10 +2494,15 @@ public class BoardWindow : GlassWindow
 		{
 			EasingMode = EasingMode.EaseOut
 		};
+		Dictionary<Border, int> newIndex = new Dictionary<Border, int>();
+		for (int i = 0; i < order.Count; i++)
+		{
+			newIndex[order[i]] = i;
+		}
 		foreach (Border b in order)
 		{
 			int from = oldIndex[b];
-			int to = order.IndexOf(b);
+			int to = newIndex[b];
 			double dx = ((double)(from % cols) - (to % cols)) * cellW;
 			double dy = ((double)(from / cols) - (to / cols)) * cellH;
 			if (b.Child is FrameworkElement content)
@@ -2435,14 +2664,16 @@ public class BoardWindow : GlassWindow
 		dataObject.SetData("GlassBoard.Entry", entry.Path);
 		dataObject.SetData("GlassBoard.Entries", array);
 		dragPreviewText.Text = ((array.Length == 1) ? entry.Name : (entry.Name + " 等 " + array.Length + " 个"));
-		try
+		CloseMediaPreview();
+		// 拖拽气泡图标走后台管线：缓存未命中不阻塞拖拽启动（同步取图标是拖起瞬间卡一下的元凶）
+		ImageSource previewIcon = IconPipeline.Request(entry, C.Prefs.Dock.ShowShortcutOverlays, true, true, delegate (ImageSource img)
 		{
-			dragPreviewIcon.Source = FeatureUi.Icon(entry, C.Prefs.Dock.ShowShortcutOverlays, true);
-		}
-		catch
-		{
-			dragPreviewIcon.Source = null;
-		}
+			if (img != null)
+			{
+				dragPreviewIcon.Source = img;
+			}
+		});
+		dragPreviewIcon.Source = previewIcon;
 		bool modalBusy = ModalBusy;
 		ModalBusy = true;
 		activeDrag = true;
