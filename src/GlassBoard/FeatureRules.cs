@@ -18,7 +18,8 @@ public static class FeatureRules
 			LaunchTarget = a.LaunchTarget,
 			LaunchArguments = a.LaunchArguments,
 			ProductInfo = a.ProductInfo,
-			WindowTarget = a.WindowTarget
+			WindowTarget = a.WindowTarget,
+			Folder = a.Folder
 		};
 	}
 

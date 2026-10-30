@@ -196,7 +196,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard-Source v0.9.20.18 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.19 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1143,6 +1143,59 @@ public class Controller
 		{
 			Customize(a);
 		});
+		// 文件夹整理：新建并放入 / 放入现有文件夹 / 移出文件夹（文件夹由磁贴的 Folder 字段派生）
+		System.Windows.Controls.MenuItem folderItem = new System.Windows.Controls.MenuItem
+		{
+			Header = "文件夹"
+		};
+		void folderAction(string title, Action act)
+		{
+			System.Windows.Controls.MenuItem mi = new System.Windows.Controls.MenuItem
+			{
+				Header = title
+			};
+			mi.Click += (object s, RoutedEventArgs e) =>
+			{
+				menu.IsOpen = false;
+				Dock.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(act));
+			};
+			folderItem.Items.Add(mi);
+		}
+		folderAction("新建文件夹并放入", () =>
+		{
+			string name = FeatureUi.Ask(Board, "新建文件夹", "新文件夹");
+			if (string.IsNullOrWhiteSpace(name))
+			{
+				return;
+			}
+			a.Folder = name.Trim();
+			Save();
+			Refresh();
+		});
+		foreach (string name in Prefs.Apps.Where((Entry x) => !string.IsNullOrWhiteSpace(x.Folder)).Select((Entry x) => x.Folder).Distinct(StringComparer.OrdinalIgnoreCase))
+		{
+			string captured = name;
+			if (string.Equals(a.Folder ?? "", captured, StringComparison.OrdinalIgnoreCase))
+			{
+				continue;
+			}
+			folderAction("放入「" + captured + "」", () =>
+			{
+				a.Folder = captured;
+				Save();
+				Refresh();
+			});
+		}
+		if (!string.IsNullOrWhiteSpace(a.Folder))
+		{
+			folderAction("移出文件夹", () =>
+			{
+				a.Folder = "";
+				Save();
+				Refresh();
+			});
+		}
+		menu.Items.Add(folderItem);
 		action("移除入口", () =>
 		{
 			Remove(a);
@@ -1555,7 +1608,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.18",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.19",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -3950,6 +4003,61 @@ public class Controller
 		for (int i = 0; i < target.Count; i++)
 		{
 			Prefs.Apps.Insert(sliceOffset + i, target[i]);
+		}
+		EndBoardEdit(before, "调整图标顺序");
+		Refresh();
+		Board.Render(animate: true);
+		return true;
+	}
+
+	// 滚动视图（无分页）拖动排序提交：sequence 是当前视图磁贴的最终顺序（含被拖项）。
+	// 视图可能是文件夹过滤视图，因此按路径集合重排——把目标项从 Apps 移除后，
+	// 按视图内顺序重新插入到「原最小下标」处，其他项保持相对位置不变。
+	public bool ReorderView(string[] sequence)
+	{
+		if (sequence.Length == 0)
+		{
+			return false;
+		}
+		HashSet<string> seqSet = new HashSet<string>(sequence, StringComparer.OrdinalIgnoreCase);
+		List<Entry> targets = Prefs.Apps.Where((Entry a) => seqSet.Contains(a.Path)).ToList();
+		if (targets.Count != seqSet.Count || targets.Count != sequence.Length)
+		{
+			return false;
+		}
+		List<Entry> ordered = new List<Entry>();
+		foreach (string path in sequence)
+		{
+			Entry entry = targets.FirstOrDefault((Entry a) => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase));
+			if (entry == null)
+			{
+				return false;
+			}
+			ordered.Add(entry);
+		}
+		// 顺序未变则无需写入
+		bool changed = false;
+		for (int i = 0; i < ordered.Count; i++)
+		{
+			if (targets[i] != ordered[i])
+			{
+				changed = true;
+				break;
+			}
+		}
+		if (!changed)
+		{
+			return false;
+		}
+		BoardEditState before = BeginBoardEdit();
+		int insertAt = Prefs.Apps.IndexOf(ordered[0]);
+		foreach (Entry item in targets)
+		{
+			Prefs.Apps.Remove(item);
+		}
+		for (int i = 0; i < ordered.Count; i++)
+		{
+			Prefs.Apps.Insert(insertAt + i, ordered[i]);
 		}
 		EndBoardEdit(before, "调整图标顺序");
 		Refresh();

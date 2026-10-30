@@ -32,18 +32,16 @@ public class BoardWindow : GlassWindow
 
 	private UniformGrid Tiles;
 
-	private TextBlock Pager;
-	private StackPanel PageNav;
+	// 滚动模式：磁贴宿主滚动视图与当前文件夹视图（"" = 根目录）
+	private ScrollViewer tileScroller;
+	private string currentFolder = "";
+	private WrapPanel folderBar;
 
 	private TextBlock Status;
 
 	private TextBlock Empty;
 
 	private Grid layout;
-
-	private int page;
-
-	private int capacity = 35;
 
 	private int columns = 7;
 
@@ -218,12 +216,12 @@ public class BoardWindow : GlassWindow
 				}
 				else if (e.Key == Key.Next)
 				{
-					ChangePage(1);
+					tileScroller?.PageDown();
 					e.Handled = true;
 				}
 				else if (e.Key == Key.Prior)
 				{
-					ChangePage(-1);
+					tileScroller?.PageUp();
 					e.Handled = true;
 				}
 				else if (e.Key == Key.Return && Search.IsKeyboardFocusWithin && !editing)
@@ -352,9 +350,7 @@ public class BoardWindow : GlassWindow
 	{
 		string text = ((C.Prefs.BoardHideSearch || Search == null) ? "" : Search.Text);
 		columns = BoardIconRules.Columns(Width - 104.0, C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
-		int num = BoardIconRules.Rows(Height - 180.0, C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
-		capacity = columns * num;
-		Build(num);
+		Build();
 		Search.Text = text;
 	}
 
@@ -509,8 +505,9 @@ public class BoardWindow : GlassWindow
 		ReleaseBackdrop();
 		Search = null;
 		Tiles = null;
-		PageNav = null;
-		Pager = (Status = (Empty = null));
+		tileScroller = null;
+		folderBar = null;
+		Status = (Empty = null);
 		layout = null;
 		bulkBar = null;
 		bulkRow = null;
@@ -568,6 +565,7 @@ public class BoardWindow : GlassWindow
 			thumb.Visibility = visibility;
 			editing = false;
 			selected.Clear();
+			currentFolder = "";
 			LightTheme = C.Prefs.Light;
 			MotionEnabled = C.Prefs.Dock.MotionEnabled;
 			MotionLevel = C.Prefs.Dock.MotionLevel;
@@ -603,7 +601,7 @@ public class BoardWindow : GlassWindow
 		}
 	}
 
-	private void Build(int rows)
+	private void Build()
 	{
 		ContentGrid.Children.Clear();
 		layout = new Grid
@@ -625,11 +623,11 @@ public class BoardWindow : GlassWindow
 		layout.RowDefinitions.Add(bulkRow);
 		layout.RowDefinitions.Add(new RowDefinition
 		{
-			Height = new GridLength(1.0, GridUnitType.Star)
+			Height = GridLength.Auto
 		});
 		layout.RowDefinitions.Add(new RowDefinition
 		{
-			Height = new GridLength(45.0)
+			Height = new GridLength(1.0, GridUnitType.Star)
 		});
 		layout.RowDefinitions.Add(new RowDefinition
 		{
@@ -823,33 +821,50 @@ public class BoardWindow : GlassWindow
 			Margin = new Thickness(10.0, 0.0, 0.0, 0.0)
 		};
 		bulkBar.Children.Add(selectionCount);
+		folderBar = new WrapPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Margin = new Thickness(0.0, 6.0, 0.0, 0.0),
+			Visibility = Visibility.Collapsed
+		};
+		Grid.SetRow(folderBar, 3);
+		layout.Children.Add(folderBar);
 		DockPanel dockPanel = new DockPanel
 		{
 			Margin = new Thickness(0.0, 10.0, 0.0, 4.0)
 		};
-		Grid.SetRow(dockPanel, 3);
+		Grid.SetRow(dockPanel, 4);
 		layout.Children.Add(dockPanel);
 		Grid grid3 = new Grid();
 		dockPanel.Children.Add(grid3);
+		tileScroller = new ScrollViewer
+		{
+			VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+			HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+			ClipToBounds = true,
+			PanningMode = PanningMode.VerticalFirst,
+			Background = Brushes.Transparent
+		};
+		grid3.Children.Add(tileScroller);
 		Tiles = new UniformGrid
 		{
 			Columns = columns,
-			Rows = rows,
-			ClipToBounds = true,
+			// Rows 不设 = 自动按内容延展，配合 ScrollViewer 实现纵向滚动
 			// 透明背景让空格子也能命中拖放事件（否则空白处会穿透到窗口层）
 			Background = Brushes.Transparent,
 			AllowDrop = true
 		};
-		grid3.Children.Add(Tiles);
+		tileScroller.Content = Tiles;
 		Tiles.SizeChanged += (object s, SizeChangedEventArgs e) =>
 		{
 			QueueSizeRefresh();
 		};
-		// 容器级拖放：任意空格 / 末尾都可落点，悬停时其他图标实时让位
+		// 容器级拖放：任意空格 / 末尾都可落点，悬停时其他图标实时让位；贴边自动滚动
 		Tiles.DragOver += (object s, DragEventArgs e) =>
 		{
 			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == Tiles)
 			{
+				AutoScrollFor(e.GetPosition(tileScroller));
 				int idx = InsertIndexFor(e.GetPosition(Tiles));
 				if (idx != liveIndex)
 				{
@@ -865,7 +880,7 @@ public class BoardWindow : GlassWindow
 			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == Tiles)
 			{
 				HideInsertMarker();
-				if (!C.ReorderToSequence(CurrentPageSequence(), page * capacity))
+				if (!C.ReorderView(CurrentPageSequence()))
 				{
 					Render();
 				}
@@ -900,31 +915,6 @@ public class BoardWindow : GlassWindow
 			LineHeight = 32.0
 		};
 		grid3.Children.Add(Empty);
-		StackPanel stackPanel2 = new StackPanel
-		{
-			Orientation = Orientation.Horizontal,
-			HorizontalAlignment = HorizontalAlignment.Center
-		};
-		PageNav = stackPanel2;
-		Grid.SetRow(stackPanel2, 4);
-		layout.Children.Add(stackPanel2);
-		stackPanel2.Children.Add(Button("‹", (object s, RoutedEventArgs e) =>
-		{
-			ChangePage(-1);
-		}, 40.0));
-		Pager = new TextBlock
-		{
-			Width = 100.0,
-			TextAlignment = TextAlignment.Center,
-			VerticalAlignment = VerticalAlignment.Center,
-			Foreground = TextBrush,
-			FontSize = 14.0
-		};
-		stackPanel2.Children.Add(Pager);
-		stackPanel2.Children.Add(Button("›", (object s, RoutedEventArgs e) =>
-		{
-			ChangePage(1);
-		}, 40.0));
 		Grid grid4 = new Grid();
 		Grid.SetRow(grid4, 5);
 		layout.Children.Add(grid4);
@@ -942,7 +932,247 @@ public class BoardWindow : GlassWindow
 
 	private List<Entry> Filtered()
 	{
-		return C.Prefs.Apps.ToList();
+		return C.Prefs.Apps.Where((Entry a) => string.Equals(a.Folder ?? "", currentFolder, StringComparison.OrdinalIgnoreCase)).ToList();
+	}
+
+	// 文件夹名列表（按首次出现顺序，忽略大小写去重）
+	private List<string> FolderNames()
+	{
+		List<string> names = new List<string>();
+		foreach (Entry a in C.Prefs.Apps)
+		{
+			if (!string.IsNullOrWhiteSpace(a.Folder) && !names.Any((string n) => string.Equals(n, a.Folder, StringComparison.OrdinalIgnoreCase)))
+			{
+				names.Add(a.Folder);
+			}
+		}
+		return names;
+	}
+
+	private int FolderCount(string name)
+	{
+		return C.Prefs.Apps.Count((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase));
+	}
+
+	// 文件夹栏：根视图显示全部文件夹 chip + 「新建文件夹」落点；文件夹视图显示「← 返回」。
+	private void RefreshFolderBar()
+	{
+		if (folderBar == null)
+		{
+			return;
+		}
+		folderBar.Children.Clear();
+		if (currentFolder != "")
+		{
+			folderBar.Children.Add(FolderChip("← 返回", null));
+			folderBar.Children.Add(FolderChip("📁 " + currentFolder + "（" + FolderCount(currentFolder) + "）", currentFolder));
+		}
+		else
+		{
+			foreach (string name in FolderNames())
+			{
+				folderBar.Children.Add(FolderChip("📁 " + name + "（" + FolderCount(name) + "）", name));
+			}
+			folderBar.Children.Add(FolderChip("＋ 新建文件夹", null, createChip: true));
+		}
+		folderBar.Visibility = ((folderBar.Children.Count > 0) ? Visibility.Visible : Visibility.Collapsed);
+	}
+
+	// 文件夹 chip：单击打开；拖入图标移入；右键打开 / 重命名 / 一键解散。
+	private Border FolderChip(string text, string folderName, bool createChip = false)
+	{
+		Border chip = new Border
+		{
+			CornerRadius = new CornerRadius(14.0),
+			Padding = new Thickness(12.0, 6.0, 12.0, 6.0),
+			Margin = new Thickness(0.0, 0.0, 8.0, 6.0),
+			Background = new SolidColorBrush(Color.FromArgb(35, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
+			BorderBrush = new SolidColorBrush(Color.FromArgb(60, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
+			BorderThickness = new Thickness(1.0),
+			Cursor = Cursors.Hand,
+			AllowDrop = true
+		};
+		TextBlock label = new TextBlock
+		{
+			Text = text,
+			Foreground = TextBrush,
+			FontSize = 13.0,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		chip.Child = label;
+		chip.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+		{
+			if (createChip)
+			{
+				return; // 新建文件夹只能通过拖入创建（文件夹由内容派生，空文件夹不显示）
+			}
+			OpenFolder(folderName);
+		};
+		chip.DragOver += (object s, DragEventArgs e) =>
+		{
+			if (DraggedEntries(e.Data).Length != 0)
+			{
+				e.Effects = DragDropEffects.Move;
+				e.Handled = true;
+			}
+		};
+		chip.Drop += (object s, DragEventArgs e) =>
+		{
+			string[] paths = DraggedEntries(e.Data);
+			if (paths.Length == 0)
+			{
+				return;
+			}
+			if (createChip)
+			{
+				string name = FeatureUi.Ask(this, "新建文件夹", "新文件夹");
+				if (string.IsNullOrWhiteSpace(name))
+				{
+					return;
+				}
+				MoveEntriesToFolder(paths, name.Trim());
+				OpenFolder(name.Trim());
+				return;
+			}
+			MoveEntriesToFolder(paths, folderName);
+			e.Handled = true;
+		};
+		chip.ContextMenu = FolderMenu(folderName);
+		return chip;
+	}
+
+	private ContextMenu FolderMenu(string folderName)
+	{
+		if (folderName == null)
+		{
+			return null;
+		}
+		ContextMenu menu = MenuTheme.Create(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
+		MenuItem open = new MenuItem
+		{
+			Header = "打开"
+		};
+		open.Click += (object s, RoutedEventArgs e) => OpenFolder(folderName);
+		menu.Items.Add(open);
+		MenuItem rename = new MenuItem
+		{
+			Header = "重命名文件夹"
+		};
+		rename.Click += (object s, RoutedEventArgs e) =>
+		{
+			string name = FeatureUi.Ask(this, "重命名文件夹", folderName);
+			if (!string.IsNullOrWhiteSpace(name) && !string.Equals(name.Trim(), folderName, StringComparison.OrdinalIgnoreCase))
+			{
+				RenameFolder(folderName, name.Trim());
+			}
+		};
+		menu.Items.Add(rename);
+		MenuItem dissolve = new MenuItem
+		{
+			Header = "解散文件夹"
+		};
+		dissolve.Click += (object s, RoutedEventArgs e) => DissolveFolder(folderName);
+		menu.Items.Add(dissolve);
+		return menu;
+	}
+
+	// 进入 / 返回文件夹视图；Controller 的磁贴右键「放入文件夹」也会调用
+	public void OpenFolder(string name)
+	{
+		currentFolder = (name ?? "");
+		tileScroller?.ScrollToVerticalOffset(0.0);
+		Render(animate: true);
+	}
+
+	private void MoveEntriesToFolder(string[] paths, string folderName)
+	{
+		bool changed = false;
+		foreach (string p in paths)
+		{
+			Entry a = C.Prefs.Apps.FirstOrDefault((Entry x) => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase));
+			if (a != null && !string.Equals(a.Folder ?? "", folderName ?? "", StringComparison.OrdinalIgnoreCase))
+			{
+				a.Folder = folderName;
+				changed = true;
+			}
+		}
+		if (changed)
+		{
+			C.Save();
+			Render(animate: true);
+		}
+	}
+
+	private void RenameFolder(string oldName, string newName)
+	{
+		bool changed = false;
+		foreach (Entry a in C.Prefs.Apps)
+		{
+			if (string.Equals(a.Folder ?? "", oldName, StringComparison.OrdinalIgnoreCase))
+			{
+				a.Folder = newName;
+				changed = true;
+			}
+		}
+		if (changed)
+		{
+			if (string.Equals(currentFolder, oldName, StringComparison.OrdinalIgnoreCase))
+			{
+				currentFolder = newName;
+			}
+			C.Save();
+			Render(animate: true);
+		}
+	}
+
+	private void DissolveFolder(string name)
+	{
+		bool changed = false;
+		foreach (Entry a in C.Prefs.Apps)
+		{
+			if (string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase))
+			{
+				a.Folder = "";
+				changed = true;
+			}
+		}
+		if (changed)
+		{
+			if (string.Equals(currentFolder, name, StringComparison.OrdinalIgnoreCase))
+			{
+				currentFolder = "";
+			}
+			C.Save();
+			Render(animate: true);
+		}
+	}
+
+	// 拖拽贴边自动滚动（滚动视图边缘 56px 内触发）
+	private void AutoScrollFor(Point p)
+	{
+		if (tileScroller == null || tileScroller.ScrollableHeight <= 0.0)
+		{
+			return;
+		}
+		if (p.Y > tileScroller.ViewportHeight - 56.0)
+		{
+			tileScroller.ScrollToVerticalOffset(Math.Min(tileScroller.ScrollableHeight, tileScroller.VerticalOffset + 22.0));
+		}
+		else if (p.Y < 56.0)
+		{
+			tileScroller.ScrollToVerticalOffset(Math.Max(0.0, tileScroller.VerticalOffset - 22.0));
+		}
+	}
+
+	// 滚动模式下当前行数 = ceil(磁贴数 / 列数)，用于拖放让位与指示线的格网数学
+	private int TileRowCount()
+	{
+		int count = Tiles.Children.Count;
+		if (count <= 0)
+		{
+			return 0;
+		}
+		return (count + Math.Max(1, columns) - 1) / Math.Max(1, columns);
 	}
 
 	private void BuildSearchPopup(Border anchor)
@@ -1294,7 +1524,7 @@ public class BoardWindow : GlassWindow
 		undoRemoval.IsEnabled = C.CanUndoRemoval;
 		undoRemoval.ToolTip = "撤销：" + C.UndoLabel + " · Ctrl+Z";
 		undoRemoval.Visibility = ((!C.CanUndoRemoval) ? Visibility.Collapsed : Visibility.Visible);
-		selectionCount.Text = (editing ? ("已选 " + selected.Count + " · 跨页保留") : "可撤销最近操作");
+		selectionCount.Text = (editing ? ("已选 " + selected.Count + " · 滚动保留") : "可撤销最近操作");
 	}
 
 	public void Render(bool animate = false)
@@ -1308,27 +1538,21 @@ public class BoardWindow : GlassWindow
 		UpdateSelectionBar();
 		Tiles.Children.Clear();
 		List<Entry> list = Filtered();
-		int num = LayoutRules.Pages(list.Count, capacity);
-		page = Math.Min(page, num - 1);
-		Pager.Text = page + 1 + " / " + num;
-		PageNav.Visibility = ((num > 1) ? Visibility.Visible : Visibility.Collapsed);
 		Empty.Visibility = ((list.Count != 0) ? Visibility.Collapsed : Visibility.Visible);
 		if (pendingStatus != null)
 		{
 			Status.Text = pendingStatus;
 		}
+		if (currentFolder != "")
+		{
+			Status.Text = "文件夹「" + currentFolder + "」 · 拖动图标到「← 返回」可移出 · Esc 收起";
+		}
 		int num2 = 0;
-		foreach (Entry item in list.Skip(page * capacity).Take(capacity))
+		foreach (Entry item in list)
 		{
 			Tiles.Children.Add(Tile(item, num2++, animate));
 		}
-	}
-
-	private void ChangePage(int delta)
-	{
-		int num = LayoutRules.Pages(Filtered().Count, capacity);
-		page = Math.Max(0, Math.Min(num - 1, page + delta));
-		Render(animate: true);
+		RefreshFolderBar();
 	}
 
 	// —— 媒体悬浮预览：图片显示大图，视频静音循环播放（悬浮 450ms 触发）——
@@ -1856,6 +2080,7 @@ public class BoardWindow : GlassWindow
 			}
 			if (DraggedEntries(e.Data).Length != 0)
 			{
+				AutoScrollFor(e.GetPosition(tileScroller));
 				int idx = Tiles.Children.IndexOf(tile);
 				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
 				{
@@ -1898,7 +2123,7 @@ public class BoardWindow : GlassWindow
 			if (array.Length != 0)
 			{
 				HideInsertMarker();
-				if (!C.ReorderToSequence(CurrentPageSequence(), page * capacity))
+				if (!C.ReorderView(CurrentPageSequence()))
 				{
 					Render();
 				}
@@ -1929,9 +2154,9 @@ public class BoardWindow : GlassWindow
 			return Tiles.Children.Count;
 		}
 		double cellW = Tiles.ActualWidth / (double)columns;
-		double cellH = (Tiles.Rows > 0 && Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight / (double)Tiles.Rows : 96.0;
+		double cellH = (TileRowCount() > 0 && Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight / (double)TileRowCount() : 96.0;
 		int col = Math.Max(0, Math.Min((int)(p.X / cellW), columns - 1));
-		int row = Math.Max(0, Math.Min((int)(p.Y / cellH), Math.Max(0, Tiles.Rows - 1)));
+		int row = Math.Max(0, Math.Min((int)(p.Y / cellH), Math.Max(0, TileRowCount() - 1)));
 		return Math.Min(row * columns + col, Tiles.Children.Count);
 	}
 
@@ -1946,13 +2171,20 @@ public class BoardWindow : GlassWindow
 		int count = Tiles.Children.Count;
 		int cell = Math.Min(idx, count);
 		double cellW = Tiles.ActualWidth / (double)columns;
-		double cellH = (Tiles.Rows > 0 && Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight / (double)Tiles.Rows : 96.0;
+		int rowCount = TileRowCount();
+		double cellH = (rowCount > 0 && Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight / (double)rowCount : 96.0;
 		int col = cell % columns;
 		int row = cell / columns;
 		double x = col * cellW + ((cell >= count) ? cellW : 0.0) - 1.5;
+		double y = row * cellH + 6.0 - ((tileScroller != null) ? tileScroller.VerticalOffset : 0.0);
+		if (tileScroller != null && (y < 0.0 || y > tileScroller.ViewportHeight))
+		{
+			HideInsertMarker();
+			return;
+		}
 		TranslateTransform t = (TranslateTransform)insertMarker.RenderTransform;
 		t.X = x;
-		t.Y = row * cellH + 6.0;
+		t.Y = y;
 		insertMarker.Height = Math.Max(24.0, cellH - 12.0);
 		insertMarker.Visibility = Visibility.Visible;
 		insertIndex = idx;
@@ -1969,7 +2201,7 @@ public class BoardWindow : GlassWindow
 		livePreview = false;
 	}
 
-	// 当前页磁贴按容器顺序取出的路径序列（拖放落点以它为准提交）
+	// 当前视图磁贴按容器顺序取出的路径序列（拖放落点以它为准提交）
 	private string[] CurrentPageSequence()
 	{
 		List<string> list = new List<string>();
@@ -1997,7 +2229,7 @@ public class BoardWindow : GlassWindow
 			return;
 		}
 		int cols = Math.Max(1, Tiles.Columns);
-		int rowCount = Math.Max(1, Tiles.Rows);
+		int rowCount = Math.Max(1, TileRowCount());
 		double cellW = (Tiles.ActualWidth > 0.0 ? Tiles.ActualWidth : Width) / cols;
 		double cellH = (Tiles.ActualHeight > 0.0 ? Tiles.ActualHeight : Height) / rowCount;
 		Dictionary<Border, int> oldIndex = new Dictionary<Border, int>();
@@ -2339,14 +2571,11 @@ public class BoardWindow : GlassWindow
 		try
 		{
 			int num = BoardIconRules.Columns((Tiles.ActualWidth > 0.0) ? Tiles.ActualWidth : (Width - 104.0), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
-			int num2 = BoardIconRules.Rows((Tiles.ActualHeight > 0.0) ? Tiles.ActualHeight : (Height - 180.0), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
-			if (iconsDirty || columns != num || Tiles.Rows != num2)
+			if (iconsDirty || columns != num)
 			{
 				iconsDirty = false;
 				columns = num;
-				capacity = num * num2;
 				Tiles.Columns = num;
-				Tiles.Rows = num2;
 				Render();
 			}
 		}
