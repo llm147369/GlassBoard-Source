@@ -361,6 +361,22 @@ public class GlassWindow : Window
 			{
 				graphics.CopyFromScreen(sourceX, sourceY, 0, 0, new System.Drawing.Size(num, num2));
 			}
+			if (IsBlackFrame(bitmap))
+			{
+				// 黑帧：壁纸层正处于暂停/过渡（开始菜单、搜索打开时常见）。
+				// 不替换现有底图，延迟重试数次；重试耗尽则放弃本次刷新。
+				backdropBlackRetries++;
+				if (backdropBlackRetries < 4)
+				{
+					Store.Trace("RENDER capture black → retry #" + backdropBlackRetries + " cls=" + GetType().Name);
+					ScheduleBackdropRefresh(LightTheme);
+					return;
+				}
+				backdropBlackRetries = 0;
+				Store.Trace("RENDER capture black → skip (keep current) cls=" + GetType().Name);
+				return;
+			}
+			backdropBlackRetries = 0;
 			using Bitmap bitmap2 = new Bitmap(bitmap, Math.Max(1, num / 8), Math.Max(1, num2 / 8));
 			using MemoryStream memoryStream = new MemoryStream();
 			bitmap2.Save(memoryStream, ImageFormat.Png);
@@ -373,6 +389,7 @@ public class GlassWindow : Window
 			bitmapImage.Freeze();
 			cachedBackdrop = bitmapImage;
 			backdropKey = rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (LightTheme ? 1 : 0);
+			RemoveBackdropBorders();
 			AddBackdrop(cachedBackdrop);
 			if (RenderDiagnostics.Verbose)
 			{
@@ -386,6 +403,28 @@ public class GlassWindow : Window
 	}
 
 	private System.Windows.Threading.DispatcherTimer backdropRefreshTimer;
+
+	private int backdropBlackRetries;
+
+	// 均匀采样判定近黑帧：开始菜单/搜索打开期间（尤其 Wallpaper Engine 暂停渲染、
+	// DWM 过渡瞬间）CopyFromScreen 常捕到纯黑/近黑区域，直接采纳会把 Dock/面板涂黑。
+	private static bool IsBlackFrame(Bitmap bitmap)
+	{
+		int num = bitmap.Width - 1;
+		int num2 = bitmap.Height - 1;
+		for (int i = 0; i < 8; i++)
+		{
+			for (int j = 0; j < 8; j++)
+			{
+				System.Drawing.Color color = bitmap.GetPixel(num * i / 7, num2 * j / 7);
+				if (color.R >= 24 || color.G >= 24 || color.B >= 24)
+				{
+					return false;
+				}
+			}
+		}
+		return true;
+	}
 
 	// 壁纸/显示器/DPI 变化后的重捕调度：1.2 秒合并窗口，多个广播（切换壁纸会连发多条）只捕一次。
 	public void ScheduleBackdropRefresh(bool light)
@@ -435,9 +474,7 @@ public class GlassWindow : Window
 			double oldTop = Top;
 			Left = -20000.0;
 			Top = -20000.0;
-			cachedBackdrop = null;
-			backdropKey = "";
-			RemoveBackdropBorders();
+			// 保留旧底图不动：黑帧重试期间窗口仍显示旧壁纸底图，捕到有效帧才替换。
 			CaptureRegion(rect, dpi);
 			Left = oldLeft;
 			Top = oldTop;
