@@ -190,27 +190,32 @@ public static class DesktopVisibility
 	// 底部出现一条透明任务栏位置。给 AppBar 加上 ABS_AUTOHIDE 后 Explorer 才会广播全屏工作区。
 	private static APPBARDATA AppBarData()
 	{
-		APPBARDATA result = new APPBARDATA
+		return new APPBARDATA
 		{
 			Size = (uint)Marshal.SizeOf(typeof(APPBARDATA)),
 			Window = FindWindow("Shell_TrayWnd", null)
 		};
-		if (result.Window == IntPtr.Zero)
-		{
-			throw new InvalidOperationException("未找到 Windows 任务栏");
-		}
-		return result;
 	}
 
 	private static uint AppBarState()
 	{
 		APPBARDATA data = AppBarData();
+		// 任务栏窗口不存在（explorer 重启中、第三方外壳替换或系统级移除）时静默返回 0，
+		// 不能抛异常——Maintain 每 5 秒重试一次，抛异常会刷爆 error.log。
+		if (data.Window == IntPtr.Zero)
+		{
+			return 0u;
+		}
 		return (uint)SHAppBarMessage(4u, ref data).ToUInt64();
 	}
 
 	private static void ApplyAppBarState(uint state)
 	{
 		APPBARDATA data = AppBarData();
+		if (data.Window == IntPtr.Zero)
+		{
+			return;
+		}
 		data.Param = new IntPtr(state);
 		SHAppBarMessage(10u, ref data);
 	}
