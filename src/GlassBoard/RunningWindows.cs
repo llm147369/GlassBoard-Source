@@ -52,6 +52,10 @@ public static class RunningWindows
 
 	private static readonly BoundedCache<string, long> last = new BoundedCache<string, long>(192, StringComparer.OrdinalIgnoreCase);
 
+	// 唤醒节流：托盘驻留应用刚被唤醒后短时间内的重复点击直接吞掉（托盘图标单击是开/关切换，
+	// 连点两次会把刚弹出的窗口又收回去，且窗口尚未出现在扫描里无法识别"已在前台"）。
+	private static readonly BoundedCache<string, int> wakeTick = new BoundedCache<string, int>(96, StringComparer.OrdinalIgnoreCase);
+
 	// —— 进程元数据缓存：路径 / AppUserModelID 按 pid 缓存，避免每次窗口枚举都 OpenProcess ——
 	private struct ProcessMeta
 	{
@@ -1345,6 +1349,82 @@ public static class RunningWindows
 		return For(entry).Count > 0;
 	}
 
+	// 驻留进程查找：窗口全部关闭但进程仍在运行的入口（微信等"关窗即进托盘"应用）。
+	// 只查 background 表（Tray=true、Handle=0 的纯进程记录），匹配规则与 For 一致。
+	public static RunningWindow ResidentOf(Entry entry)
+	{
+		if (entry == null || entry.IsFolder || Directory.Exists(entry.Path))
+		{
+			return null;
+		}
+		Resolve(entry);
+		string[] paths = WindowActivationRules.Executables(entry);
+		if (paths.Length == 0)
+		{
+			return null;
+		}
+		HashSet<string> fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		foreach (string text in paths)
+		{
+			string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(text);
+			if (!string.IsNullOrEmpty(fileNameWithoutExtension) && !GenericExeNames.Any((string n) => n.Equals(fileNameWithoutExtension, StringComparison.OrdinalIgnoreCase)))
+			{
+				fallbackNames.Add(fileNameWithoutExtension);
+			}
+		}
+		Scan();
+		lock (scanGate)
+		{
+			foreach (RunningWindow w in background)
+			{
+				if (w == null || w.ProcessId == 0 || string.IsNullOrEmpty(w.Path))
+				{
+					continue;
+				}
+				if (paths.Contains(w.Path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(w.Path)))
+				{
+					return w;
+				}
+			}
+		}
+		return null;
+	}
+
+	// 唤醒用托盘名称：入口名 + 展开后的 exe 名（UIA 托盘按钮匹配是双向 Contains，中文名和英文名都要给）。
+	private static string[] WakeTrayNames(Entry entry, RunningWindow resident)
+	{
+		List<string> names = new List<string>();
+		if (entry != null && !string.IsNullOrWhiteSpace(entry.Name))
+		{
+			names.Add(entry.Name.Trim());
+		}
+		if (resident != null)
+		{
+			if (!string.IsNullOrWhiteSpace(resident.Title))
+			{
+				names.Add(resident.Title.Trim());
+			}
+			string name2 = Path.GetFileNameWithoutExtension(resident.Path);
+			if (!string.IsNullOrEmpty(name2))
+			{
+				names.Add(name2);
+			}
+		}
+		if (entry != null)
+		{
+			Resolve(entry);
+			foreach (string p in WindowActivationRules.Executables(entry))
+			{
+				string name3 = Path.GetFileNameWithoutExtension(p);
+				if (!string.IsNullOrEmpty(name3) && !GenericExeNames.Any((string n) => n.Equals(name3, StringComparison.OrdinalIgnoreCase)))
+				{
+					names.Add(name3);
+				}
+			}
+		}
+		return names.Where((string n) => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+	}
+
 	public static bool ActivateHandle(IntPtr handle)
 	{
 		if (!IsWindow(handle))
@@ -1403,6 +1483,23 @@ public static class RunningWindows
 		List<RunningWindow> list = For(entry);
 		if (list.Count == 0)
 		{
+			// 进程仍驻留（微信等"关窗进托盘"应用）：唤醒而不是让 Launch 新开进程，
+			// 避免出现第二个实例（重复登录界面）。
+			RunningWindow resident = ResidentOf(entry);
+			if (resident != null && resident.ProcessId != 0)
+			{
+				if (wakeTick.TryGet(entry.Path, out var wt) && Environment.TickCount - wt < 2500)
+				{
+					Store.Trace("ACTIVATE wake-throttle entry=" + entry.Path);
+					return true;
+				}
+				if (WakeTray(resident, WakeTrayNames(entry, resident)))
+				{
+					wakeTick.Put(entry.Path, Environment.TickCount);
+					Store.Trace("ACTIVATE wake-tray ok entry=" + entry.Path + " pid=" + resident.ProcessId);
+					return true;
+				}
+			}
 			// launcher 入口（汽水音乐等）：入口路径与主程序窗口路径不一致，
 			// 用本 Dock 的启动记录找回窗口，让点击行为与普通应用完全一致。
 			List<RunningWindow> launchWins = LaunchedWindows(entry == null ? "" : entry.Path);
