@@ -86,6 +86,11 @@ public static class DesktopVisibility
 	// 分开执行，避免桌面级变更连续叠加引发动态壁纸（Wallpaper Engine）黑屏。
 	private static DispatcherTimer hideTaskbarTimer;
 
+	// 两阶段切换桌面图标的延迟定时器（见 SetHidden）：HideIcons 注册表写入带
+	// WM_SETTINGCHANGE 全桌面广播（Explorer 原生隐藏/显示图标），与图标列表窗口的
+	// SW_HIDE/SW_SHOW 分开执行，避免两个桌面级变更连续叠加引发 Wallpaper Engine 黑屏。
+	private static DispatcherTimer hideIconsTimer;
+
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	private static extern IntPtr FindWindow(string cls, string title);
 
@@ -470,19 +475,24 @@ public static class DesktopVisibility
 					originalHideIcons = ReadHideIcons() ?? 0;
 				}
 				WriteHideIcons(hide ? 1 : 0);
-				foreach (IntPtr item in list)
+				// 两阶段（与任务栏分支一致）：先让 HideIcons 广播被 Explorer 消化——桌面
+				// 与动态壁纸层重新布局、图标由 Explorer 原生隐藏/显示——400ms 后再切换图标
+				// 列表窗口（此时通常已是视觉无操作）。同一时刻连发两个桌面级变更时，
+				// Wallpaper Engine 的壁纸层容易瞬间黑屏。
+				if (hideIconsTimer == null)
 				{
-					if (hide && ShellBooting(item))
+					hideIconsTimer = new DispatcherTimer
 					{
-						// explorer 正在重启初始化：先跳过，由维护循环在窗口稳定后再隐藏，避免崩溃循环
-						continue;
-					}
-					if (!ShowWindowAsync(item, (!hide) ? 8 : 0))
+						Interval = TimeSpan.FromMilliseconds(400.0)
+					};
+					hideIconsTimer.Tick += delegate
 					{
-						num++;
-						Store.Log(new Win32Exception(Marshal.GetLastWin32Error(), "无法切换 " + Class(item)));
-					}
+						hideIconsTimer.Stop();
+						HideIconWindows(list, hide);
+					};
 				}
+				hideIconsTimer.Stop();
+				hideIconsTimer.Start();
 			}
 		}
 		if (taskbar)
@@ -526,6 +536,29 @@ public static class DesktopVisibility
 			}
 		}
 		Store.Trace("SHELL tray hidden windows=" + (list.Count - num) + " failed=" + num);
+		return num;
+	}
+
+	// 两阶段切换桌面图标的第二阶段：图标列表窗口的 SW_HIDE/SW_SHOW。此时 Explorer
+	// 已按 HideIcons 注册表原生隐藏/显示图标，窗口切换只是状态对齐（视觉上通常无变化）。
+	private static int HideIconWindows(List<IntPtr> list, bool hide)
+	{
+		int num = 0;
+		foreach (IntPtr item in list)
+		{
+			if (hide && ShellBooting(item))
+			{
+				// explorer 正在重启初始化：跳过窗口切换，HideIcons 注册表已让 Explorer
+				// 在初始化完成后原生隐藏图标，避免与 SysListView32 初始化竞争引发崩溃循环
+				continue;
+			}
+			if (!ShowWindowAsync(item, hide ? 0 : 8))
+			{
+				num++;
+				Store.Log(new Win32Exception(Marshal.GetLastWin32Error(), "无法" + (hide ? "隐藏" : "显示") + " " + Class(item)));
+			}
+		}
+		Store.Trace("SHELL icons windows " + (hide ? "hidden=" : "shown=") + (list.Count - num) + " failed=" + num);
 		return num;
 	}
 
@@ -837,6 +870,7 @@ public static class DesktopVisibility
 	{
 		maintenance.Stop();
 		hideTaskbarTimer?.Stop();
+		hideIconsTimer?.Stop();
 		UninstallRevealHook();
 		taskbarHidden = null;
 		iconsHidden = null;
@@ -873,6 +907,7 @@ public static class DesktopVisibility
 	{
 		maintenance.Stop();
 		hideTaskbarTimer?.Stop();
+		hideIconsTimer?.Stop();
 		UninstallRevealHook();
 		taskbarHidden = false;
 		iconsHidden = false;
