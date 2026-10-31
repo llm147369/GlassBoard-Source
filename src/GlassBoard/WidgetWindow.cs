@@ -667,10 +667,28 @@ public sealed class WidgetWindow : GlassWindow
 		};
 		Closed += (object s, EventArgs e) =>
 		{
-			// 只有用户主动关闭才禁用组件；程序退出/系统关机时保持启用状态
+			// 只有用户主动关闭才禁用组件；程序退出/系统关机时保持启用状态。
+			// 窗口关闭与整个程序退出可能交错发生（外部 WM_CLOSE、在线更新重启等），
+			// 因此把禁用判定延迟到 UI 空闲回调：若届时程序已进入退出流程
+			// （ShuttingDown=true），或回调根本来不及执行，就绝不算"用户关闭"。
 			bool disable = !stopped && !M.C.ShuttingDown;
 			stopped = true;
-			M.Closed(this, disable);
+			if (!disable)
+			{
+				M.Closed(this, false);
+				return;
+			}
+			Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)(() =>
+			{
+				if (M.C.ShuttingDown)
+				{
+					M.Closed(this, false);
+				}
+				else
+				{
+					M.Closed(this, true);
+				}
+			}));
 		};
 	}
 
