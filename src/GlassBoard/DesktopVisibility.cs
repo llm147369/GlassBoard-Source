@@ -86,9 +86,9 @@ public static class DesktopVisibility
 	// 分开执行，避免桌面级变更连续叠加引发动态壁纸（Wallpaper Engine）黑屏。
 	private static DispatcherTimer hideTaskbarTimer;
 
-	// 两阶段切换桌面图标的延迟定时器（见 SetHidden）：HideIcons 注册表写入带
-	// WM_SETTINGCHANGE 全桌面广播（Explorer 原生隐藏/显示图标），与图标列表窗口的
-	// SW_HIDE/SW_SHOW 分开执行，避免两个桌面级变更连续叠加引发 Wallpaper Engine 黑屏。
+	// 两阶段切换桌面图标的延迟定时器（见 SetHidden）：第一阶段立即写注册表（不广播）
+	// 并切换图标列表窗口；400ms 后再补发 WM_SETTINGCHANGE 全桌面广播让 Explorer 原生
+	// 同步状态。广播会触发桌面重排，与窗口切换错开，避免 Wallpaper Engine 黑屏。
 	private static DispatcherTimer hideIconsTimer;
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -158,14 +158,25 @@ public static class DesktopVisibility
 		}
 	}
 
-	private static void WriteHideIcons(int value)
+	private static void WriteHideIcons(int value, bool broadcast = true)
 	{
 		using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(ExplorerAdvancedKey))
 		{
 			key.SetValue("HideIcons", value, Microsoft.Win32.RegistryValueKind.DWord);
 		}
+		if (!broadcast)
+		{
+			return;
+		}
 		// 广播上限 250ms：个别窗口响应慢时不能让 UI 线程跟着卡 2 秒。
 		// SMTO_ABORTIFHUNG(2) 已保证挂起窗口立即跳过，其余窗口 250ms 内足够入队。
+		SendMessageTimeout(new IntPtr(0xFFFF), 26u, IntPtr.Zero, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 2u, 250u, out IntPtr _);
+	}
+
+	// 仅广播 WM_SETTINGCHANGE（两阶段图标切换的第二阶段）：通知 Explorer 读取当前
+	// HideIcons 值，原生隐藏/显示图标层。广播会触发桌面重排，必须在窗口切换之后错开执行。
+	private static void BroadcastIconsChange()
+	{
 		SendMessageTimeout(new IntPtr(0xFFFF), 26u, IntPtr.Zero, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 2u, 250u, out IntPtr _);
 	}
 
@@ -474,11 +485,13 @@ public static class DesktopVisibility
 				{
 					originalHideIcons = ReadHideIcons() ?? 0;
 				}
-				WriteHideIcons(hide ? 1 : 0);
-				// 两阶段（与任务栏分支一致）：先让 HideIcons 广播被 Explorer 消化——桌面
-				// 与动态壁纸层重新布局、图标由 Explorer 原生隐藏/显示——400ms 后再切换图标
-				// 列表窗口（此时通常已是视觉无操作）。同一时刻连发两个桌面级变更时，
-				// Wallpaper Engine 的壁纸层容易瞬间黑屏。
+				// 第一阶段（立即）：仅写注册表（不广播、不阻塞 UI 线程），并马上切换图标
+				// 列表窗口——视觉即时生效。SW_HIDE/SW_SHOW 不触发桌面重排，对动态壁纸安全。
+				WriteHideIcons(hide ? 1 : 0, broadcast: false);
+				num += HideIconWindows(list, hide);
+				// 第二阶段（400ms 后）：WM_SETTINGCHANGE 全桌面广播让 Explorer 原生同步
+				// HideIcons 状态。广播会让 Explorer 重新布局桌面（Wallpaper Engine 等动态
+				// 壁纸黑屏的来源），必须与上面的窗口切换错开 400ms。
 				if (hideIconsTimer == null)
 				{
 					hideIconsTimer = new DispatcherTimer
@@ -488,7 +501,7 @@ public static class DesktopVisibility
 					hideIconsTimer.Tick += delegate
 					{
 						hideIconsTimer.Stop();
-						HideIconWindows(list, hide);
+						BroadcastIconsChange();
 					};
 				}
 				hideIconsTimer.Stop();
@@ -539,8 +552,8 @@ public static class DesktopVisibility
 		return num;
 	}
 
-	// 两阶段切换桌面图标的第二阶段：图标列表窗口的 SW_HIDE/SW_SHOW。此时 Explorer
-	// 已按 HideIcons 注册表原生隐藏/显示图标，窗口切换只是状态对齐（视觉上通常无变化）。
+	// 两阶段切换桌面图标的第一阶段：图标列表窗口的 SW_HIDE/SW_SHOW，视觉即时生效。
+	// 该操作不触发桌面重排；400ms 后由 BroadcastIconsChange 广播让 Explorer 原生同步。
 	private static int HideIconWindows(List<IntPtr> list, bool hide)
 	{
 		int num = 0;
