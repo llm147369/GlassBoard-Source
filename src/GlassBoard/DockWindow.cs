@@ -86,14 +86,23 @@ public class DockWindow : GlassWindow
 
 	private DateTime lastRunningScan = DateTime.MinValue;
 
-	// —— 运行状态指示器（macOS 风格）：尺寸/圆角集中管理，颜色跟随 Dock 强调色 ——
+	// —— 运行状态指示器（macOS 风格）：尺寸/圆角集中管理 ——
 	// 运行中 = 图标下方小圆点；活动窗口 = 稍长的胶囊形指示条（覆盖圆点显示）。
+	// 指示器放在图标内容块正下方，与内容块留出 RunMarkerGap 间距；
+	// 颜色按 Dock 玻璃背景合成后的明暗自动切换：深色底用白色、浅色底用黑色。
 	private const double RunDotWidth = 5.0;
 	private const double RunDotHeight = 4.0;
 	private const double RunDotRadius = 2.0;
 	private const double RunActiveWidth = 14.0;
 	private const double RunActiveHeight = 4.0;
 	private const double RunActiveRadius = 2.0;
+	private const double RunMarkerGap = 4.0;
+	// Bottom 对齐的 WPF 元素要用负底边距向下延伸；标记和空隙占用按钮现有的底部留白。
+	private const double RunMarkerBottomMargin = -(RunMarkerGap + RunDotHeight);
+
+	// 指示器颜色缓存：仅当背景合成明暗变化时重建画刷（不读屏幕像素、不逐帧计算）
+	private System.Windows.Media.Color runMarkerColorCache = System.Windows.Media.Colors.Transparent;
+	private System.Windows.Media.Brush runMarkerBrush;
 
 	private AutoHidePolicy hidePolicy = new AutoHidePolicy();
 
@@ -155,6 +164,18 @@ public class DockWindow : GlassWindow
 
 	// 运行指示器诊断：每个入口最近一次指示状态（0=无 1=圆点 2=活动胶囊），变化时打日志
 	private readonly Dictionary<string, int> runState = new Dictionary<string, int>();
+
+	// 指示器过渡动画：只有状态真实变化才启动；markerWanted 记录每个标记的目标可见性，
+	// 隐藏动画完成时按它决定是否折叠（快速来回切换时不会被旧动画的完成回调误折叠）。
+	private readonly Dictionary<Border, bool> markerWanted = new Dictionary<Border, bool>();
+	private static readonly TimeSpan RunMarkerAnimDuration = TimeSpan.FromMilliseconds(100.0);
+	private static readonly CubicEase RunMarkerEase = new CubicEase
+	{
+		EasingMode = EasingMode.EaseOut
+	};
+
+	// 前台事件可能连续到达（快速 Alt-Tab）：合并到单个 UI 节拍，避免排队多次刷新。
+	private bool runUpdatePending;
 
 	private bool dockPointerPreviousBusy;
 
@@ -223,6 +244,7 @@ public class DockWindow : GlassWindow
 		InitializeBackgroundMove();
 		InitTaskDock();
 		RunningWindows.InitForegroundTracking();
+		RunningWindows.ForegroundChanged += OnRunningForegroundChanged;
 		RunningWindows.StartMaintenance();
 		moveGrip = new Thumb
 		{
@@ -285,7 +307,7 @@ public class DockWindow : GlassWindow
 				// 增量更新：只改指示器可见性（纯快照读取，无扫描），前台切换 1 秒内跟上
 				UpdateRunning();
 			}
-			if (!C.GlassSuppressed && (IsVisible || C.Board.IsVisible) && (C.Prefs.Dock.ShowRunning || taskWheel.Running) && !((DateTime.UtcNow - lastRunningScan).TotalSeconds < (double)(renderedHidden ? 10 : 3)))
+			if (!C.GlassSuppressed && (IsVisible || C.Board.IsVisible) && (C.Prefs.Dock.ShowRunning || taskWheel.Running) && !((DateTime.UtcNow - lastRunningScan).TotalSeconds < (double)(renderedHidden ? 10 : 1.5)))
 			{
 				lastRunningScan = DateTime.UtcNow;
 				RunningWindows.Scan();
@@ -601,6 +623,7 @@ public class DockWindow : GlassWindow
 	{
 		CancelDockPointer(refresh: false);
 		autoTimer.Stop();
+		StopRunMarkerAnimations();
 		runningTimer.Stop();
 		taskHintTimer.Stop();
 		if (hotkeys != null)
@@ -741,6 +764,7 @@ public class DockWindow : GlassWindow
 		moveGrip.Visibility = (C.Prefs.Placement.DockLocked ? Visibility.Collapsed : Visibility.Visible);
 		moveGrip.Cursor = (C.Prefs.Placement.DockLocked ? System.Windows.Input.Cursors.Arrow : System.Windows.Input.Cursors.SizeAll);
 		moveGrip.ToolTip = DockTip(C.Prefs.Placement.DockLocked ? "右键 Dock → 允许自由拖动 Dock" : "拖动把手或空白区域移动 Dock，松手保存");
+		StopRunMarkerAnimations();
 		Items.Children.Clear();
 		// 重建图标的同时清空徽标注册表：DockButton 会重新注册并恢复通知状态
 		notifyBadges.Clear();
@@ -977,9 +1001,174 @@ public class DockWindow : GlassWindow
 		}
 	}
 
+	// 前台切换即时更新：SetWinEventHook 回调（UI 线程）→ 合并进单个 UI 节拍 →
+	// 立即重算指示器并顺带触发一次扫描（RunningWindows 内部 1.2s 窗口扫描节流），
+	// 新开进程也能尽快进入窗口快照。
+	private void OnRunningForegroundChanged()
+	{
+		if (!Dispatcher.CheckAccess())
+		{
+			Dispatcher.BeginInvoke((Action)OnRunningForegroundChanged);
+			return;
+		}
+		if (runUpdatePending)
+		{
+			return;
+		}
+		runUpdatePending = true;
+		Dispatcher.BeginInvoke((Action)(() =>
+		{
+			runUpdatePending = false;
+			if (C.GlassSuppressed || (!IsVisible && !C.Board.IsVisible))
+			{
+				return;
+			}
+			if (!C.Prefs.Dock.ShowRunning && !taskWheel.Running)
+			{
+				return;
+			}
+			UpdateRunning();
+			C.Board.UpdateRunning();
+			RunningWindows.Scan();
+		}));
+	}
+
+	// 运行指示器过渡：出现=淡入+0.8→1.0 缩放；消失=淡出（完成后再折叠）。
+	// 从当前呈现值续接（快速切换不跳变）；禁用动效时直接落最终状态。
+	private void AnimateRunMarker(Border marker, bool show)
+	{
+		if (marker == null)
+		{
+			return;
+		}
+		if (!(marker.RenderTransform is ScaleTransform scale))
+		{
+			scale = new ScaleTransform(1.0, 1.0);
+			marker.RenderTransform = scale;
+			marker.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+		}
+		bool firstTime = !markerWanted.ContainsKey(marker);
+		markerWanted[marker] = show;
+		if (!MotionEnabled)
+		{
+			// 关闭动效：取消残留动画，直接落最终状态（Visibility/透明度/缩放一次性到位）
+			marker.BeginAnimation(UIElement.OpacityProperty, null);
+			scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+			scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+			scale.ScaleX = 1.0;
+			scale.ScaleY = 1.0;
+			marker.Opacity = (show ? 1.0 : 0.0);
+			marker.Visibility = (show ? Visibility.Visible : Visibility.Collapsed);
+			return;
+		}
+		if (show)
+		{
+			marker.Visibility = Visibility.Visible;
+			double curO = (firstTime ? 0.0 : marker.Opacity);
+			double curS = (firstTime ? 0.8 : scale.ScaleX);
+			marker.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(curO, 1.0, RunMarkerAnimDuration)
+			{
+				EasingFunction = RunMarkerEase
+			});
+			scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(curS, 1.0, RunMarkerAnimDuration)
+			{
+				EasingFunction = RunMarkerEase
+			});
+			scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(curS, 1.0, RunMarkerAnimDuration)
+			{
+				EasingFunction = RunMarkerEase
+			});
+		}
+		else
+		{
+			double curO = marker.Opacity;
+			DoubleAnimation fadeOut = new DoubleAnimation(curO, 0.0, RunMarkerAnimDuration)
+			{
+				EasingFunction = RunMarkerEase
+			};
+			fadeOut.Completed += delegate
+			{
+				// 动画可能已被新的显示动画替换：只有目标仍为隐藏时才折叠
+				if (markerWanted.TryGetValue(marker, out bool want) && !want)
+				{
+					marker.BeginAnimation(UIElement.OpacityProperty, null);
+					marker.Visibility = Visibility.Collapsed;
+				}
+			};
+			marker.BeginAnimation(UIElement.OpacityProperty, fadeOut);
+		}
+	}
+
+	// 停止全部指示器过渡动画（Dock 关闭或重建前调用，避免残留动画对象）
+	private void StopRunMarkerAnimations()
+	{
+		foreach (System.Windows.Controls.Button item in Items.Children.OfType<System.Windows.Controls.Button>())
+		{
+			if (item.Content is Grid grid)
+			{
+				foreach (Border b in grid.Children.OfType<Border>())
+				{
+					string tag = b.Tag as string;
+					if (tag == "running" || tag == "active")
+					{
+						b.BeginAnimation(UIElement.OpacityProperty, null);
+						if (b.RenderTransform is ScaleTransform st)
+						{
+							st.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+							st.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+						}
+					}
+				}
+			}
+		}
+		markerWanted.Clear();
+		runState.Clear();
+	}
+
+	// 运行指示颜色：按 Dock 玻璃背景“实际呈现”的合成明暗选择（深底→白，浅底→黑）。
+	// 不读屏幕像素：复用 GlassMaterials 的底色/强调色混合公式与透明度，桌面亮度按当前主题估计。
+	private static System.Windows.Media.Color RunMarkerColor(DockOptions o, bool light)
+	{
+		System.Windows.Media.Color glass;
+		if (string.IsNullOrEmpty(o.Material.Tint))
+		{
+			glass = (light ? System.Windows.Media.Color.FromRgb(234, 237, 244) : System.Windows.Media.Color.FromRgb(24, 26, 32));
+			System.Windows.Media.Color accentColor = IconPacks.AccentColor(o.Accent);
+			glass = System.Windows.Media.Color.FromRgb(
+				(byte)((double)(int)glass.R + ((double)(int)accentColor.R - (double)(int)glass.R) * 0.12),
+				(byte)((double)(int)glass.G + ((double)(int)accentColor.G - (double)(int)glass.G) * 0.12),
+				(byte)((double)(int)glass.B + ((double)(int)accentColor.B - (double)(int)glass.B) * 0.12));
+		}
+		else
+		{
+			try
+			{
+				glass = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(o.Material.Tint);
+			}
+			catch
+			{
+				glass = (light ? System.Windows.Media.Color.FromRgb(234, 237, 244) : System.Windows.Media.Color.FromRgb(24, 26, 32));
+			}
+		}
+		double glassLum = (0.2126 * (double)(int)glass.R + 0.7152 * (double)(int)glass.G + 0.0722 * (double)(int)glass.B) / 255.0;
+		double t = Math.Max(0.0, Math.Min(1.0, o.OpacityPercent / 100.0));
+		// 半透明玻璃叠在桌面上：桌面亮度按主题估计（浅色主题桌面偏亮 0.55 / 深色主题偏暗 0.12）
+		double desktopLum = (light ? 0.55 : 0.12);
+		double lum = t * glassLum + (1.0 - t) * desktopLum;
+		return (lum < 0.5 ? System.Windows.Media.Colors.White : System.Windows.Media.Colors.Black);
+	}
+
 	private void UpdateRunning()
 	{
 		// 活动胶囊：当前前台窗口归属的入口显示长条，其余运行入口显示圆点。
+		// 颜色按 Dock 玻璃背景合成明暗自动切换；背景/主题/透明度变化后，下一次 1 秒节拍内即更新（只重建一次画刷，不做屏幕采样）。
+		System.Windows.Media.Color wantColor = RunMarkerColor(C.Prefs.Dock, C.Prefs.Light);
+		bool markerColorChanged = wantColor != runMarkerColorCache;
+		if (markerColorChanged)
+		{
+			runMarkerColorCache = wantColor;
+			runMarkerBrush = new SolidColorBrush(wantColor);
+		}
 		IntPtr foreground = RunningWindows.EffectiveForeground();
 		string fgPath = (foreground == IntPtr.Zero ? "" : RunningWindows.PathOfWindow(foreground));
 		foreach (System.Windows.Controls.Button item in Items.Children.OfType<System.Windows.Controls.Button>())
@@ -1010,26 +1199,48 @@ public class DockWindow : GlassWindow
 					isActive = RunningWindows.MatchesPath(entry, fgPath);
 				}
 			}
+			// 只有指示状态真实变化才启动动画（0=无 1=圆点 2=活动胶囊）；
+			// 圆点↔胶囊互切时两者同时动画 = 交叉淡化，其余轮询不再触碰动画。
+			int newState = isActive ? 2 : (isRunning ? 1 : 0);
+			if (runState.TryGetValue(entry.Path, out int oldState) && oldState == newState)
+			{
+				continue;
+			}
+			runState[entry.Path] = newState;
+			bool showDot = C.Prefs.Dock.ShowRunning && newState == 1;
+			bool showCapsule = C.Prefs.Dock.ShowRunning && newState == 2;
 			foreach (Border item2 in from b in grid.Children.OfType<Border>()
 				where b.Tag as string == "running"
 				select b)
 			{
-				item2.Visibility = ((!C.Prefs.Dock.ShowRunning || !isRunning || isActive) ? Visibility.Collapsed : Visibility.Visible);
+				AnimateRunMarker(item2, showDot);
 			}
 			foreach (Border item3 in from b in grid.Children.OfType<Border>()
 				where b.Tag as string == "active"
 				select b)
 			{
-				item3.Visibility = ((C.Prefs.Dock.ShowRunning && isActive) ? Visibility.Visible : Visibility.Collapsed);
+				AnimateRunMarker(item3, showCapsule);
 			}
-			// 运行指示器诊断：状态变化才打日志（0=无 1=圆点 2=活动胶囊），日志不含窗口标题等敏感内容
-			int newState = isActive ? 2 : (isRunning ? 1 : 0);
 			if (RenderDiagnostics.Verbose)
 			{
-				if (!runState.TryGetValue(entry.Path, out int oldState) || oldState != newState)
+				RenderDiagnostics.Trace("RUN state " + (newState == 0 ? "none" : (newState == 1 ? "dot" : "active")) + " entry=" + entry.Path + " windows=" + ws.Count + " fgHwnd=" + foreground.ToInt64() + " fgPath=" + fgPath);
+			}
+		}
+		if (markerColorChanged)
+		{
+			// 颜色统一刷给所有运行指示器（含任务轮模式按钮的指示条），保证一次背景变化内全部同步
+			foreach (System.Windows.Controls.Button item4 in Items.Children.OfType<System.Windows.Controls.Button>())
+			{
+				if (item4.Content is Grid grid4)
 				{
-					runState[entry.Path] = newState;
-					RenderDiagnostics.Trace("RUN state " + (newState == 0 ? "none" : (newState == 1 ? "dot" : "active")) + " entry=" + entry.Path + " windows=" + ws.Count + " fgHwnd=" + foreground.ToInt64() + " fgPath=" + fgPath);
+					foreach (Border b4 in grid4.Children.OfType<Border>())
+					{
+						string tag4 = b4.Tag as string;
+						if (tag4 == "running" || tag4 == "active")
+						{
+							b4.Background = runMarkerBrush;
+						}
+					}
 				}
 			}
 		}
@@ -1378,38 +1589,44 @@ public class DockWindow : GlassWindow
 		if (entry != null)
 		{
 			button.Tag = entry;
-			// 运行圆点：无标签时用 -2 底部负边距把圆点放到图标下缘外侧（Grid 高度不变，不影响布局与点击区）；
-			// 显示标签时标签自带 4px 上边距，圆点贴图标底边正好落在该间隙里。
-			double runDotMarginBottom = (o.ShowLabels ? 0.0 : -2.0);
+			// 内容 Grid 只按图标/可选标签的高度居中；Bottom 对齐时正底边距会把标记往上推，
+			// 因此用负底边距把它延伸到内容块下方，并在图标或标签后留出 RunMarkerGap。
+			System.Windows.Media.Color markerColor = RunMarkerColor(o, C.Prefs.Light);
+			runMarkerColorCache = markerColor;
+			runMarkerBrush = new SolidColorBrush(markerColor);
 			grid2.Children.Add(new Border
 			{
 				Tag = "running",
 				Width = RunDotWidth,
 				Height = RunDotHeight,
 				CornerRadius = new CornerRadius(RunDotRadius),
-				Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(135, 205, byte.MaxValue)),
+				Background = runMarkerBrush,
 				HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Bottom,
-				Margin = new Thickness(0.0, 0.0, 0.0, runDotMarginBottom),
+				Margin = new Thickness(0.0, 0.0, 0.0, RunMarkerBottomMargin),
+				RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
+				RenderTransform = new ScaleTransform(1.0, 1.0),
 				Visibility = Visibility.Collapsed
 			});
-			// 活动窗口指示条：当前前台窗口所属应用显示长胶囊（覆盖圆点），颜色跟随 Dock 强调色
+			// 活动窗口指示条：当前前台窗口所属应用显示长胶囊（覆盖圆点），颜色与圆点一致（背景明暗对比色）
 			grid2.Children.Add(new Border
 			{
 				Tag = "active",
 				Width = RunActiveWidth,
 				Height = RunActiveHeight,
 				CornerRadius = new CornerRadius(RunActiveRadius),
-				Background = new SolidColorBrush(Accent(C.Prefs.Dock.Accent)),
+				Background = runMarkerBrush,
 				HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Bottom,
-				Margin = new Thickness(0.0, 0.0, 0.0, runDotMarginBottom),
+				Margin = new Thickness(0.0, 0.0, 0.0, RunMarkerBottomMargin),
+				RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
+				RenderTransform = new ScaleTransform(1.0, 1.0),
 				Visibility = Visibility.Collapsed
 			});
 			if (RenderDiagnostics.Verbose)
 			{
 				// 指示器创建诊断：确认圆点/胶囊进了可视树且尺寸正常
-				RenderDiagnostics.Trace("RUN marker created entry=" + entry.Path + " dot=" + RunDotWidth + "x" + RunDotHeight + " capsule=" + RunActiveWidth + "x" + RunActiveHeight + " dotMarginBottom=" + runDotMarginBottom + " iconSize=" + iconSize);
+				RenderDiagnostics.Trace("RUN marker created entry=" + entry.Path + " dot=" + RunDotWidth + "x" + RunDotHeight + " capsule=" + RunActiveWidth + "x" + RunActiveHeight + " bottomMargin=" + RunMarkerBottomMargin + " iconSize=" + iconSize + " color=" + markerColor);
 			}
 			// 通知红点：右上角 9×9，只表示“有未处理通知”，不显示数字（无法可靠获取未读数时不伪造）
 			Border notifyBadge = new Border
@@ -2276,12 +2493,14 @@ public class DockWindow : GlassWindow
 			{
 				children.Add(new Border
 				{
+					Tag = "running",
 					Width = ((item.Windows.Count > 1) ? 12 : 5),
 					Height = 4.0,
 					CornerRadius = new CornerRadius(2.0),
-					Background = Polish.Accent,
+					Background = new SolidColorBrush(RunMarkerColor(C.Prefs.Dock, C.Prefs.Light)),
 					HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
 					VerticalAlignment = VerticalAlignment.Bottom,
+					Margin = new Thickness(0.0, 0.0, 0.0, RunMarkerBottomMargin),
 					IsHitTestVisible = false
 				});
 			}

@@ -179,6 +179,26 @@ public static class RunningWindows
 	private static int trackedForegroundTick = 0;
 	private static int ownPid = Process.GetCurrentProcess().Id;
 
+	// 前台窗口真正变化时触发（UI 线程）：Dock 用它立即刷新运行指示器，不必等定时器。
+	public static event Action ForegroundChanged;
+
+	private static void SetTracked(IntPtr hwnd)
+	{
+		bool changed = trackedForeground != hwnd;
+		trackedForeground = hwnd;
+		trackedForegroundTick = Environment.TickCount;
+		if (changed)
+		{
+			try
+			{
+				ForegroundChanged?.Invoke();
+			}
+			catch
+			{
+			}
+		}
+	}
+
 	// GlassBoard 自己的设置窗口句柄（由 Controller 在窗口 Show 后写入、关闭时清空）。
 	// 前台事件跟踪默认忽略本进程窗口，但设置窗口需要支持"再点最小化"，
 	// 所以把它的句柄单列出来让跟踪器特殊记录。
@@ -212,8 +232,7 @@ public static class RunningWindows
 		{
 			return;
 		}
-		trackedForeground = foregroundWindow;
-		trackedForegroundTick = Environment.TickCount;
+		SetTracked(foregroundWindow);
 	}
 
 	private static void OnForegroundChanged(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
@@ -237,8 +256,7 @@ public static class RunningWindows
 					{
 						Store.Trace("FGTRACK settings hwnd=" + hwnd.ToInt64());
 					}
-					trackedForeground = hwnd;
-					trackedForegroundTick = Environment.TickCount;
+					SetTracked(hwnd);
 				}
 				else
 				{
@@ -255,8 +273,7 @@ public static class RunningWindows
 			{
 				Store.Trace("FGTRACK hwnd=" + hwnd.ToInt64() + " pid=" + num);
 			}
-			trackedForeground = hwnd;
-			trackedForegroundTick = Environment.TickCount;
+			SetTracked(hwnd);
 		}
 		catch
 		{
@@ -269,7 +286,7 @@ public static class RunningWindows
 		if (intPtr != IntPtr.Zero && (!IsWindow(intPtr) || !IsWindowVisible(intPtr) || IsIconic(intPtr)))
 		{
 			Store.Trace("FGTRACK clear hwnd=" + intPtr.ToInt64());
-			trackedForeground = IntPtr.Zero;
+			SetTracked(IntPtr.Zero);
 		}
 	}
 
@@ -304,8 +321,7 @@ public static class RunningWindows
 		{
 			return;
 		}
-		trackedForeground = hwnd;
-		trackedForegroundTick = Environment.TickCount;
+		SetTracked(hwnd);
 	}
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -1312,8 +1328,7 @@ public static class RunningWindows
 		}
 		// 乐观跟踪：激活成功后立即把目标窗口记为前台候选，
 		// 用户紧接着再点图标（想要最小化）时不会因前台事件延迟而多按一次。
-		trackedForeground = new IntPtr(value2);
-		trackedForegroundTick = Environment.TickCount;
+		SetTracked(new IntPtr(value2));
 		last.Put(entry.Path, value2);
 		return true;
 	}
