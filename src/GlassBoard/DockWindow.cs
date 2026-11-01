@@ -916,7 +916,7 @@ public class DockWindow : GlassWindow
 		Width = Math.Min(rect.Width - 20.0, dock.WidthFor((num == 0) ? 1 : num2));
 		double num4 = dock.IconSize + 16.0 + (double)(dock.ShowLabels ? 18 : 0);
 		double num5 = Math.Min(1.6, 1.0 + (dock.Zoom - 1.0) * MotionLevel);
-		Height = 28.0 + num4 + dock.Spacing * 2.0 + Math.Max(0.0, num4 * (num5 - 1.0) * 0.65 + 5.0 * MotionLevel - dock.Spacing) * 2.0;
+		Height = 28.0 + num4 + dock.Spacing * 2.0 + Math.Max(0.0, num4 * (num5 - 1.0) * 0.65 - dock.Spacing) * 2.0;
 		double num6;
 		if (dock.Alignment != 0)
 		{
@@ -1430,8 +1430,7 @@ public class DockWindow : GlassWindow
 		}, iconSize + 16.0);
 		button.Height = iconSize + 16.0 + (double)(o.ShowLabels ? 18 : 0);
 		button.Margin = new Thickness(o.Spacing / 2.0, 0.0, o.Spacing / 2.0, 0.0);
-		// 悬停显示纯文字提示（跟随 Dock 玻璃样式）
-		button.ToolTip = DockTip(tip);
+		// 用户要求：悬浮图标不弹任何悬浮背景（文字气泡已移除，拖动把手提示保留）
 		FrameworkElementFactory frameworkElementFactory = new FrameworkElementFactory(typeof(Border));
 		frameworkElementFactory.SetValue(Border.BackgroundProperty, new SolidColorBrush(System.Windows.Media.Color.FromArgb(1, byte.MaxValue, byte.MaxValue, byte.MaxValue)));
 		FrameworkElementFactory frameworkElementFactory2 = new FrameworkElementFactory(typeof(ContentPresenter));
@@ -1535,13 +1534,17 @@ public class DockWindow : GlassWindow
 			element = new TextBlock
 			{
 				Text = (text ?? "□"),
-				FontSize = iconSize * 0.72,
+				FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft YaHei UI"),
+				FontSize = Math.Round(iconSize * 0.72),
 				Width = iconSize,
 				Height = iconSize,
 				TextAlignment = TextAlignment.Center,
 				Foreground = TextBrush,
-				VerticalAlignment = VerticalAlignment.Center
+				VerticalAlignment = VerticalAlignment.Center,
+				// 整数像素对齐 + 理想度量：避免字形图标亚像素发虚/裁边
+				UseLayoutRounding = true
 			};
+			TextOptions.SetTextFormattingMode(element, TextFormattingMode.Ideal);
 		}
 		else
 		{
@@ -1560,26 +1563,55 @@ public class DockWindow : GlassWindow
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		stackPanel.Children.Add(element);
+		TextBlock dockLabel = null;
 		if (o.ShowLabels)
 		{
-			stackPanel.Children.Add(new TextBlock
+			// 名称自适应显示：基础 12px，放不下时逐级缩小字号（最低 9px、小字号加粗）优先显示完整名称；
+			// 宽度上限 = 相邻图标中心距(图标宽+间距) - 2px：间距越大字号越大、名称越清晰，相邻标签间至少 2px 空隙、永不重叠。
+			string labelText = text switch
 			{
-				Text = text switch
-				{
-					"···" => "更多", 
-					"⚙" => "设置", 
-					"▦" => "应用", 
-					"computer" => "此电脑", 
-					"control" => "控制中心", 
-					_ => tip, 
-				},
-				FontSize = 10.0,
-				Foreground = MutedBrush,
+				"···" => "更多", 
+				"⚙" => "设置", 
+				"▦" => "应用", 
+				"computer" => "此电脑", 
+				"control" => "控制中心", 
+				_ => tip, 
+			};
+			double capWidth = iconSize + 16.0 + o.Spacing - 2.0;
+			dockLabel = new TextBlock
+			{
+				Text = labelText,
+				FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft YaHei UI"),
+				FontSize = 12.0,
+				Foreground = (LightTheme ? Polish.Color("#4A5263") : Polish.Color("#C6CEDF")),
 				TextAlignment = TextAlignment.Center,
 				TextTrimming = TextTrimming.CharacterEllipsis,
-				MaxWidth = iconSize + 12.0,
-				Margin = new Thickness(0.0, 4.0, 0.0, 0.0)
-			});
+				MaxWidth = double.PositiveInfinity,
+				HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+				Margin = new Thickness(0.0, 4.0, 0.0, 0.0),
+				// 整数像素对齐：避免亚像素偏移让文字发虚
+				UseLayoutRounding = true
+			};
+			TextOptions.SetTextFormattingMode(dockLabel, TextFormattingMode.Ideal);
+			// 测量时必须放开 MaxWidth，否则 MaxWidth 会把 DesiredSize 截断到上限，字号自适应永不生效。
+			for (double fontSize = 12.0; fontSize >= 9.0; fontSize -= 1.0)
+			{
+				dockLabel.FontSize = fontSize;
+				dockLabel.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+				if (dockLabel.DesiredSize.Width <= capWidth)
+				{
+					break;
+				}
+			}
+			if (dockLabel.FontSize <= 9.0)
+			{
+				// 9px 是下限（再小看不清）；小字号加粗保证笔画完整
+				dockLabel.FontWeight = FontWeights.SemiBold;
+			}
+			dockLabel.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+			dockLabel.Width = Math.Ceiling(Math.Min(dockLabel.DesiredSize.Width, capWidth));
+			dockLabel.MaxWidth = capWidth;
+			stackPanel.Children.Add(dockLabel);
 		}
 		Grid grid2 = new Grid
 		{
@@ -1653,12 +1685,11 @@ public class DockWindow : GlassWindow
 		}
 		button.Content = grid2;
 		ScaleTransform scale = new ScaleTransform(1.0, 1.0);
-		TranslateTransform lift = new TranslateTransform();
-		TransformGroup transformGroup = new TransformGroup();
-		transformGroup.Children.Add(scale);
-		transformGroup.Children.Add(lift);
-		button.RenderTransform = transformGroup;
+		// 悬停只放大、不上浮：上浮会把按钮移离光标，光标停在图标下方（标签下缘）时
+		// MouseEnter/MouseLeave 互相触发形成死循环，图标会不停跳动。
+		button.RenderTransform = scale;
 		button.RenderTransformOrigin = new System.Windows.Point(0.5, 0.65);
+		button.UseLayoutRounding = true;
 		double zoomTarget = 1.0;
 		Action<bool> animate = (bool hover) =>
 		{
@@ -1679,10 +1710,6 @@ public class DockWindow : GlassWindow
 					EasingFunction = easingFunction
 				});
 				scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(zoomTarget, TimeSpan.FromMilliseconds(180.0))
-				{
-					EasingFunction = easingFunction
-				});
-				lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(hover ? (-5.0 * MotionLevel) : 0.0, TimeSpan.FromMilliseconds(180.0))
 				{
 					EasingFunction = easingFunction
 				});
@@ -1769,7 +1796,6 @@ public class DockWindow : GlassWindow
 					previewSuppressed = false;
 					leaveTimer.Stop();
 					previewTimer.Stop();
-					previewTimer.Start();
 				}
 			};
 			button.MouseLeave += delegate
@@ -3436,7 +3462,7 @@ public class DockWindow : GlassWindow
 			};
 		}
 		previewTimer.Stop();
-		previewTimer.Start();
+		// 用户要求：悬浮图标不弹悬浮背景——任务按钮的窗口预览卡片同样停用
 	}
 
 	private void PreviewLeave()
@@ -4165,7 +4191,6 @@ public class DockWindow : GlassWindow
 
 	private void BindPointerItem(FrameworkElement element, string key, string name, Action click, Action beforeDrag = null)
 	{
-		element.ToolTip = DockTip(name);
 		element.AddHandler(Mouse.PreviewMouseDownEvent, (MouseButtonEventHandler)((object s, MouseButtonEventArgs e) =>
 		{
 			if (e.ChangedButton != MouseButton.Left)

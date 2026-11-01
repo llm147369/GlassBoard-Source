@@ -2035,8 +2035,8 @@ public class BoardWindow : GlassWindow
 		Action<bool> hover = (bool over) =>
 		{
 			Border border = tile;
-			SolidColorBrush background = (isSelected ? selectedBrush : (over ? new SolidColorBrush(Color.FromArgb(24, byte.MaxValue, byte.MaxValue, byte.MaxValue)) : Brushes.Transparent));
-			border.Background = background;
+			// 用户要求：悬浮磁贴不显示背景板；编辑模式选中态背景保留
+			border.Background = (isSelected ? selectedBrush : Brushes.Transparent);
 			if (MotionEnabled)
 			{
 				CubicEase easingFunction2 = new CubicEase

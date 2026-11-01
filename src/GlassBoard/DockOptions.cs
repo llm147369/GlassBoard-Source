@@ -177,7 +177,7 @@ public class DockOptions
 		}
 		Material.Normalize();
 		IconSize = LayoutRules.Clamp(IconSize, 32.0, 64.0, 44.0);
-		Spacing = LayoutRules.Clamp(Spacing, 0.0, 20.0, 6.0);
+		Spacing = LayoutRules.Clamp(Spacing, 0.0, 50.0, 6.0);
 		Padding = LayoutRules.Clamp(Padding, 8.0, 28.0, 16.0);
 		Radius = LayoutRules.Clamp(Radius, 0.0, 48.0, 28.0);
 		OpacityPercent = LayoutRules.GlassOpacity(OpacityPercent);

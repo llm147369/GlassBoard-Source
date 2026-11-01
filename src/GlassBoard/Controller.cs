@@ -2058,7 +2058,7 @@ public class Controller
 				draft.IconSize = iconSize;
 				live();
 			});
-			Slider spacing = func2(stackPanel3, "图标间距", 0.0, 20.0, draft.Spacing, 1.0, " px", (double spacing2) =>
+			Slider spacing = func2(stackPanel3, "图标间距", 0.0, 50.0, draft.Spacing, 1.0, " px", (double spacing2) =>
 			{
 				draft.Spacing = spacing2;
 				live();
