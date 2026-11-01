@@ -91,6 +91,14 @@ public static class DesktopVisibility
 	// 同步状态。广播会触发桌面重排，与窗口切换错开，避免 Wallpaper Engine 黑屏。
 	private static DispatcherTimer hideIconsTimer;
 
+	// 应用侧最近一次主动切换桌面图标的时间戳（TickCount）：外部变化同步的宽限期起点，
+	// 防止应用自己写的 HideIcons/窗口切换被维护循环误读为桌面右键的外部操作。
+	private static int lastIconsChangeTick;
+
+	// 桌面图标外部状态变化回调（桌面右键菜单切换「显示桌面图标」触发）：参数=系统当前是否隐藏。
+	// Controller 订阅后同步 Prefs.HideDesktopIcons 与设置界面开关。
+	public static Action<bool> ExternalIconsChange;
+
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	private static extern IntPtr FindWindow(string cls, string title);
 
@@ -515,15 +523,10 @@ public static class DesktopVisibility
 		else
 		{
 			iconsHidden = hide;
+			lastIconsChangeTick = Environment.TickCount;
 		}
-		if (taskbarHidden == true || iconsHidden == true)
-		{
-			maintenance.Start();
-		}
-		else
-		{
-			maintenance.Stop();
-		}
+		// 维护循环常驻：除任务栏压制外，还负责桌面图标与桌面右键菜单的状态同步。
+		maintenance.Start();
 		if (num <= 0)
 		{
 			return "已请求" + (hide ? "隐藏" : "显示") + text;
@@ -595,6 +598,13 @@ public static class DesktopVisibility
 	public static string ToggleIcons()
 	{
 		return SetHidden(taskbar: false, !DesiredHidden(taskbar: false));
+	}
+
+	// 常驻启动维护循环：除任务栏/图标的隐藏维持外，负责桌面图标与桌面右键菜单的
+	// 外部状态同步（见 Maintain）。开销仅每 2 秒一次注册表读取。
+	public static void StartWatch()
+	{
+		maintenance.Start();
 	}
 
 	// explorer 刚启动的一小段时间里桌面图标列表仍在初始化，此时 SW_HIDE 容易与
@@ -756,11 +766,19 @@ public static class DesktopVisibility
 	{
 		try
 		{
-			// 桌面图标已由 Explorer 原生 HideIcons 负责，这里只做状态对齐：
-			// 若用户在桌面右键菜单手动改回显示，重新写回隐藏值即可，不触碰任何窗口，不会闪烁。
-			if (iconsHidden == true && (ReadHideIcons() ?? 0) != 1)
+			// 桌面图标与桌面右键菜单的状态同步：用户在桌面右键「查看 → 显示桌面图标」切换时，
+			// Explorer 会写 HideIcons 注册表值。检测到与应用侧不一致时以系统实际状态为准并同步
+			// 应用偏好（不再像旧版那样强制写回隐藏值、与右键菜单互相拉扯）。应用自己刚切换完
+			// 的 2 秒宽限期内不响应，避免自我回读误判。
+			if (Environment.TickCount - lastIconsChangeTick > 2000)
 			{
-				WriteHideIcons(1);
+				bool iconsOsHidden = (ReadHideIcons() ?? 0) == 1;
+				if (iconsHidden != iconsOsHidden)
+				{
+					Store.Trace("SHELL icons external change adopt=" + iconsOsHidden);
+					iconsHidden = iconsOsHidden;
+					ExternalIconsChange?.Invoke(iconsOsHidden);
+				}
 			}
 			if (taskbarHidden == true)
 			{
@@ -918,7 +936,8 @@ public static class DesktopVisibility
 
 	public static void ShowAll()
 	{
-		maintenance.Stop();
+		// 恢复后维护循环继续运行：桌面图标与右键菜单的同步监听不能停。
+		maintenance.Start();
 		hideTaskbarTimer?.Stop();
 		hideIconsTimer?.Stop();
 		UninstallRevealHook();

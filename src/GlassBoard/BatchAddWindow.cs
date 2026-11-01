@@ -153,6 +153,7 @@ public class BatchAddWindow : Window
 		VirtualizingPanel.SetIsVirtualizing(list, value: true);
 		VirtualizingPanel.SetVirtualizationMode(list, VirtualizationMode.Recycling);
 		ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
+		ScrollViewer.SetVerticalScrollBarVisibility(list, ScrollBarVisibility.Hidden);
 		Style itemContainerStyle = new Style(typeof(ListBoxItem))
 		{
 			Setters = { (SetterBase)new Setter(System.Windows.Controls.Control.HorizontalContentAlignmentProperty, System.Windows.HorizontalAlignment.Stretch) }

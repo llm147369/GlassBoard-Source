@@ -58,6 +58,10 @@ public class Preferences
 	[DataMember(EmitDefaultValue = false)]
 	public DockOptions Dock = new DockOptions();
 
+	// 大面板软件分组（"全部"/"未分组"为内置分类，不存入）
+	[DataMember(EmitDefaultValue = false)]
+	public List<string> Groups = new List<string> { "创作", "办公", "游戏" };
+
 	[DataMember(EmitDefaultValue = false)]
 	public List<Workspace> Workspaces = new List<Workspace>();
 
@@ -66,6 +70,10 @@ public class Preferences
 
 	[DataMember(EmitDefaultValue = false)]
 	public WidgetOptions Widgets = new WidgetOptions();
+
+	// 新增软件自动识别分组（识别不出时进"未分组"）
+	[DataMember]
+	public bool AutoGrouping = true;
 
 	[DataMember]
 	public bool AutoCheckUpdates;
@@ -82,6 +90,10 @@ public class Preferences
 
 	[DataMember]
 	public bool BoardHideSearch;
+
+	// 隐藏大面板分组栏，直接显示全部图标
+	[DataMember]
+	public bool BoardHideGroups;
 
 	[DataMember]
 	public bool GameMode;
@@ -109,6 +121,10 @@ public class Preferences
 	[DataMember]
 	public long LastUpdateCheckUtc;
 
+	// 手动分组的学习记忆：入口标识 → 分组名（空串 = 用户指定未分组）
+	[DataMember]
+	public Dictionary<string, string> LearnedGroups = new Dictionary<string, string>();
+
 	[DataMember]
 	public bool HotkeyMigrationConflict;
 
@@ -116,6 +132,7 @@ public class Preferences
 	private void Defaults(StreamingContext context)
 	{
 		AutoDesktopImport = true;
+		AutoGrouping = true;
 		BoardIconSize = 48.0;
 		BoardIconGap = 5.0;
 	}
@@ -173,6 +190,7 @@ public class Preferences
 			{
 				app.Name = Path.GetFileNameWithoutExtension(app.Path);
 			}
+			FeatureRules.NormalizeMemberships(app);
 		}
 		Apps = EntryRules.NormalizeEntries(Apps);
 		RemovalRules.ReconcileActive(this);
@@ -186,6 +204,10 @@ public class Preferences
 		{
 			Removed = new List<string>();
 		}
+		if (LearnedGroups == null)
+		{
+			LearnedGroups = new Dictionary<string, string>();
+		}
 		bool flag = Hotkeys != null && Hotkeys.All((HotkeySetting k) => k == null || k.ActionId != 7);
 		Hotkeys = HotkeyRules.Normalize(Hotkeys);
 		HotkeyMigrationConflict = flag && !Hotkeys[6].Enabled;
@@ -198,6 +220,7 @@ public class Preferences
 		}
 		Dock.Normalize();
 		DockLayoutRules.SyncApps(this);
+		Groups = FeatureRules.Groups(Groups, Apps);
 		if (Workspaces == null)
 		{
 			Workspaces = new List<Workspace>();

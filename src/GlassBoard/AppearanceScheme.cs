@@ -19,6 +19,12 @@ public class AppearanceScheme
 	public bool BoardHideSearch;
 
 	[DataMember]
+	public bool BoardHideGroups;
+
+	[DataMember(EmitDefaultValue = false)]
+	public List<string> Groups;
+
+	[DataMember]
 	public int PanelSize;
 
 	[DataMember]

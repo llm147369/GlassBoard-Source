@@ -154,6 +154,11 @@ public static class Polish
 			return;
 		}
 		w.Resources[typeof(Button)] = ButtonStyle(light);
+		// 全局隐藏滚动条：所有滚动区域（对话框列表、设置等）不再显示可见滚动条，滚轮/拖拽仍可滚动
+		Style scrollStyle = new Style(typeof(ScrollViewer));
+		scrollStyle.Setters.Add(new Setter(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Hidden));
+		scrollStyle.Setters.Add(new Setter(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled));
+		w.Resources[typeof(ScrollViewer)] = scrollStyle;
 		MenuTheme.Install(w, light);
 		Style style = new Style(typeof(TextBox));
 		style.Setters.Add(new Setter(Control.BackgroundProperty, Color(light ? "#DFFFFFFF" : "#90151E2D")));
@@ -237,8 +242,9 @@ public static class Polish
 		frameworkElementFactory9.SetValue(FrameworkElement.MinWidthProperty, 130.0);
 		frameworkElementFactory9.SetBinding(FrameworkElement.WidthProperty, Parent("ActualWidth"));
 		FrameworkElementFactory frameworkElementFactory10 = new FrameworkElementFactory(typeof(ScrollViewer));
-		frameworkElementFactory10.SetValue(FrameworkElement.MaxHeightProperty, 260.0);
-		frameworkElementFactory10.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+		frameworkElementFactory10.SetValue(FrameworkElement.MaxHeightProperty, 480.0);
+		frameworkElementFactory10.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Hidden);
+		frameworkElementFactory10.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
 		FrameworkElementFactory child = new FrameworkElementFactory(typeof(ItemsPresenter));
 		frameworkElementFactory10.AppendChild(child);
 		frameworkElementFactory9.AppendChild(frameworkElementFactory10);

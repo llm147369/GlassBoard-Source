@@ -123,6 +123,22 @@ public class BoardWindow : GlassWindow
 
 	private bool iconsDirty = true;
 
+	// 软件分组：currentGroup 为当前查看的分类（"全部"/"未分组"/自定义分组）
+	internal WrapPanel groupChips;
+	private List<string> lastGroups = new List<string>();
+	private ComboBox moveGroup;
+	private string currentGroup = "全部";
+	private bool syncingGroups;
+	private Border groupMore;
+
+	internal string CurrentGroup
+	{
+		get
+		{
+			return currentGroup;
+		}
+	}
+
 	internal bool HasView => layout != null;
 
 	public void ClearSearch()
@@ -349,6 +365,11 @@ public class BoardWindow : GlassWindow
 	private void BuildForSize()
 	{
 		string text = ((C.Prefs.BoardHideSearch || Search == null) ? "" : Search.Text);
+		// 分组栏被隐藏时回到「全部」视图，避免分组过滤后图标"消失"的困惑
+		if (C.Prefs.BoardHideGroups)
+		{
+			currentGroup = "全部";
+		}
 		columns = BoardIconRules.Columns(Width - 104.0, C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
 		Build();
 		Search.Text = text;
@@ -785,6 +806,68 @@ public class BoardWindow : GlassWindow
 		};
 		Grid.SetRow(bulkBar, 2);
 		layout.Children.Add(bulkBar);
+		// —— 分组栏（第 1 行）：分类切换 + 管理/自动分组入口；设置里可隐藏 ——
+		WrapPanel groupBar = new WrapPanel
+		{
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(0.0, 4.0, 0.0, 0.0),
+			Visibility = (C.Prefs.BoardHideGroups ? Visibility.Collapsed : Visibility.Visible)
+		};
+		Grid.SetRow(groupBar, 1);
+		layout.Children.Add(groupBar);
+		groupChips = new WrapPanel
+		{
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		groupBar.Children.Add(groupChips);
+		// 「操作」芯片：样式与分组芯片一致（无背景 + 细边框 + 同色文字），点开大面板主题菜单
+		groupMore = new Border
+		{
+			CornerRadius = new CornerRadius(11.0),
+			Padding = new Thickness(11.0, 4.0, 11.0, 4.0),
+			Margin = new Thickness(0.0, 1.0, 6.0, 1.0),
+			Background = Brushes.Transparent,
+			BorderBrush = Polish.Line(LightTheme),
+			BorderThickness = new Thickness(1.0),
+			Cursor = Cursors.Hand,
+			VerticalAlignment = VerticalAlignment.Center,
+			Child = new TextBlock
+			{
+				Text = "操作",
+				FontSize = 12.0,
+				Foreground = Polish.Muted(LightTheme)
+			}
+		};
+		groupMore.ToolTip = "自动分组 / 管理分组";
+		groupMore.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+		{
+			if (groupMore.ContextMenu != null)
+			{
+				groupMore.ContextMenu.PlacementTarget = groupMore;
+				groupMore.ContextMenu.IsOpen = true;
+			}
+		};
+		ContextMenu groupMenu = MenuTheme.Create(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
+		MenuItem miAuto = new MenuItem
+		{
+			Header = "自动分组未分组软件"
+		};
+		miAuto.Click += (object s, RoutedEventArgs e) =>
+		{
+			C.AutoGroupApps(this);
+		};
+		groupMenu.Items.Add(miAuto);
+		MenuItem miManage = new MenuItem
+		{
+			Header = "管理分组"
+		};
+		miManage.Click += (object s, RoutedEventArgs e) =>
+		{
+			C.ManageGroups(this);
+		};
+		groupMenu.Items.Add(miManage);
+		groupMore.ContextMenu = groupMenu;
+		groupBar.Children.Add(groupMore);
 		selectAll = Button("全选结果", (object s, RoutedEventArgs e) =>
 		{
 			SelectFiltered();
@@ -810,6 +893,26 @@ public class BoardWindow : GlassWindow
 			Margin = new Thickness(10.0, 0.0, 0.0, 0.0)
 		};
 		bulkBar.Children.Add(selectionCount);
+		moveGroup = new ComboBox
+		{
+			Width = 112.0,
+			Height = 30.0,
+			Margin = new Thickness(12.0, 0.0, 4.0, 0.0),
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		bulkBar.Children.Add(moveGroup);
+		Button moveSelected = Button("移动", (object s, RoutedEventArgs e) =>
+		{
+			if (moveGroup.SelectedItem is string to && selected.Count != 0)
+			{
+				C.TransferEntries(selected.ToArray(), currentGroup, to);
+			}
+		}, 100.0);
+		bulkBar.Children.Add(moveSelected);
+		// 每次 Build 都会新建空的 groupChips 面板：重置基线，保证 SyncGroups 重新填充芯片
+		// （否则面板收起后 ReleaseHiddenView 清空视图、再次打开时 lastGroups 未变导致芯片丢失）
+		lastGroups = new List<string>();
+		SyncGroups();
 		folderBar = new WrapPanel
 		{
 			Orientation = Orientation.Horizontal,
@@ -838,6 +941,8 @@ public class BoardWindow : GlassWindow
 		Tiles = new UniformGrid
 		{
 			Columns = columns,
+			// 顶部对齐：行数少时不把剩余高度均摊给行（否则少量磁贴会被拉伸成超高格子、图标居中悬空）
+			VerticalAlignment = VerticalAlignment.Top,
 			// Rows 不设 = 自动按内容延展，配合 ScrollViewer 实现纵向滚动
 			// 透明背景让空格子也能命中拖放事件（否则空白处会穿透到窗口层）
 			Background = Brushes.Transparent,
@@ -983,9 +1088,111 @@ public class BoardWindow : GlassWindow
 		Render(animate: true);
 	}
 
+	// 同步分组栏：芯片显示 全部/未分组/全部自定义分组；分组集合变化时重建芯片
+	public void SyncGroups()
+	{
+		if (groupChips == null)
+		{
+			return;
+		}
+		List<string> list = new string[2] { "全部", "未分组" }.Concat(C.Prefs.Groups).ToList();
+		bool same = lastGroups.Count == list.Count;
+		if (same)
+		{
+			for (int i = 0; i < list.Count; i++)
+			{
+				if (lastGroups[i] != list[i])
+				{
+					same = false;
+					break;
+				}
+			}
+		}
+		if (!same || groupChips.Children.Count == 0)
+		{
+			lastGroups = new List<string>(list);
+			groupChips.Children.Clear();
+			foreach (string g in list)
+			{
+				string capture = g;
+				Border chip = new Border
+				{
+					Tag = capture,
+					CornerRadius = new CornerRadius(11.0),
+					Padding = new Thickness(11.0, 4.0, 11.0, 4.0),
+					Margin = new Thickness(0.0, 1.0, 6.0, 1.0),
+					Cursor = Cursors.Hand,
+					Child = new TextBlock
+					{
+						Text = capture,
+						FontSize = 12.0
+					}
+				};
+				chip.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
+				{
+					SelectGroup(capture);
+				};
+				groupChips.Children.Add(chip);
+			}
+		}
+		if (!list.Contains(currentGroup))
+		{
+			currentGroup = "全部";
+			selected.Clear();
+		}
+		foreach (object child in groupChips.Children)
+		{
+			Border chip2 = child as Border;
+			if (chip2 == null)
+			{
+				continue;
+			}
+			bool sel = string.Equals(chip2.Tag as string, currentGroup);
+			chip2.Background = (sel ? Polish.Card(LightTheme) : Brushes.Transparent);
+			chip2.BorderBrush = (sel ? Polish.Accent : Polish.Line(LightTheme));
+			chip2.BorderThickness = new Thickness(1.0);
+			TextBlock label = chip2.Child as TextBlock;
+			if (label != null)
+			{
+				label.Foreground = (sel ? Polish.Ink(LightTheme) : Polish.Muted(LightTheme));
+			}
+		}
+		syncingGroups = true;
+		if (moveGroup != null)
+		{
+			string text = moveGroup.SelectedItem as string;
+			moveGroup.ItemsSource = list.Skip(1).ToList();
+			moveGroup.SelectedItem = (list.Contains(text) ? text : "未分组");
+		}
+		syncingGroups = false;
+	}
+
+	// 点击分组芯片：切换当前分组视图
+	private void SelectGroup(string g)
+	{
+		if (g != currentGroup)
+		{
+			selected.Clear();
+		}
+		currentGroup = g;
+		tileScroller?.ScrollToVerticalOffset(0.0);
+		SyncGroups();
+		Render(animate: true);
+	}
+
+	// 入口是否属于当前分组视图（分组栏隐藏或"全部"时恒真）
+	private bool InCurrentGroup(Entry a)
+	{
+		if (C.Prefs.BoardHideGroups || currentGroup == "全部")
+		{
+			return true;
+		}
+		return FeatureRules.InGroup(a, currentGroup);
+	}
+
 	private List<Entry> Filtered()
 	{
-		return C.Prefs.Apps.Where((Entry a) => string.Equals(a.Folder ?? "", currentFolder, StringComparison.OrdinalIgnoreCase)).ToList();
+		return C.Prefs.Apps.Where((Entry a) => InCurrentGroup(a) && string.Equals(a.Folder ?? "", currentFolder, StringComparison.OrdinalIgnoreCase)).ToList();
 	}
 
 	// 文件夹第一个成员在当前视图列表里的下标；空文件夹返回极大值（排在末尾）
@@ -995,13 +1202,13 @@ public class BoardWindow : GlassWindow
 		return (idx < 0) ? int.MaxValue : idx;
 	}
 
-	// 文件夹名列表（按首次出现顺序，忽略大小写去重）
+	// 文件夹名列表（按首次出现顺序，忽略大小写去重；只统计当前分组视图内）
 	private List<string> FolderNames()
 	{
 		List<string> names = new List<string>();
 		foreach (Entry a in C.Prefs.Apps)
 		{
-			if (!string.IsNullOrWhiteSpace(a.Folder) && !names.Any((string n) => string.Equals(n, a.Folder, StringComparison.OrdinalIgnoreCase)))
+			if (InCurrentGroup(a) && !string.IsNullOrWhiteSpace(a.Folder) && !names.Any((string n) => string.Equals(n, a.Folder, StringComparison.OrdinalIgnoreCase)))
 			{
 				names.Add(a.Folder);
 			}
@@ -1011,7 +1218,7 @@ public class BoardWindow : GlassWindow
 
 	private int FolderCount(string name)
 	{
-		return C.Prefs.Apps.Count((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase));
+		return C.Prefs.Apps.Count((Entry a) => InCurrentGroup(a) && string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase));
 	}
 
 	// 文件夹栏：根视图为空（文件夹是网格里同尺寸的磁贴）；文件夹视图只显示「← 返回」。
@@ -1573,6 +1780,14 @@ public class BoardWindow : GlassWindow
 		List<Entry> list = Filtered();
 		List<string> folderNames = ((currentFolder == "") ? FolderNames() : null);
 		Empty.Visibility = ((list.Count != 0 || (folderNames != null && folderNames.Count != 0)) ? Visibility.Collapsed : Visibility.Visible);
+		if (!C.Prefs.BoardHideGroups && currentGroup != "全部")
+		{
+			Empty.Text = "「" + currentGroup + "」分组里还没有软件\n把图标拖到这里，即可加入当前分组";
+		}
+		else
+		{
+			Empty.Text = "将软件、文档或文件夹拖到这里\n面板默认保持打开；按 Esc 收起，也可点击「批量添加」";
+		}
 		if (pendingStatus != null)
 		{
 			Status.Text = pendingStatus;
@@ -1583,7 +1798,7 @@ public class BoardWindow : GlassWindow
 		}
 		else
 		{
-			Status.Text = "共 " + list.Count + " 个入口" + ((folderNames != null && folderNames.Count != 0) ? (" · " + folderNames.Count + " 个文件夹") : "") + " · 拖动图标到另一个图标上可创建文件夹";
+			Status.Text = "共 " + list.Count + " 个入口" + ((folderNames != null && folderNames.Count != 0) ? (" · " + folderNames.Count + " 个文件夹") : "") + (C.Prefs.BoardHideGroups || currentGroup == "全部" ? "" : (" · 分组「" + currentGroup + "」")) + " · 拖动图标到另一个图标上可创建文件夹";
 		}
 		int num2 = 0;
 		List<string> renderedFolders = new List<string>();
@@ -2010,7 +2225,8 @@ public class BoardWindow : GlassWindow
 			HorizontalAlignment = HorizontalAlignment.Center,
 			Margin = new Thickness(0.0, 0.0, 0.0, 1.0),
 			ToolTip = "正在运行，点击切回窗口",
-			Visibility = ((!C.Prefs.Dock.ShowRunning || !RunningWindows.IsRunning(a)) ? Visibility.Collapsed : Visibility.Visible)
+			// 大面板不再显示运行指示圆点（Dock 的运行指示不受影响）
+			Visibility = Visibility.Collapsed
 		});
 		if (editing)
 		{
@@ -2999,6 +3215,20 @@ public class BoardWindow : GlassWindow
 		action("图标间距与默认大小", () =>
 		{
 			IconSettings();
+		}, arg3: true);
+		action(C.Prefs.BoardHideGroups ? "显示分组栏" : "隐藏分组栏 · 显示全部图标", () =>
+		{
+			C.Prefs.BoardHideGroups = !C.Prefs.BoardHideGroups;
+			C.Save();
+			ApplyDisplayOptions();
+		}, arg3: true);
+		action("自动分组未分组软件", () =>
+		{
+			C.AutoGroupApps(this);
+		}, arg3: true);
+		action("管理分组", () =>
+		{
+			C.ManageGroups(this);
 		}, arg3: true);
 		action("工作区", () =>
 		{
