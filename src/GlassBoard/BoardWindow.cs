@@ -3014,7 +3014,8 @@ public class BoardWindow : GlassWindow
 				where b.Tag as string == "running"
 				select b)
 			{
-				item2.Visibility = ((!C.Prefs.Dock.ShowRunning || !RunningWindows.IsRunning(entry)) ? Visibility.Collapsed : Visibility.Visible);
+				// 大面板运行指示圆点恒隐藏（仅 Dock 显示运行指示），避免周期性刷新把它重新点亮
+				item2.Visibility = Visibility.Collapsed;
 			}
 		}
 	}
