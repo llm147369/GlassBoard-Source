@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -32,10 +32,8 @@ public class BoardWindow : GlassWindow
 
 	private UniformGrid Tiles;
 
-	// 滚动模式：磁贴宿主滚动视图与当前文件夹视图（"" = 根目录）
+	// 滚动模式：磁贴宿主滚动视图
 	private ScrollViewer tileScroller;
-	private string currentFolder = "";
-	private WrapPanel folderBar;
 
 	private TextBlock Status;
 
@@ -47,7 +45,6 @@ public class BoardWindow : GlassWindow
 
 	private Point dragStart;
 
-	private bool folderDragging;
 
 	private Entry dragEntry;
 
@@ -527,7 +524,6 @@ public class BoardWindow : GlassWindow
 		Search = null;
 		Tiles = null;
 		tileScroller = null;
-		folderBar = null;
 		Status = (Empty = null);
 		layout = null;
 		bulkBar = null;
@@ -586,7 +582,6 @@ public class BoardWindow : GlassWindow
 			thumb.Visibility = visibility;
 			editing = false;
 			selected.Clear();
-			currentFolder = "";
 			LightTheme = C.Prefs.Light;
 			MotionEnabled = C.Prefs.Dock.MotionEnabled;
 			MotionLevel = C.Prefs.Dock.MotionLevel;
@@ -642,10 +637,6 @@ public class BoardWindow : GlassWindow
 			Height = new GridLength(0.0)
 		};
 		layout.RowDefinitions.Add(bulkRow);
-		layout.RowDefinitions.Add(new RowDefinition
-		{
-			Height = GridLength.Auto
-		});
 		layout.RowDefinitions.Add(new RowDefinition
 		{
 			Height = new GridLength(1.0, GridUnitType.Star)
@@ -913,19 +904,11 @@ public class BoardWindow : GlassWindow
 		// （否则面板收起后 ReleaseHiddenView 清空视图、再次打开时 lastGroups 未变导致芯片丢失）
 		lastGroups = new List<string>();
 		SyncGroups();
-		folderBar = new WrapPanel
-		{
-			Orientation = Orientation.Horizontal,
-			Margin = new Thickness(0.0, 6.0, 0.0, 0.0),
-			Visibility = Visibility.Collapsed
-		};
-		Grid.SetRow(folderBar, 3);
-		layout.Children.Add(folderBar);
 		DockPanel dockPanel = new DockPanel
 		{
 			Margin = new Thickness(0.0, 10.0, 0.0, 4.0)
 		};
-		Grid.SetRow(dockPanel, 4);
+		Grid.SetRow(dockPanel, 3);
 		layout.Children.Add(dockPanel);
 		Grid grid3 = new Grid();
 		dockPanel.Children.Add(grid3);
@@ -953,7 +936,7 @@ public class BoardWindow : GlassWindow
 		tileScroller.DragOver += (object s, DragEventArgs e) =>
 		{
 			// 磁贴排满时网格没有空位，滚到内容下方空白处仍可作为落点（追加到末尾）
-			if ((DraggedEntries(e.Data).Length != 0 || (currentFolder == "" && DraggedFolder(e.Data) != null)) && e.OriginalSource == tileScroller)
+			if (DraggedEntries(e.Data).Length != 0 && e.OriginalSource == tileScroller)
 			{
 				e.Effects = DragDropEffects.Move;
 				e.Handled = true;
@@ -963,13 +946,6 @@ public class BoardWindow : GlassWindow
 		{
 			if (e.OriginalSource != tileScroller)
 			{
-				return;
-			}
-			if (currentFolder == "" && DraggedFolder(e.Data) != null)
-			{
-				HideInsertMarker();
-				C.MoveFolderTo(DraggedFolder(e.Data), int.MaxValue);
-				e.Handled = true;
 				return;
 			}
 			if (DraggedEntries(e.Data).Length != 0)
@@ -995,14 +971,6 @@ public class BoardWindow : GlassWindow
 			{
 				return;
 			}
-			if (currentFolder == "" && DraggedFolder(e.Data) != null)
-			{
-				AutoScrollFor(e.GetPosition(tileScroller));
-				ShowInsertMarker(InsertIndexFor(e.GetPosition(Tiles)));
-				e.Effects = DragDropEffects.Move;
-				e.Handled = true;
-				return;
-			}
 			if (DraggedEntries(e.Data).Length != 0)
 			{
 				AutoScrollFor(e.GetPosition(tileScroller));
@@ -1020,13 +988,6 @@ public class BoardWindow : GlassWindow
 		{
 			if (e.OriginalSource != Tiles)
 			{
-				return;
-			}
-			if (currentFolder == "" && DraggedFolder(e.Data) != null)
-			{
-				HideInsertMarker();
-				MoveFolderToCell(DraggedFolder(e.Data), InsertIndexFor(e.GetPosition(Tiles)));
-				e.Handled = true;
 				return;
 			}
 			if (DraggedEntries(e.Data).Length != 0)
@@ -1074,7 +1035,7 @@ public class BoardWindow : GlassWindow
 		};
 		grid3.Children.Add(Empty);
 		Grid grid4 = new Grid();
-		Grid.SetRow(grid4, 5);
+		Grid.SetRow(grid4, 4);
 		layout.Children.Add(grid4);
 		Status = new TextBlock
 		{
@@ -1192,203 +1153,9 @@ public class BoardWindow : GlassWindow
 
 	private List<Entry> Filtered()
 	{
-		return C.Prefs.Apps.Where((Entry a) => InCurrentGroup(a) && string.Equals(a.Folder ?? "", currentFolder, StringComparison.OrdinalIgnoreCase)).ToList();
+		return C.Prefs.Apps.Where((Entry a) => InCurrentGroup(a)).ToList();
 	}
 
-	// 文件夹第一个成员在当前视图列表里的下标；空文件夹返回极大值（排在末尾）
-	private int FirstMemberIndex(string name, List<Entry> list)
-	{
-		int idx = list.FindIndex((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase));
-		return (idx < 0) ? int.MaxValue : idx;
-	}
-
-	// 文件夹名列表（按首次出现顺序，忽略大小写去重；只统计当前分组视图内）
-	private List<string> FolderNames()
-	{
-		List<string> names = new List<string>();
-		foreach (Entry a in C.Prefs.Apps)
-		{
-			if (InCurrentGroup(a) && !string.IsNullOrWhiteSpace(a.Folder) && !names.Any((string n) => string.Equals(n, a.Folder, StringComparison.OrdinalIgnoreCase)))
-			{
-				names.Add(a.Folder);
-			}
-		}
-		return names;
-	}
-
-	private int FolderCount(string name)
-	{
-		return C.Prefs.Apps.Count((Entry a) => InCurrentGroup(a) && string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase));
-	}
-
-	// 文件夹栏：根视图为空（文件夹是网格里同尺寸的磁贴）；文件夹视图只显示「← 返回」。
-	private void RefreshFolderBar()
-	{
-		if (folderBar == null)
-		{
-			return;
-		}
-		folderBar.Children.Clear();
-		if (currentFolder != "")
-		{
-			folderBar.Children.Add(FolderChip("← 返回", null));
-		}
-		folderBar.Visibility = ((folderBar.Children.Count > 0) ? Visibility.Visible : Visibility.Collapsed);
-	}
-
-	// 文件夹 chip：单击打开；拖入图标移入；右键打开 / 重命名 / 一键解散。
-	private Border FolderChip(string text, string folderName)
-	{
-		Border chip = new Border
-		{
-			CornerRadius = new CornerRadius(14.0),
-			Padding = new Thickness(12.0, 6.0, 12.0, 6.0),
-			Margin = new Thickness(0.0, 0.0, 8.0, 6.0),
-			Background = new SolidColorBrush(Color.FromArgb(35, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
-			BorderBrush = new SolidColorBrush(Color.FromArgb(60, byte.MaxValue, byte.MaxValue, byte.MaxValue)),
-			BorderThickness = new Thickness(1.0),
-			Cursor = Cursors.Hand,
-			AllowDrop = true
-		};
-		TextBlock label = new TextBlock
-		{
-			Text = text,
-			Foreground = TextBrush,
-			FontSize = 13.0,
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		chip.Child = label;
-		chip.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
-		{
-			OpenFolder(folderName);
-		};
-		chip.DragOver += (object s, DragEventArgs e) =>
-		{
-			if (DraggedEntries(e.Data).Length != 0)
-			{
-				e.Effects = DragDropEffects.Move;
-				e.Handled = true;
-			}
-		};
-		chip.Drop += (object s, DragEventArgs e) =>
-		{
-			string[] paths = DraggedEntries(e.Data);
-			if (paths.Length == 0)
-			{
-				return;
-			}
-			MoveEntriesToFolder(paths, folderName);
-			e.Handled = true;
-		};
-		chip.ContextMenu = FolderMenu(folderName);
-		return chip;
-	}
-
-	private ContextMenu FolderMenu(string folderName)
-	{
-		if (folderName == null)
-		{
-			return null;
-		}
-		ContextMenu menu = MenuTheme.Create(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
-		MenuItem open = new MenuItem
-		{
-			Header = "打开"
-		};
-		open.Click += (object s, RoutedEventArgs e) => OpenFolder(folderName);
-		menu.Items.Add(open);
-		MenuItem rename = new MenuItem
-		{
-			Header = "重命名文件夹"
-		};
-		rename.Click += (object s, RoutedEventArgs e) =>
-		{
-			string name = FeatureUi.Ask(this, "重命名文件夹", folderName);
-			if (!string.IsNullOrWhiteSpace(name) && !string.Equals(name.Trim(), folderName, StringComparison.OrdinalIgnoreCase))
-			{
-				RenameFolder(folderName, name.Trim());
-			}
-		};
-		menu.Items.Add(rename);
-		MenuItem dissolve = new MenuItem
-		{
-			Header = "解散文件夹"
-		};
-		dissolve.Click += (object s, RoutedEventArgs e) => DissolveFolder(folderName);
-		menu.Items.Add(dissolve);
-		return menu;
-	}
-
-	// 进入 / 返回文件夹视图；Controller 的磁贴右键「放入文件夹」也会调用
-	public void OpenFolder(string name)
-	{
-		currentFolder = (name ?? "");
-		tileScroller?.ScrollToVerticalOffset(0.0);
-		Render(animate: true);
-	}
-
-	private void MoveEntriesToFolder(string[] paths, string folderName)
-	{
-		bool changed = false;
-		foreach (string p in paths)
-		{
-			Entry a = C.Prefs.Apps.FirstOrDefault((Entry x) => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase));
-			if (a != null && !string.Equals(a.Folder ?? "", folderName ?? "", StringComparison.OrdinalIgnoreCase))
-			{
-				a.Folder = (folderName ?? "");
-				changed = true;
-			}
-		}
-		if (changed)
-		{
-			C.Save();
-			Render(animate: true);
-		}
-	}
-
-	private void RenameFolder(string oldName, string newName)
-	{
-		bool changed = false;
-		foreach (Entry a in C.Prefs.Apps)
-		{
-			if (string.Equals(a.Folder ?? "", oldName, StringComparison.OrdinalIgnoreCase))
-			{
-				a.Folder = newName;
-				changed = true;
-			}
-		}
-		if (changed)
-		{
-			if (string.Equals(currentFolder, oldName, StringComparison.OrdinalIgnoreCase))
-			{
-				currentFolder = newName;
-			}
-			C.Save();
-			Render(animate: true);
-		}
-	}
-
-	private void DissolveFolder(string name)
-	{
-		bool changed = false;
-		foreach (Entry a in C.Prefs.Apps)
-		{
-			if (string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase))
-			{
-				a.Folder = "";
-				changed = true;
-			}
-		}
-		if (changed)
-		{
-			if (string.Equals(currentFolder, name, StringComparison.OrdinalIgnoreCase))
-			{
-				currentFolder = "";
-			}
-			C.Save();
-			Render(animate: true);
-		}
-	}
 
 	// 拖拽贴边自动滚动（滚动视图边缘 56px 内触发）
 	private void AutoScrollFor(Point p)
@@ -1778,8 +1545,7 @@ public class BoardWindow : GlassWindow
 		UpdateSelectionBar();
 		Tiles.Children.Clear();
 		List<Entry> list = Filtered();
-		List<string> folderNames = ((currentFolder == "") ? FolderNames() : null);
-		Empty.Visibility = ((list.Count != 0 || (folderNames != null && folderNames.Count != 0)) ? Visibility.Collapsed : Visibility.Visible);
+		Empty.Visibility = ((list.Count != 0) ? Visibility.Collapsed : Visibility.Visible);
 		if (!C.Prefs.BoardHideGroups && currentGroup != "全部")
 		{
 			Empty.Text = "「" + currentGroup + "」分组里还没有软件\n把图标拖到这里，即可加入当前分组";
@@ -1792,43 +1558,12 @@ public class BoardWindow : GlassWindow
 		{
 			Status.Text = pendingStatus;
 		}
-		if (currentFolder != "")
-		{
-			Status.Text = "文件夹「" + currentFolder + "」 · 拖动图标到「← 返回」可移出 · Esc 收起";
-		}
-		else
-		{
-			Status.Text = "共 " + list.Count + " 个入口" + ((folderNames != null && folderNames.Count != 0) ? (" · " + folderNames.Count + " 个文件夹") : "") + (C.Prefs.BoardHideGroups || currentGroup == "全部" ? "" : (" · 分组「" + currentGroup + "」")) + " · 拖动图标到另一个图标上可创建文件夹";
-		}
+		Status.Text = "共 " + list.Count + " 个入口" + ((C.Prefs.BoardHideGroups || currentGroup == "全部") ? "" : (" · 分组「" + currentGroup + "」")) + " · 拖动图标可调整顺序 · Esc 收起";
 		int num2 = 0;
-		List<string> renderedFolders = new List<string>();
 		foreach (Entry item in list)
 		{
-			if (folderNames != null)
-			{
-				// 文件夹磁贴插在第一个成员图标之后：位置随成员自然排序，拖动成员或拖动整个文件夹格都会联动
-				foreach (string name in folderNames)
-				{
-					if (!renderedFolders.Contains(name) && FirstMemberIndex(name, list) <= num2)
-					{
-						Tiles.Children.Add(TileFolder(name, num2++, animate));
-						renderedFolders.Add(name);
-					}
-				}
-			}
 			Tiles.Children.Add(Tile(item, num2++, animate));
 		}
-		if (folderNames != null)
-		{
-			foreach (string name in folderNames)
-			{
-				if (!renderedFolders.Contains(name))
-				{
-					Tiles.Children.Add(TileFolder(name, num2++, animate));
-				}
-			}
-		}
-		RefreshFolderBar();
 	}
 
 	// —— 媒体悬浮预览：图片显示大图，视频静音循环播放（悬浮 450ms 触发）——
@@ -2355,21 +2090,6 @@ public class BoardWindow : GlassWindow
 				}
 				return;
 			}
-			string folder = DraggedFolder(e.Data);
-			if (currentFolder == "" && folder != null)
-			{
-				// 文件夹格拖过应用图标：显示插入线，落点=文件夹整体移动到该图标前/后
-				AutoScrollFor(e.GetPosition(tileScroller));
-				int idx2 = Tiles.Children.IndexOf(tile);
-				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
-				{
-					idx2++;
-				}
-				ShowInsertMarker(idx2);
-				e.Effects = DragDropEffects.Move;
-				e.Handled = true;
-				return;
-			}
 			if (DraggedEntries(e.Data).Length != 0)
 			{
 				AutoScrollFor(e.GetPosition(tileScroller));
@@ -2411,37 +2131,11 @@ public class BoardWindow : GlassWindow
 				}
 				return;
 			}
-			string folder = DraggedFolder(e.Data);
-			if (currentFolder == "" && folder != null)
-			{
-				HideInsertMarker();
-				int idx2 = Tiles.Children.IndexOf(tile);
-				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
-				{
-					idx2++;
-				}
-				MoveFolderToCell(folder, idx2);
-				e.Handled = true;
-				return;
-			}
 			string[] array = DraggedEntries(e.Data);
 			if (array.Length != 0)
 			{
 				HideInsertMarker();
-				if (currentFolder == "")
-				{
-					// 手机式：拖到另一个图标上自动创建文件夹（重名则并入），把双方一起放进去
-					List<string> paths = array.Where((string p) => !string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)).ToList();
-					if (paths.Count == 0)
-					{
-						e.Handled = true; // 拖到自己身上：无操作
-						return;
-					}
-					paths.Add(a.Path);
-					MoveEntriesToFolder(paths.ToArray(), "文件夹");
-					OpenFolder("文件夹");
-				}
-				else if (!C.ReorderView(CurrentPageSequence()))
+				if (!C.ReorderView(CurrentPageSequence()))
 				{
 					Render();
 				}
@@ -2451,315 +2145,6 @@ public class BoardWindow : GlassWindow
 		return tile;
 	}
 
-	// 文件夹磁贴：与应用同尺寸的格子，格内 2×2 显示前 4 个成员图标（手机式收纳，成员不再单独出现在网格里）。
-	// 单击进入文件夹视图；右键打开 / 重命名 / 一键解散；拖图标到格子上 = 放入该文件夹。
-	private FrameworkElement TileFolder(string name, int index, bool animate)
-	{
-		List<Entry> members = C.Prefs.Apps.Where((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase)).ToList();
-		Border tile = new Border
-		{
-			Tag = name,
-			Background = Brushes.Transparent,
-			CornerRadius = new CornerRadius(18.0),
-			Margin = new Thickness(C.Prefs.BoardIconGap),
-			Padding = new Thickness(4.0),
-			Cursor = Cursors.Hand,
-			ToolTip = "文件夹 · " + name + "（" + members.Count + " 个）",
-			AllowDrop = true
-		};
-		tile.PreviewMouseRightButtonUp += (object s, MouseButtonEventArgs e2) =>
-		{
-			e2.Handled = true;
-			if (editing)
-			{
-				return;
-			}
-			ContextMenu menu = FolderMenu(name);
-			if (menu != null)
-			{
-				menu.Placement = PlacementMode.MousePoint;
-				menu.PlacementTarget = tile;
-				menu.IsOpen = true;
-			}
-		};
-		Grid grid = new Grid();
-		tile.Child = grid;
-		StackPanel stackPanel = new StackPanel
-		{
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		grid.Children.Add(stackPanel);
-		// 迷你图标格：细边框只包住图标区（名称在框外）；**高度恒定 2 行**（与应用图标区等高，
-		// 成员多少都不压缩格子）；只显示实际成员数（最多 4 个），成员图标统一小尺寸
-		double mini = Math.Max(8.0, (C.Prefs.BoardIconSize - 4.0) / 2.0);
-		int shown = Math.Min(4, members.Count);
-		Border miniBox = new Border
-		{
-			BorderThickness = new Thickness(1.0),
-			BorderBrush = new SolidColorBrush(Color.FromArgb(150, ((SolidColorBrush)TextBrush).Color.R, ((SolidColorBrush)TextBrush).Color.G, ((SolidColorBrush)TextBrush).Color.B)),
-			CornerRadius = new CornerRadius(10.0),
-			Padding = new Thickness(3.0),
-			HorizontalAlignment = HorizontalAlignment.Center,
-			Margin = new Thickness(0.0, 0.0, 0.0, 6.0)
-		};
-		stackPanel.Children.Add(miniBox);
-		Grid miniGrid = new Grid
-		{
-			HorizontalAlignment = HorizontalAlignment.Center,
-			VerticalAlignment = VerticalAlignment.Center
-		};
-		miniBox.Child = miniGrid;
-		for (int c = 0; c < 2; c++)
-		{
-			miniGrid.ColumnDefinitions.Add(new ColumnDefinition
-			{
-				Width = new GridLength(mini)
-			});
-		}
-		for (int r = 0; r < 2; r++)
-		{
-			miniGrid.RowDefinitions.Add(new RowDefinition
-			{
-				Height = new GridLength(mini)
-			});
-		}
-		double iconSize = mini - 6.0;
-		if (shown == 0)
-		{
-			// 空文件夹：一个半透明占位图标，保持格子形状
-			TextBlock empty = new TextBlock
-			{
-				Text = "▣",
-				Foreground = TextBrush,
-				Opacity = 0.25,
-				FontSize = iconSize * 0.75,
-				Width = iconSize,
-				Height = iconSize,
-				TextAlignment = TextAlignment.Center,
-				HorizontalAlignment = HorizontalAlignment.Center,
-				VerticalAlignment = VerticalAlignment.Center
-			};
-			Grid.SetRowSpan(empty, 2);
-			Grid.SetColumnSpan(empty, 2);
-			miniGrid.Children.Add(empty);
-		}
-		for (int i = 0; i < shown; i++)
-		{
-			Entry member = members[i];
-			TextBlock placeholder = new TextBlock
-			{
-				Text = "▣",
-				Foreground = TextBrush,
-				Opacity = 0.75,
-				FontSize = iconSize * 0.75,
-				Width = iconSize,
-				Height = iconSize,
-				TextAlignment = TextAlignment.Center,
-				HorizontalAlignment = HorizontalAlignment.Center,
-				VerticalAlignment = VerticalAlignment.Center
-			};
-			// 布局（格子高度恒定 2 行）：1 个居中；2 个并排垂直居中；3 个上 2 下 1（底部居中）；4 个 2×2
-			if (shown <= 2)
-			{
-				Grid.SetRowSpan(placeholder, 2);
-				Grid.SetColumn(placeholder, i);
-			}
-			else
-			{
-				Grid.SetRow(placeholder, i / 2);
-				Grid.SetColumn(placeholder, i % 2);
-				if (shown == 3 && i == 2)
-				{
-					Grid.SetColumnSpan(placeholder, 2);
-				}
-			}
-			miniGrid.Children.Add(placeholder);
-			Action<ImageSource> fill = delegate (ImageSource img)
-			{
-				if (img == null || miniGrid.Parent == null)
-				{
-					return;
-				}
-				System.Windows.Controls.Image image = new System.Windows.Controls.Image
-				{
-					Source = img,
-					Width = iconSize,
-					Height = iconSize,
-					HorizontalAlignment = HorizontalAlignment.Center,
-					VerticalAlignment = VerticalAlignment.Center
-				};
-				RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
-				Grid.SetRow(image, Grid.GetRow(placeholder));
-				Grid.SetColumn(image, Grid.GetColumn(placeholder));
-				Grid.SetRowSpan(image, Grid.GetRowSpan(placeholder));
-				Grid.SetColumnSpan(image, Grid.GetColumnSpan(placeholder));
-				miniGrid.Children.Remove(placeholder);
-				miniGrid.Children.Add(image);
-			};
-			ImageSource source = IconPipeline.Request(member, C.Prefs.Dock.ShowShortcutOverlays, true, true, fill);
-			if (source != null)
-			{
-				fill(source);
-			}
-		}
-		stackPanel.Children.Add(new TextBlock
-		{
-			Text = name + " · " + members.Count,
-			Foreground = TextBrush,
-			FontSize = 12.0,
-			TextAlignment = TextAlignment.Center,
-			TextTrimming = TextTrimming.CharacterEllipsis,
-			MaxWidth = Math.Max(20.0, ((Tiles.ActualWidth > 0.0) ? Tiles.ActualWidth : (Width - 104.0)) / (double)columns - 2.0 * C.Prefs.BoardIconGap - 10.0)
-		});
-		ScaleTransform scale = new ScaleTransform(1.0, 1.0);
-		TranslateTransform lift = new TranslateTransform();
-		TransformGroup transformGroup = new TransformGroup();
-		transformGroup.Children.Add(scale);
-		transformGroup.Children.Add(lift);
-		tile.RenderTransform = transformGroup;
-		tile.RenderTransformOrigin = new Point(0.5, 0.5);
-		Action<bool> hover = (bool over) =>
-		{
-			if (MotionEnabled)
-			{
-				CubicEase easingFunction2 = new CubicEase
-				{
-					EasingMode = EasingMode.EaseOut
-				};
-				scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(over ? (1.0 + 0.025 * MotionLevel) : 1.0, TimeSpan.FromMilliseconds(170.0))
-				{
-					EasingFunction = easingFunction2
-				});
-				scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(over ? (1.0 + 0.025 * MotionLevel) : 1.0, TimeSpan.FromMilliseconds(170.0))
-				{
-					EasingFunction = easingFunction2
-				});
-				lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(over ? (-3.0 * MotionLevel) : 0.0, TimeSpan.FromMilliseconds(170.0))
-				{
-					EasingFunction = easingFunction2
-				});
-			}
-		};
-		tile.MouseEnter += (object s, MouseEventArgs e) =>
-		{
-			if (activeDrag)
-			{
-				return;
-			}
-			hover(obj: true);
-		};
-		tile.MouseLeave += (object s, MouseEventArgs e) =>
-		{
-			hover(obj: false);
-		};
-		if (animate && MotionEnabled)
-		{
-			CubicEase easingFunction = new CubicEase
-			{
-				EasingMode = EasingMode.EaseOut
-			};
-			TimeSpan value = TimeSpan.FromMilliseconds(Math.Min(index, 14) * 12);
-			tile.Opacity = 0.0;
-			tile.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(190.0))
-			{
-				BeginTime = value,
-				EasingFunction = easingFunction
-			});
-			lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(9.0 * MotionLevel, 0.0, TimeSpan.FromMilliseconds(230.0))
-			{
-				BeginTime = value,
-				EasingFunction = easingFunction
-			});
-		}
-		tile.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
-		{
-			if (!folderDragging)
-			{
-				OpenFolder(name);
-			}
-			folderDragging = false;
-		};
-		Point folderDragStart = default(Point);
-		tile.MouseLeftButtonDown += (object s, MouseButtonEventArgs e) =>
-		{
-			folderDragStart = e.GetPosition(this);
-			folderDragging = false;
-		};
-		tile.MouseMove += (object s, MouseEventArgs e) =>
-		{
-			// 文件夹格可整格拖动调位（把文件夹整体移动到新位置）
-			if (e.LeftButton == MouseButtonState.Pressed && !folderDragging)
-			{
-				Point position = e.GetPosition(this);
-				if (Math.Abs(position.X - folderDragStart.X) + Math.Abs(position.Y - folderDragStart.Y) > 10.0)
-				{
-					folderDragging = true;
-					StartFolderDrag(tile, name);
-				}
-			}
-		};
-		tile.DragOver += (object s, DragEventArgs e) =>
-		{
-			if (currentFolder != "")
-			{
-				return;
-			}
-			string folder = DraggedFolder(e.Data);
-			if (folder != null)
-			{
-				int idx = Tiles.Children.IndexOf(tile);
-				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
-				{
-					idx++;
-				}
-				ShowInsertMarker(idx);
-				e.Effects = DragDropEffects.Move;
-				e.Handled = true;
-			}
-			else if (DraggedEntries(e.Data).Length != 0)
-			{
-				e.Effects = DragDropEffects.Move;
-				e.Handled = true;
-			}
-		};
-		tile.Drop += (object s, DragEventArgs e) =>
-		{
-			if (currentFolder != "")
-			{
-				return;
-			}
-			string folder = DraggedFolder(e.Data);
-			if (folder != null)
-			{
-				HideInsertMarker();
-				int idx = Tiles.Children.IndexOf(tile);
-				if (e.GetPosition(tile).X > tile.ActualWidth / 2.0)
-				{
-					idx++;
-				}
-				MoveFolderToCell(folder, idx);
-				e.Handled = true;
-				return;
-			}
-			string[] array = DraggedEntries(e.Data);
-			if (array.Length == 0)
-			{
-				return;
-			}
-			HideInsertMarker();
-			List<string> paths = array.Where((string p) =>
-			{
-				Entry x = C.Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, p, StringComparison.OrdinalIgnoreCase));
-				return x != null && !string.Equals(x.Folder ?? "", name, StringComparison.OrdinalIgnoreCase);
-			}).ToList();
-			if (paths.Count != 0)
-			{
-				MoveEntriesToFolder(paths.ToArray(), name);
-			}
-			e.Handled = true;
-		};
-		return tile;
-	}
 
 	private string[] DraggedEntries(IDataObject data)
 	{
@@ -2774,58 +2159,8 @@ public class BoardWindow : GlassWindow
 		return new string[0];
 	}
 
-	// 文件夹格拖动的数据（"GlassBoard.Folder" = 文件夹名）；不是文件夹拖拽返回 null
-	private string DraggedFolder(IDataObject data)
-	{
-		if (data.GetDataPresent("GlassBoard.Folder"))
-		{
-			return data.GetData("GlassBoard.Folder") as string;
-		}
-		return null;
-	}
 
-	// 启动文件夹格拖拽（整格移动=把文件夹连同全部成员移动到新位置）
-	private void StartFolderDrag(FrameworkElement tile, string name)
-	{
-		DataObject dataObject = new DataObject();
-		dataObject.SetData("GlassBoard.Folder", name);
-		dragPreviewText.Text = "移动文件夹 · " + name;
-		bool modalBusy = ModalBusy;
-		ModalBusy = true;
-		activeDrag = true;
-		C.Dock.BeginBoardPinDrag();
-		try
-		{
-			DragDrop.DoDragDrop(tile, dataObject, DragDropEffects.Move);
-		}
-		finally
-		{
-			C.Dock.EndBoardPinDrag();
-			EndDragPreview();
-			ModalBusy = modalBusy;
-			Render();
-		}
-	}
 
-	// 文件夹整体移动到单元格位置：cellIndex 是容器子元素序号（含文件夹格占位），换算成应用序列插入位置后提交
-	private void MoveFolderToCell(string name, int cellIndex)
-	{
-		if (currentFolder != "")
-		{
-			return;
-		}
-		List<Border> items = Tiles.Children.OfType<Border>().ToList();
-		int appIndex = 0;
-		int limit = Math.Max(0, Math.Min(cellIndex, items.Count));
-		for (int i = 0; i < limit; i++)
-		{
-			if (items[i].Tag is Entry)
-			{
-				appIndex++;
-			}
-		}
-		C.MoveFolderTo(name, appIndex);
-	}
 
 	// 按落点（相对 Tiles 的坐标）换算插入位置：行优先，越界时取末尾（追加）
 	private int InsertIndexFor(Point p)
@@ -3059,9 +2394,8 @@ public class BoardWindow : GlassWindow
 		PreviewDragOver += (object s, DragEventArgs e) =>
 		{
 			string[] array = DraggedEntries(e.Data);
-			string folder = DraggedFolder(e.Data);
 			bool dataPresent = e.Data.GetDataPresent(DataFormats.FileDrop);
-			if (array.Length != 0 || dataPresent || folder != null)
+				if (array.Length != 0 || dataPresent)
 			{
 				activeDrag = true;
 				Point position = e.GetPosition(Root);
@@ -3071,10 +2405,6 @@ public class BoardWindow : GlassWindow
 					{
 						string[] array2 = (string[])e.Data.GetData(DataFormats.FileDrop);
 						dragPreviewText.Text = ((array2.Length == 1) ? Path.GetFileName(array2[0]) : ("添加 " + array2.Length + " 个文件"));
-					}
-					else if (folder != null)
-					{
-						dragPreviewText.Text = "移动文件夹 · " + folder;
 					}
 					else
 					{

@@ -1259,28 +1259,31 @@ public class DockWindow : GlassWindow
 		})[index];
 	}
 
-	// Dock 图标悬停提示：纯文字气泡，底色/边框/透明度跟随当前 Dock 玻璃样式
+	// Dock 图标悬停提示：纯文字、无背景底板，颜色跟随主题玻璃文字色
 	private System.Windows.Controls.ToolTip DockTip(string text)
 	{
-		(System.Windows.Media.Color bg, System.Windows.Media.Color ink, System.Windows.Media.Color line, System.Windows.Media.Color hover) = MenuTheme.Palette(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
-		FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));
-		border.SetValue(Border.BackgroundProperty, new SolidColorBrush(bg));
-		border.SetValue(Border.BorderBrushProperty, new SolidColorBrush(line));
-		border.SetValue(Border.BorderThicknessProperty, new Thickness(1.0));
-		border.SetValue(Border.CornerRadiusProperty, new CornerRadius(8.0));
-		border.SetValue(Border.PaddingProperty, new Thickness(12.0, 6.0, 12.0, 6.0));
 		FrameworkElementFactory label = new FrameworkElementFactory(typeof(TextBlock));
 		label.SetValue(TextBlock.TextProperty, text);
 		label.SetValue(TextBlock.FontSizeProperty, 12.5);
-		label.SetValue(TextBlock.ForegroundProperty, new SolidColorBrush(ink));
-		border.AppendChild(label);
+		label.SetValue(TextBlock.ForegroundProperty, Polish.Ink(C.Prefs.Light));
 		return new System.Windows.Controls.ToolTip
 		{
-			Placement = PlacementMode.Top,
-			VerticalOffset = -4.0,
+			PlacementTarget = null,
+			Placement = PlacementMode.Custom,
+			CustomPopupPlacementCallback = delegate(System.Windows.Size popupSize, System.Windows.Size targetSize, System.Windows.Point offset)
+			{
+				// 提示窗相对目标左上角定位：水平居中于图标正上方，留 4px 间距；屏幕边缘放不下时翻到下方
+				double x = targetSize.Width / 2.0 - popupSize.Width / 2.0;
+				return new CustomPopupPlacement[2]
+				{
+					new CustomPopupPlacement(new System.Windows.Point(x, -popupSize.Height - 4.0), PopupPrimaryAxis.Vertical),
+					new CustomPopupPlacement(new System.Windows.Point(x, targetSize.Height + 4.0), PopupPrimaryAxis.Vertical)
+				};
+			},
+			HasDropShadow = false,
 			Template = new ControlTemplate(typeof(System.Windows.Controls.ToolTip))
 			{
-				VisualTree = border
+				VisualTree = label
 			}
 		};
 	}
@@ -1430,7 +1433,8 @@ public class DockWindow : GlassWindow
 		}, iconSize + 16.0);
 		button.Height = iconSize + 16.0 + (double)(o.ShowLabels ? 18 : 0);
 		button.Margin = new Thickness(o.Spacing / 2.0, 0.0, o.Spacing / 2.0, 0.0);
-		// 用户要求：悬浮图标不弹任何悬浮背景（文字气泡已移除，拖动把手提示保留）
+		// 悬浮提示：无背景纯文字名称（跟随玻璃文字颜色），不带气泡底板
+		button.ToolTip = DockTip(tip);
 		FrameworkElementFactory frameworkElementFactory = new FrameworkElementFactory(typeof(Border));
 		frameworkElementFactory.SetValue(Border.BackgroundProperty, new SolidColorBrush(System.Windows.Media.Color.FromArgb(1, byte.MaxValue, byte.MaxValue, byte.MaxValue)));
 		FrameworkElementFactory frameworkElementFactory2 = new FrameworkElementFactory(typeof(ContentPresenter));
@@ -1795,7 +1799,7 @@ public class DockWindow : GlassWindow
 				{
 					previewSuppressed = false;
 					leaveTimer.Stop();
-					previewTimer.Stop();
+					previewTimer.Start();
 				}
 			};
 			button.MouseLeave += delegate
@@ -3462,7 +3466,7 @@ public class DockWindow : GlassWindow
 			};
 		}
 		previewTimer.Stop();
-		// 用户要求：悬浮图标不弹悬浮背景——任务按钮的窗口预览卡片同样停用
+		previewTimer.Start();
 	}
 
 	private void PreviewLeave()

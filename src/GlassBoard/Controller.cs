@@ -215,7 +215,7 @@ public class Controller
 		glassSuppressed = Prefs.GameMode || (Prefs.AutoGameMode && FullscreenState.Active());
 		Tray = new NotifyIcon
 		{
-			Text = "GlassBoard-Source v0.9.20.40 · 玻璃启动台",
+			Text = "GlassBoard-Source v0.9.20.41 · 玻璃启动台",
 			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
 			Visible = true
 		};
@@ -1413,59 +1413,6 @@ public class Controller
 		{
 			Customize(a);
 		});
-		// 文件夹整理：新建并放入 / 放入现有文件夹 / 移出文件夹（文件夹由磁贴的 Folder 字段派生）
-		System.Windows.Controls.MenuItem folderItem = new System.Windows.Controls.MenuItem
-		{
-			Header = "文件夹"
-		};
-		void folderAction(string title, Action act)
-		{
-			System.Windows.Controls.MenuItem mi = new System.Windows.Controls.MenuItem
-			{
-				Header = title
-			};
-			mi.Click += (object s, RoutedEventArgs e) =>
-			{
-				menu.IsOpen = false;
-				Dock.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(act));
-			};
-			folderItem.Items.Add(mi);
-		}
-		folderAction("新建文件夹并放入", () =>
-		{
-			string name = FeatureUi.Ask(Board, "新建文件夹", "新文件夹");
-			if (string.IsNullOrWhiteSpace(name))
-			{
-				return;
-			}
-			a.Folder = name.Trim();
-			Save();
-			Refresh();
-		});
-		foreach (string name in Prefs.Apps.Where((Entry x) => !string.IsNullOrWhiteSpace(x.Folder)).Select((Entry x) => x.Folder).Distinct(StringComparer.OrdinalIgnoreCase))
-		{
-			string captured = name;
-			if (string.Equals(a.Folder ?? "", captured, StringComparison.OrdinalIgnoreCase))
-			{
-				continue;
-			}
-			folderAction("放入「" + captured + "」", () =>
-			{
-				a.Folder = captured;
-				Save();
-				Refresh();
-			});
-		}
-		if (!string.IsNullOrWhiteSpace(a.Folder))
-		{
-			folderAction("移出文件夹", () =>
-			{
-				a.Folder = "";
-				Save();
-				Refresh();
-			});
-		}
-		menu.Items.Add(folderItem);
 		action("移除入口", () =>
 		{
 			Remove(a);
@@ -1878,7 +1825,7 @@ public class Controller
 			Board.Hide();
 			Window w = new Window
 			{
-				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.40",
+				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.41",
 				Width = Math.Min(940.0, SystemParameters.WorkArea.Width - 40.0),
 				Height = Math.Min(790.0, SystemParameters.WorkArea.Height - 50.0),
 				MinWidth = 560.0,
@@ -4356,28 +4303,6 @@ public class Controller
 		return true;
 	}
 
-	// 把文件夹（连同其全部成员）整体移动到应用列表的指定位置；文件夹磁贴位置始终跟随成员。
-	public void MoveFolderTo(string name, int targetIndex)
-	{
-		List<Entry> members = Prefs.Apps.Where((Entry a) => string.Equals(a.Folder ?? "", name, StringComparison.OrdinalIgnoreCase)).ToList();
-		if (members.Count == 0)
-		{
-			return;
-		}
-		BoardEditState before = BeginBoardEdit();
-		foreach (Entry m in members)
-		{
-			Prefs.Apps.Remove(m);
-		}
-		int insertAt = Math.Max(0, Math.Min(targetIndex, Prefs.Apps.Count));
-		for (int i = 0; i < members.Count; i++)
-		{
-			Prefs.Apps.Insert(insertAt + i, members[i]);
-		}
-		EndBoardEdit(before, "调整文件夹位置");
-		Refresh();
-		Board.Render(animate: true);
-	}
 
 	private void FlushBackupState()
 	{
