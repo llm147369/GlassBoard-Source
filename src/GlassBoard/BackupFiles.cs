@@ -180,7 +180,7 @@ public static class BackupFiles
 		dictionary["manifest.json"] = Encode(new BackupManifest
 		{
 			Version = 1,
-			AppVersion = "0.9.20.41",
+			AppVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString(),
 			CreatedUtc = DateTime.UtcNow.ToString("o"),
 			Icons = dictionary2
 		});
