@@ -17,10 +17,7 @@ public sealed class MusicEngine : IDisposable
 
 	private MediaPlayer player;
 
-	private readonly MediaSessionBridge bridge = new MediaSessionBridge
-	{
-		ArtworkOnly = true
-	};
+	private readonly MediaSessionBridge bridge = new MediaSessionBridge();
 
 	private readonly MediaSessionBridge nativeBridge = new MediaSessionBridge(native: true)
 	{
@@ -278,7 +275,7 @@ public sealed class MusicEngine : IDisposable
 
 	public void Update()
 	{
-		bridge.UseNative = false;
+		bridge.UseNative = true;
 		if (!C.Prefs.Widgets.AutoNativeMediaCompatibility && !C.Prefs.Widgets.NativeMediaCompatibility)
 		{
 			nativeCache = null;
@@ -690,6 +687,13 @@ public sealed class MusicEngine : IDisposable
 				bool flag = mediaSnapshot2 != null && mediaSnapshot2.Key == key;
 				if (flag && mediaSnapshot2.Available && mediaSnapshot2.Status == "OK")
 				{
+					// 桥接返回的快照往往还是拖动前的旧位置：SMTC 时间轴是异步刷新的，
+					// 刚发完跳转命令立刻读取仍返回旧值。若不修正，1.5 秒窗口过后
+					// 进度条与歌词会一起弹回旧位置——这就是“拖动进度后歌词不跟随”。
+					if (Math.Abs(mediaSnapshot2.Position - seconds) > 1.5)
+					{
+						mediaSnapshot2.Position = seconds;
+					}
 					Accept(mediaSnapshot2);
 					seekTarget = seconds;
 					seekUntil = DateTime.UtcNow.AddSeconds(1.5);
@@ -782,7 +786,8 @@ public sealed class MusicEngine : IDisposable
 		lastPoll = DateTime.UtcNow;
 		try
 		{
-			bool flag = string.IsNullOrEmpty(systemKey) || (DateTime.UtcNow - lastArtworkPoll).TotalSeconds >= 10.0;
+			// 封面缺失时加快重试（4s），拿到后回到 10s 节流，避免切歌瞬间桥读取失败导致封面长时间空白
+			bool flag = string.IsNullOrEmpty(systemKey) || (DateTime.UtcNow - lastArtworkPoll).TotalSeconds >= (Artwork == null ? 4.0 : 10.0);
 			if (flag)
 			{
 				lastArtworkPoll = DateTime.UtcNow;
@@ -801,6 +806,7 @@ public sealed class MusicEngine : IDisposable
 				return;
 			}
 			primaryStatus = data.Status ?? "未返回状态";
+			Store.Trace("MUSIC poll avail=" + data.Available + " dur=" + data.Duration + " pos=" + data.Position + " play=" + data.Playing + " seek=" + data.CanSeek + " tl=" + data.TimelineStatus + " be=" + (data.Backend ?? "") + " hasTitle=" + (string.IsNullOrEmpty(data.Title) ? "0" : "1"));
 			if (!data.Available || string.IsNullOrWhiteSpace(data.Title))
 			{
 				if ((DateTime.UtcNow - lastDiscovery).TotalSeconds >= BackgroundWorkRules.MediaPollSeconds(C.MusicVisible, Session.Available, Session.Playing))

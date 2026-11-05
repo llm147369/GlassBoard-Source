@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -286,7 +286,8 @@ public static class FeatureRules
 			Placement = p.Placement.Copy(),
 			Widgets = p.Widgets.Copy(),
 			Apps = p.Apps.Select(Copy).ToList(),
-			Groups = p.Groups.ToList()
+			Groups = p.Groups.ToList(),
+			Island = (p.Island ?? new IslandOptions()).Copy()
 		};
 	}
 
@@ -315,6 +316,11 @@ public static class FeatureRules
 		p.Placement = (scheme.Placement ?? new PlacementOptions()).Copy();
 		p.Widgets = (scheme.Widgets ?? new WidgetOptions()).Copy();
 		p.Groups = (scheme.Groups ?? new List<string>()).ToList();
+		// 旧方案没有 Island 字段：保持当前灵动岛设置不变（可空容忍）。
+		if (scheme.Island != null)
+		{
+			p.Island = scheme.Island.Copy();
+		}
 		p.Normalize();
 	}
 

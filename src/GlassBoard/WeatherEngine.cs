@@ -17,6 +17,8 @@ public sealed class WeatherEngine
 
 	private string city = "";
 
+	private bool autoCityMode;
+
 	private DateTime next = DateTime.MinValue;
 
 	public WeatherSnapshot Snapshot;
@@ -32,12 +34,15 @@ public sealed class WeatherEngine
 
 	public void Update(bool force = false)
 	{
-		if (!closed && C.Prefs.Widgets.Weather)
+		if (!closed && (C.Prefs.Widgets.Weather || (C.Prefs.Island != null && C.Prefs.Island.Enabled)))
 		{
 			string text = C.Prefs.Widgets.City;
-			if (text != city)
+			// 城市留空 = 自动定位：按设备当前网络 IP 定位，无需手动设置
+			bool auto = string.IsNullOrWhiteSpace(text);
+			if (text != city || auto != autoCityMode)
 			{
 				city = text;
+				autoCityMode = auto;
 				Snapshot = null;
 				failures = 0;
 				next = DateTime.MinValue;
@@ -56,7 +61,7 @@ public sealed class WeatherEngine
 		{
 			return;
 		}
-		if (string.IsNullOrWhiteSpace(city))
+		if (!autoCityMode && string.IsNullOrWhiteSpace(city))
 		{
 			Message = "在组件设置中填写天气城市";
 			next = DateTime.UtcNow.AddMinutes(30.0);
@@ -70,12 +75,27 @@ public sealed class WeatherEngine
 		Notify();
 		try
 		{
-			WeatherSnapshot weatherSnapshot = await Task.Run(() => WeatherClient.Fetch(requested));
+			WeatherSnapshot weatherSnapshot;
+			if (autoCityMode)
+			{
+				GeoPlace geoPlace = await Task.Run(() => WeatherClient.AutoLocate());
+				if (closed || version != serial)
+				{
+					return;
+				}
+				weatherSnapshot = await Task.Run(() => WeatherClient.FetchAt(geoPlace));
+			}
+			else
+			{
+				weatherSnapshot = await Task.Run(() => WeatherClient.Fetch(requested));
+			}
 			if (!closed && version == serial && !(requested != city))
 			{
 				Snapshot = weatherSnapshot;
 				failures = 0;
-				Message = weatherSnapshot.Provider + " · 更新于 " + DateTime.Now.ToString("HH:mm");
+				// 组件与灵动岛直接从 Snapshot 取数据展示；状态文案不显示“自动定位/数据源/更新时间”
+				Message = "";
+				Store.Trace("WEATHER ok provider=" + weatherSnapshot.Provider + " auto=" + autoCityMode + " place=" + weatherSnapshot.Place.Name);
 			}
 		}
 		catch (Exception ex)
@@ -83,7 +103,7 @@ public sealed class WeatherEngine
 			if (!closed && version == serial)
 			{
 				failures++;
-				Message = ((Snapshot == null) ? "" : "显示上次数据 · ") + ex.Message + " · 稍后自动重试，也可点击刷新";
+				Message = ((Snapshot == null) ? "" : "显示上次数据 · ") + WeatherClient.Failure(ex) + " · 稍后自动重试，也可点击刷新";
 				Store.Log(ex);
 			}
 		}

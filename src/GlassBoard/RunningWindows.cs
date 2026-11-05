@@ -36,6 +36,17 @@ public static class RunningWindows
 		public uint Timeout;
 	}
 
+	private struct RECT
+	{
+		public int Left;
+
+		public int Top;
+
+		public int Right;
+
+		public int Bottom;
+	}
+
 	private sealed class TargetInfo
 	{
 		public DateTime Stamp;
@@ -85,7 +96,7 @@ public static class RunningWindows
 
 	private const int ProcessesFreshMs = 4000;
 
-	private const int TrayFreshMs = 8000;
+	private const int TrayFreshMs = 3000;
 
 	[DllImport("user32.dll")]
 	private static extern bool EnumWindows(Callback callback, IntPtr value);
@@ -104,12 +115,6 @@ public static class RunningWindows
 
 	[DllImport("user32.dll")]
 	private static extern bool IsWindowVisible(IntPtr window);
-
-	[DllImport("user32.dll")]
-	private static extern bool SetCursorPos(int x, int y);
-
-	[DllImport("user32.dll")]
-	private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
 
 	[DllImport("user32.dll")]
 	private static extern bool IsWindow(IntPtr window);
@@ -137,6 +142,9 @@ public static class RunningWindows
 
 	[DllImport("user32.dll")]
 	private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+	[DllImport("user32.dll")]
+	private static extern bool GetWindowRect(IntPtr window, out RECT rect);
 
 	[DllImport("user32.dll")]
 	private static extern IntPtr GetForegroundWindow();
@@ -341,6 +349,9 @@ public static class RunningWindows
 
 	[DllImport("dwmapi.dll")]
 	private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
+
+	[DllImport("dwmapi.dll")]
+	private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out RECT rect, int size);
 
 	[DllImport("user32.dll")]
 	private static extern bool FlashWindowEx(ref FLASHWINFO info);
@@ -588,7 +599,7 @@ public static class RunningWindows
 			}
 			try
 			{
-				if (DwmGetWindowAttribute(handle, 14, out var value2, 4) == 0 && value2 != 0)
+				if (DwmGetWindowAttribute(handle, 14, out int value2, 4) == 0 && value2 != 0)
 				{
 					return true;
 				}
@@ -724,7 +735,7 @@ public static class RunningWindows
 	// 附属/运行时进程名（Windows 自带、框架运行时、内嵌解释器——永远不进运行列表）。
 	private static readonly HashSet<string> SubprocessExeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 	{
-		"node", "VBCSCompiler", "WeChatAppEx", "msedge", "msedgewebview2", "nahimicNotifSys", "crashpad_handler", "identity_helper", "StartMenuExperienceHost", "SearchHost", "SearchApp", "ShellExperienceHost", "TextInputHost", "Widgets", "WidgetService", "CrossDeviceService", "PhoneExperienceHost", "MicrosoftStartFeedProvider", "WidgetBoard", "GameBar", "GameBarFTServer"
+		"node", "VBCSCompiler", "WeChatAppEx", "msedge", "msedgewebview2", "nahimicNotifSys", "crashpad_handler", "identity_helper", "StartMenuExperienceHost", "SearchHost", "SearchApp", "ShellExperienceHost", "TextInputHost", "Widgets", "WidgetService", "CrossDeviceService", "PhoneExperienceHost", "MicrosoftStartFeedProvider", "WidgetBoard", "GameBar", "GameBarFTServer", "aha_doctor"
 	};
 
 	// 系统自带的安装区（OEM 预装/驱动/商店应用后台——永不进运行列表）。
@@ -763,6 +774,7 @@ public static class RunningWindows
 		List<RunningWindow> next = new List<RunningWindow>();
 		List<RunningWindow> current = Snapshot();
 		HashSet<string> havePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		HashSet<uint> hostPids = TrayHostPids();
 		foreach (RunningWindow w in current)
 		{
 			if (!string.IsNullOrEmpty(w.Path))
@@ -803,7 +815,14 @@ public static class RunningWindows
 					continue;
 				}
 				string lower = processName.ToLowerInvariant();
-				if (lower.Contains("update") || lower.Contains("crash") || lower.Contains("install") || lower.Contains("setup") || lower.Contains("helper") || lower.Contains("cef") || lower.Contains("service") || lower.Contains("daemon") || lower.Contains("elevat") || lower.Contains("remoting") || lower.Contains("notifier") || lower.Contains("tray") || lower.Contains("server") || lower.Contains("renderer") || lower.Contains("notif") || lower.Contains("broker") || lower.Contains("agent") || lower.Contains("companion") || lower.Contains("watcher") || lower.Contains("monitor") || lower.Contains("webview") || lower.Contains("background") || lower.Contains("backend"))
+				// 辅助进程过滤词：renderer/update/server/helper 等在任何机器上都是辅助进程，一律排除（不豁免，
+				// 否则 wetype_renderer/wetype_update 这类输入法辅助进程会借宿主窗口混进运行区）。
+				if (lower.Contains("update") || lower.Contains("crash") || lower.Contains("install") || lower.Contains("setup") || lower.Contains("helper") || lower.Contains("cef") || lower.Contains("service") || lower.Contains("daemon") || lower.Contains("elevat") || lower.Contains("remoting") || lower.Contains("notifier") || lower.Contains("server") || lower.Contains("renderer") || lower.Contains("notif") || lower.Contains("broker") || lower.Contains("agent") || lower.Contains("companion") || lower.Contains("watcher") || lower.Contains("monitor") || lower.Contains("webview") || lower.Contains("background") || lower.Contains("backend"))
+				{
+					continue;
+				}
+				// "tray" 词例外：XxxTray.exe 通常是产品主托盘进程（剪映 JianyingProTray 等），有托盘宿主窗口才放行。
+				if (lower.Contains("tray") && !hostPids.Contains((uint)process.Id))
 				{
 					continue;
 				}
@@ -843,11 +862,12 @@ public static class RunningWindows
 		}
 	}
 
-	// 第二遍：隐藏窗口——只收"系统托盘里真实存在的应用"（窗口标题/进程名与托盘图标名匹配），其余隐藏辅助窗口一律不收。
+	// 第二遍：隐藏窗口——只收"有托盘图标的应用"（托盘图标名匹配，或该进程持有托盘宿主窗口），其余隐藏辅助窗口一律不收。
 	private static void ScanTrayCore()
 	{
 		List<RunningWindow> found = new List<RunningWindow>();
 		List<string> tray = TrayNames();
+		HashSet<uint> hostPids = TrayHostPids();
 		string windowsDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
 		HashSet<uint> taken = new HashSet<uint>();
 		List<RunningWindow> current = Snapshot();
@@ -862,11 +882,6 @@ public static class RunningWindows
 			{
 				return true;
 			}
-			int windowLong = GetWindowLong(handle, -20);
-			if ((windowLong & 0x80) != 0)
-			{
-				return true;
-			}
 			IntPtr owner = GetWindow(handle, 4u);
 			if (owner != IntPtr.Zero && IsWindowVisible(owner))
 			{
@@ -874,7 +889,7 @@ public static class RunningWindows
 			}
 			try
 			{
-				if (DwmGetWindowAttribute(handle, 14, out var value2, 4) == 0 && value2 != 0)
+				if (DwmGetWindowAttribute(handle, 14, out int value2, 4) == 0 && value2 != 0)
 				{
 					return true;
 				}
@@ -909,6 +924,17 @@ public static class RunningWindows
 			{
 				return true;
 			}
+			// 辅助进程过滤词（与进程扫描同一套通用规则）：wetype_renderer/wetype_update 之类即使有隐藏窗口
+			// 或标题蹭上托盘图标名也一律排除；仅 "tray" 词在有托盘宿主窗口时豁免。
+			string lowerExe = exeName.ToLowerInvariant();
+			if (lowerExe.Contains("update") || lowerExe.Contains("crash") || lowerExe.Contains("install") || lowerExe.Contains("setup") || lowerExe.Contains("helper") || lowerExe.Contains("cef") || lowerExe.Contains("service") || lowerExe.Contains("daemon") || lowerExe.Contains("elevat") || lowerExe.Contains("remoting") || lowerExe.Contains("notifier") || lowerExe.Contains("server") || lowerExe.Contains("renderer") || lowerExe.Contains("notif") || lowerExe.Contains("broker") || lowerExe.Contains("agent") || lowerExe.Contains("companion") || lowerExe.Contains("watcher") || lowerExe.Contains("monitor") || lowerExe.Contains("webview") || lowerExe.Contains("background") || lowerExe.Contains("backend"))
+			{
+				return true;
+			}
+			if (lowerExe.Contains("tray") && !hostPids.Contains(id))
+			{
+				return true;
+			}
 			StringBuilder stringBuilder2 = new StringBuilder(128);
 			GetClassName(handle, stringBuilder2, stringBuilder2.Capacity);
 			if (systemClasses.Contains(stringBuilder2.ToString()))
@@ -922,7 +948,9 @@ public static class RunningWindows
 			{
 				return true;
 			}
-			if (!MatchesTray(title, exeName, tray))
+			// 托盘归属判定：标题/进程名匹配托盘图标名，或进程持有托盘宿主窗口（WS_EX_TOOLWINDOW 的
+			// 托盘主窗口也放行——大退驻留的 QQ/微信/剪映等主隐藏窗口常带该样式，之前被一票否决导致"后台在跑但 Dock 不显示"）。
+			if (!MatchesTray(title, exeName, tray) && !hostPids.Contains(id))
 			{
 				return true;
 			}
@@ -966,7 +994,9 @@ public static class RunningWindows
 		}
 	}
 
-	// 窗口标题/进程名与任一托盘图标名互含即视为托盘应用（双向 Contains，忽略大小写）。
+	// 托盘归属判定：进程名与任一托盘图标名互含（忽略大小写）即视为托盘应用；
+	// 标题只做等值匹配——"微信输入法-关于"这类长尾标题不能蹭"微信输入法"图标名（输入法辅助窗口误收根因）。
+	// 中英文名不通的应用（微信 Weixin↔微信）由 TrayHostPids 宿主窗口通道兜底。
 	private static bool MatchesTray(string title, string exeName, List<string> tray)
 	{
 		if (tray.Count == 0)
@@ -979,12 +1009,57 @@ public static class RunningWindows
 			{
 				continue;
 			}
-			if (title.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0 || exeName.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(exeName, StringComparison.OrdinalIgnoreCase) >= 0)
+			if (exeName.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(exeName, StringComparison.OrdinalIgnoreCase) >= 0 || title.Equals(name, StringComparison.OrdinalIgnoreCase))
 			{
 				return true;
 			}
 		}
 		return false;
+	}
+
+	// 托盘宿主窗口：应用自建的托盘图标宿主（Qt/Electron/Flutter 系）。
+	// 任务栏被本应用隐藏时 explorer 托盘结构不可枚举，宿主窗口是"该进程确有托盘图标"的最可靠信号。
+	private static List<uint> trayHostPidsCache = new List<uint>();
+	private static int trayHostPidsTick = 0;
+
+	private static HashSet<uint> TrayHostPids()
+	{
+		int tick = Environment.TickCount;
+		lock (scanGate)
+		{
+			if (tick - trayHostPidsTick >= 0 && tick - trayHostPidsTick < 3000)
+			{
+				return new HashSet<uint>(trayHostPidsCache);
+			}
+		}
+		HashSet<uint> pids = new HashSet<uint>();
+		EnumWindows((IntPtr handle, IntPtr value) =>
+		{
+			try
+			{
+				StringBuilder cls = new StringBuilder(128);
+				GetClassName(handle, cls, cls.Capacity);
+				string c = cls.ToString();
+				if (c.IndexOf("TrayIconMessageWindow", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("StatusTrayWindow", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("NotifyIconHostWindow", StringComparison.OrdinalIgnoreCase) >= 0 || c.Equals("WPETrayWindow", StringComparison.OrdinalIgnoreCase) || c.Equals("TrayWindow", StringComparison.OrdinalIgnoreCase))
+				{
+					GetWindowThreadProcessId(handle, out var id);
+					if (id != 0u)
+					{
+						pids.Add(id);
+					}
+				}
+			}
+			catch
+			{
+			}
+			return true;
+		}, IntPtr.Zero);
+		lock (scanGate)
+		{
+			trayHostPidsCache = pids.ToList();
+			trayHostPidsTick = Environment.TickCount;
+		}
+		return pids;
 	}
 
 	// 系统托盘图标名：优先 UIA（Win10/11 通用，覆盖 XAML 岛），失败退回经典 ToolbarWindow32 文本。
@@ -1001,35 +1076,52 @@ public static class RunningWindows
 		List<string> names = new List<string>();
 		try
 		{
-			IntPtr shell = FindWindow("Shell_TrayWnd", null);
-			if (shell != IntPtr.Zero)
+			// 只取隐藏图标区（溢出区）：Win11 是顶层 XAML 岛窗口 TopLevelWindowForOverflowXamlIsland，
+			// 不在 TrayNotifyWnd 子窗链上；Win10 是 NotifyIconOverflowWindow。
+			IntPtr overflowIsland = FindWindow("TopLevelWindowForOverflowXamlIsland", null);
+			if (overflowIsland != IntPtr.Zero)
 			{
-				IntPtr notify = FindWindowEx(shell, IntPtr.Zero, "TrayNotifyWnd", null);
-				if (notify != IntPtr.Zero)
+				try
 				{
-					try
+					AutomationElement island = AutomationElement.FromHandle(overflowIsland);
+					AutomationElementCollection buttons = island.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+					foreach (AutomationElement button in buttons)
 					{
-						AutomationElement notifyElement = AutomationElement.FromHandle(notify);
-						AutomationElementCollection buttons = notifyElement.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
-						foreach (AutomationElement button in buttons)
+						string name = button.Current.Name;
+						if (!string.IsNullOrWhiteSpace(name))
 						{
-							string name = button.Current.Name;
-							if (!string.IsNullOrWhiteSpace(name))
-							{
-								names.Add(name.Trim());
-							}
+							names.Add(name.Trim());
 						}
 					}
-					catch
-					{
-					}
 				}
-				if (names.Count == 0)
+				catch
 				{
-					IntPtr sys = (notify != IntPtr.Zero) ? FindWindowEx(notify, IntPtr.Zero, "SysPager", null) : IntPtr.Zero;
-					CollectToolbarNames(sys, names);
-					IntPtr overflow = (notify != IntPtr.Zero) ? FindWindowEx(notify, IntPtr.Zero, "NotifyIconOverflowWindow", null) : IntPtr.Zero;
+				}
+				CollectToolbarNames(overflowIsland, names);
+			}
+			if (names.Count == 0)
+			{
+				IntPtr shell = FindWindow("Shell_TrayWnd", null);
+				IntPtr notify = (shell != IntPtr.Zero) ? FindWindowEx(shell, IntPtr.Zero, "TrayNotifyWnd", null) : IntPtr.Zero;
+				IntPtr overflow = (notify != IntPtr.Zero) ? FindWindowEx(notify, IntPtr.Zero, "NotifyIconOverflowWindow", null) : IntPtr.Zero;
+				if (overflow != IntPtr.Zero)
+				{
 					CollectToolbarNames(overflow, names);
+				}
+				if (names.Count == 0 && notify != IntPtr.Zero)
+				{
+					// Win10 兜底：SysPager 内第 1 个 ToolbarWindow32 是可见区，第 2 个起是隐藏区
+					IntPtr sys = FindWindowEx(notify, IntPtr.Zero, "SysPager", null);
+					IntPtr child = IntPtr.Zero;
+					int index = 0;
+					while ((child = FindWindowEx(sys, child, "ToolbarWindow32", null)) != IntPtr.Zero)
+					{
+						if (index > 0)
+						{
+							CollectToolbarNames(child, names);
+						}
+						index++;
+					}
 				}
 			}
 		}
@@ -1140,7 +1232,7 @@ public static class RunningWindows
 				fallbackNames.Add(fileNameWithoutExtension);
 			}
 		}
-		return (from w in Snapshot()
+		return (from w in SnapshotWithBackground()
 			where !string.IsNullOrEmpty(w.Path) && (paths.Contains(w.Path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(w.Path)))
 			orderby w.Handle.ToInt64()
 			select w).ToList();

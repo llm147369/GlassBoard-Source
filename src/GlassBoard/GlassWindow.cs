@@ -32,14 +32,12 @@ public class GlassWindow : Window
 	// 软件渲染（RenderCapability.Tier < 2）时整窗阴影/背景模糊极贵，自动降级保证动画流畅
 	private static readonly bool SlowRender = (RenderCapability.Tier >> 16) < 2;
 
-	// 阴影/毛玻璃效果实例复用：每次打开面板不再重建 Effect（重建会强制整窗重新栅格化，造成首帧卡顿）
+	// 阴影效果实例复用：每次打开面板不再重建 Effect（重建会强制整窗重新栅格化，造成首帧卡顿）
 	private DropShadowEffect surfaceShadow;
 
-	private System.Windows.Media.Effects.BlurEffect backdropBlur;
+	protected BitmapImage cachedBackdrop;
 
-	private BitmapImage cachedBackdrop;
-
-	private string backdropKey = "";
+	protected string backdropKey = "";
 
 	private string materialSig = "";
 
@@ -52,6 +50,10 @@ public class GlassWindow : Window
 	// 主动隐藏的通行证：游戏模式等主动 Hide() 前先置位；外部广播（显示桌面等）引发的
 	// WM_SHOWWINDOW(hide) 没有通行证一律拦截，防止 Dock/组件被系统藏掉。
 	internal bool ExternalHideAllowed;
+
+	// 窗口正在关闭（Close 流程会先走 WM_SHOWWINDOW(hide)）；此状态下外部隐藏拦截放行，
+	// 否则控制中心这类“关闭即销毁”的面板会关不掉。
+	private bool windowClosing;
 
 	internal void HideWithConsent()
 	{
@@ -102,6 +104,12 @@ public class GlassWindow : Window
 		CurrentMaterial = material.Copy();
 		SetGlassOpacity(GlassPercent);
 		RefreshBackdropStyle();
+		// 模糊程度变化 → 已烘焙的底图需要按新半径重捕重烘（旧实现只刷样式，
+		// 已有底图上调“模糊程度”完全无效）。
+		if (IsVisible)
+		{
+			ScheduleBackdropRefresh(LightTheme);
+		}
 	}
 
 	protected static ControlTemplate GripTemplate(bool corner = false)
@@ -128,6 +136,11 @@ public class GlassWindow : Window
 	{
 		WindowStyle = WindowStyle.None;
 		AllowsTransparency = true;
+		Closing += (object s, CancelEventArgs e) => { windowClosing = true; };
+		// 透明窗口下 WPF 禁用 ClearType（退化灰度抗锯齿）：全窗口切到 Display 像素对齐
+		// 文本模式 + 布局整数舍入，小字号文字不发虚、无像素锯齿感。
+		TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
+		UseLayoutRounding = true;
 		Background = System.Windows.Media.Brushes.Transparent;
 		ResizeMode = ResizeMode.NoResize;
 		ShowInTaskbar = false;
@@ -148,7 +161,7 @@ public class GlassWindow : Window
 		Root.Children.Add(ContentGrid);
 		SourceInitialized += (object s, EventArgs e) =>
 		{
-			if (this is DockWindow || this is WidgetWindow)
+			if (this is DockWindow || this is WidgetWindow || this is BoardWindow || this is ControlCenterWindow)
 			{
 				DesktopWindowPolicy.Apply(this);
 			}
@@ -179,13 +192,13 @@ public class GlassWindow : Window
 				// 拦截外部隐藏：显示桌面若以 ShowWindow(SW_HIDE) 方式收起工具窗口
 				// （toolwindow 不参与最小化流程），会在 WM_SHOWWINDOW(wParam=0) 出现。
 				// 只有带通行证的主动 Hide()（游戏模式等）放行，其余一律拦下。
-				if ((this is DockWindow || this is WidgetWindow) && msg == 24 && wp == IntPtr.Zero)
+				if (msg == 24 && wp == IntPtr.Zero)
 				{
 					if (ExternalHideAllowed)
 					{
 						ExternalHideAllowed = false;
 					}
-					else
+					else if (!windowClosing)
 					{
 						handled = true;
 						return IntPtr.Zero;
@@ -288,24 +301,35 @@ public class GlassWindow : Window
 		return b;
 	}
 
-	public void Backdrop(bool light)
+	public virtual void Backdrop(bool light)
 	{
 		LightTheme = light;
 		SetGlassOpacity(GlassPercent);
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? ((System.Windows.Media.Brush)System.Windows.Media.Brushes.Transparent) : ((System.Windows.Media.Brush)new LinearGradientBrush(System.Windows.Media.Color.FromArgb((byte)Math.Min(255.0, 145.0 * EdgeStrength), byte.MaxValue, byte.MaxValue, byte.MaxValue), System.Windows.Media.Color.FromArgb((byte)Math.Min(255.0, 35.0 * EdgeStrength), byte.MaxValue, byte.MaxValue, byte.MaxValue), 90.0)));
 		if (IsVisible)
 		{
+			// 可见窗口只在几何、主题或模糊参数稳定后更新底图，保留旧图直到新图就绪。
+			bool keyMatches = false;
+			try
+			{
+				keyMatches = cachedBackdrop != null && backdropKey == BackdropKeyOf(out Native.RECT _);
+			}
+			catch (InvalidOperationException)
+			{
+				// 窗口句柄已失效（关闭竞态）：放弃本次刷新。
+				return;
+			}
+			if (!keyMatches)
+			{
+				ScheduleBackdropRefresh(light, 240);
+				return;
+			}
 			RefreshBackdropStyle();
 			return;
 		}
-		(from b in Root.Children.OfType<Border>()
-			where b.Tag as string == "backdrop"
-			select b).ToList().ForEach((Border b) =>
-		{
-			Root.Children.Remove(b);
-		});
 		if (Width < 40.0 || Height < 40.0 || GlassPercent == 0.0)
 		{
+			ReleaseBackdrop();
 			return;
 		}
 		IntPtr hwnd;
@@ -319,20 +343,36 @@ public class GlassWindow : Window
 			// （控制中心/小组件关闭后仍可能有刷新路径触发 Backdrop，属正常竞态。）
 			return;
 		}
-		if (!Native.GetWindowRect(hwnd, out Native.RECT rect) || rect.Right - rect.Left < 56 || rect.Bottom - rect.Top < 56)
+		// 物理像素坐标捕获：不再用 TransformToDevice（主屏 DPI 矩阵在混合 DPI 多显示器下算错区域）。
+		// 缓存键用物理矩形 + DPI + 主题 + 烘焙模糊半径，位置/DPI/壁纸/模糊度变化后自然失效重捕。
+		string key = BackdropKeyOf(out Native.RECT rect);
+		if (key == "" || rect.Right - rect.Left < 56 || rect.Bottom - rect.Top < 56)
 		{
 			return;
 		}
-		// 物理像素坐标捕获：不再用 TransformToDevice（主屏 DPI 矩阵在混合 DPI 多显示器下算错区域）。
-		// 缓存键用物理矩形 + DPI，显示器/DPI/壁纸变化后自然失效重捕。
-		int dpi = Native.DpiOf(hwnd);
-		string key = rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (LightTheme ? 1 : 0);
 		if (cachedBackdrop != null && backdropKey == key)
 		{
 			AddBackdrop(cachedBackdrop);
 			return;
 		}
-		CaptureRegion(rect, dpi);
+		CaptureRegion(rect, Native.DpiOf(hwnd));
+	}
+
+	// 缓存键：物理矩形 + DPI + 主题 + 烘焙模糊半径（模糊度变化必须重烘底图）。
+	protected static string BackdropKeyOfRect(Native.RECT rect, int dpi, bool light, double blur)
+	{
+		return rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (light ? 1 : 0) + "_" + (int)Math.Round(blur);
+	}
+
+	private string BackdropKeyOf(out Native.RECT rect)
+	{
+		IntPtr hwnd = new WindowInteropHelper(this).Handle;
+		if (!Native.GetWindowRect(hwnd, out rect))
+		{
+			rect = default(Native.RECT);
+			return "";
+		}
+		return BackdropKeyOfRect(rect, Native.DpiOf(hwnd), LightTheme, MaterialBlur);
 	}
 
 	private void RemoveBackdropBorders()
@@ -345,60 +385,66 @@ public class GlassWindow : Window
 		});
 	}
 
-	// 捕获指定物理矩形区域作为毛玻璃底图（1/8 缩放 PNG 往返，写入 cachedBackdrop/backdropKey 并挂载）。
-	private void CaptureRegion(Native.RECT rect, int dpi)
+	// 从壁纸文件或专用壁纸层读取指定区域。失败时不替换缓存或当前画面。
+	private bool CaptureRegion(Native.RECT rect, int dpi)
 	{
 		long captureStart = Environment.TickCount;
 		try
 		{
-			int margin = (int)Math.Round(14.0 * dpi / 96.0);
-			int sourceX = rect.Left + margin;
-			int sourceY = rect.Top + margin;
-			int num = Math.Max(1, rect.Right - rect.Left - 2 * margin);
-			int num2 = Math.Max(1, rect.Bottom - rect.Top - 2 * margin);
-			using Bitmap bitmap = new Bitmap(num, num2);
-			using (Graphics graphics = Graphics.FromImage(bitmap))
+			// 捕获源区与显示裁剪统一按 Root.Margin 换算（灵动岛吸附模式 Margin=(14,0,14,14)），
+			// 修复硬编码四周 14px 造成的底图整体错位/边缘无底图。
+			int ml = (int)Math.Round(Root.Margin.Left * dpi / 96.0);
+			int mt = (int)Math.Round(Root.Margin.Top * dpi / 96.0);
+			int mr = (int)Math.Round(Root.Margin.Right * dpi / 96.0);
+			int mb = (int)Math.Round(Root.Margin.Bottom * dpi / 96.0);
+			int num = Math.Max(1, rect.Right - rect.Left - ml - mr);
+			int num2 = Math.Max(1, rect.Bottom - rect.Top - mt - mb);
+			Native.RECT src = new Native.RECT
 			{
-				graphics.CopyFromScreen(sourceX, sourceY, 0, 0, new System.Drawing.Size(num, num2));
+				Left = rect.Left + ml,
+				Top = rect.Top + mt,
+				Right = rect.Left + ml + num,
+				Bottom = rect.Top + mt + num2
+			};
+			Bitmap bitmap = GlassCapture.Acquire(src, out bool fromFile);
+			if (bitmap == null)
+			{
+				return false;
 			}
-			if (IsBlackFrame(bitmap))
+			using (bitmap)
 			{
-				// 黑帧：壁纸层正处于暂停/过渡（开始菜单、搜索打开时常见）。
-				// 不替换现有底图，延迟重试数次；重试耗尽则放弃本次刷新。
-				backdropBlackRetries++;
-				if (backdropBlackRetries < 4)
+				if (!fromFile && IsBlackFrame(bitmap))
 				{
-					Store.Trace("RENDER capture black → retry #" + backdropBlackRetries + " cls=" + GetType().Name);
-					ScheduleBackdropRefresh(LightTheme);
-					return;
+					// 黑帧：壁纸层正处于暂停/过渡（开始菜单、搜索打开时常见）。
+					// 不替换现有底图，延迟重试数次；重试耗尽则放弃本次刷新。
+					backdropBlackRetries++;
+					if (backdropBlackRetries < 4)
+					{
+						Store.Trace("RENDER capture black → retry #" + backdropBlackRetries + " cls=" + GetType().Name);
+						ScheduleBackdropRefresh(LightTheme);
+						return false;
+					}
+					backdropBlackRetries = 0;
+					Store.Trace("RENDER capture black → skip (keep current) cls=" + GetType().Name);
+					return false;
 				}
 				backdropBlackRetries = 0;
-				Store.Trace("RENDER capture black → skip (keep current) cls=" + GetType().Name);
-				return;
-			}
-			backdropBlackRetries = 0;
-			using Bitmap bitmap2 = new Bitmap(bitmap, Math.Max(1, num / 8), Math.Max(1, num2 / 8));
-			using MemoryStream memoryStream = new MemoryStream();
-			bitmap2.Save(memoryStream, ImageFormat.Png);
-			memoryStream.Position = 0L;
-			BitmapImage bitmapImage = new BitmapImage();
-			bitmapImage.BeginInit();
-			bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
-			bitmapImage.StreamSource = memoryStream;
-			bitmapImage.EndInit();
-			bitmapImage.Freeze();
-			cachedBackdrop = bitmapImage;
-			backdropKey = rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (LightTheme ? 1 : 0);
-			RemoveBackdropBorders();
-			AddBackdrop(cachedBackdrop);
-			if (RenderDiagnostics.Verbose)
-			{
-				Store.Trace("RENDER capture cls=" + GetType().Name + " rect=" + rect.Left + "," + rect.Top + " " + num + "x" + num2 + " ms=" + (Environment.TickCount - captureStart) + " rel=" + (Environment.TickCount - Program.ProcessStartTick));
+				cachedBackdrop = GlassMaterials.Bake(bitmap, MaterialBlur, MaterialBlur / 8.0);
+				backdropKey = BackdropKeyOfRect(rect, dpi, LightTheme, MaterialBlur);
+				// 不先移除旧层：AddBackdrop 优先原地替换现有 ImageBrush（去掉先删后加造成的闪帧），
+				// 只有图层缺失时才新建。
+				AddBackdrop(cachedBackdrop);
+				if (RenderDiagnostics.Verbose)
+				{
+					Store.Trace("RENDER capture cls=" + GetType().Name + " rect=" + rect.Left + "," + rect.Top + " " + num + "x" + num2 + " ms=" + (Environment.TickCount - captureStart) + " rel=" + (Environment.TickCount - Program.ProcessStartTick));
+				}
+				return true;
 			}
 		}
 		catch (Exception ex)
 		{
 			Store.Log(ex);
+			return false;
 		}
 	}
 
@@ -407,7 +453,9 @@ public class GlassWindow : Window
 	private int backdropBlackRetries;
 
 	// 均匀采样判定近黑帧：开始菜单/搜索打开期间（尤其 Wallpaper Engine 暂停渲染、
-	// DWM 过渡瞬间）CopyFromScreen 常捕到纯黑/近黑区域，直接采纳会把 Dock/面板涂黑。
+	// DWM 过渡瞬间）壁纸层常渲染成纯黑/近黑区域，直接采纳会把 Dock/面板涂黑。
+	// 阈值 4：只拒真正纯黑（显示器关闭/锁屏），深色壁纸（实测亮度≈6）必须放行，
+	// 否则深色壁纸区域永远不更新底图。
 	private static bool IsBlackFrame(Bitmap bitmap)
 	{
 		int num = bitmap.Width - 1;
@@ -417,7 +465,7 @@ public class GlassWindow : Window
 			for (int j = 0; j < 8; j++)
 			{
 				System.Drawing.Color color = bitmap.GetPixel(num * i / 7, num2 * j / 7);
-				if (color.R >= 24 || color.G >= 24 || color.B >= 24)
+				if (color.R >= 4 || color.G >= 4 || color.B >= 4)
 				{
 					return false;
 				}
@@ -426,14 +474,14 @@ public class GlassWindow : Window
 		return true;
 	}
 
-	// 壁纸/显示器/DPI 变化后的重捕调度：1.2 秒合并窗口，多个广播（切换壁纸会连发多条）只捕一次。
-	public void ScheduleBackdropRefresh(bool light)
+	// 壁纸/显示器/DPI 变化后的重捕调度：合并连续广播，保持现有底图直到新图就绪。
+	public void ScheduleBackdropRefresh(bool light, int delayMs = 1200)
 	{
 		if (backdropRefreshTimer == null)
 		{
 			backdropRefreshTimer = new System.Windows.Threading.DispatcherTimer
 			{
-				Interval = TimeSpan.FromMilliseconds(1200.0)
+				Interval = TimeSpan.FromMilliseconds(Math.Max(1, delayMs))
 			};
 			backdropRefreshTimer.Tick += delegate
 			{
@@ -441,24 +489,23 @@ public class GlassWindow : Window
 				RecaptureBackdrop(LightTheme);
 			};
 		}
+		backdropRefreshTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(1, delayMs));
 		backdropRefreshTimer.Stop();
 		backdropRefreshTimer.Start();
 	}
 
-	// 可见状态下重捕：临时把窗口移出屏幕（避免 CopyFromScreen 捕到自身形成反馈），
-	// 按原物理矩形捕获后再移回并刷新画刷。仅在壁纸/显示变化这类低频事件触发，不会高频闪动。
-	public void RecaptureBackdrop(bool light)
+	// 可见状态下只尝试干净壁纸源。动态壁纸或 API 不可用时保留旧底图，绝不移窗或截取屏幕。
+	public virtual void RecaptureBackdrop(bool light)
 	{
 		if (Width < 40.0 || Height < 40.0 || GlassPercent == 0.0)
 		{
 			cachedBackdrop = null;
 			backdropKey = "";
+			ReleaseBackdrop();
 			return;
 		}
 		if (!IsVisible)
 		{
-			cachedBackdrop = null;
-			backdropKey = "";
 			Backdrop(light);
 			return;
 		}
@@ -470,14 +517,7 @@ public class GlassWindow : Window
 				return;
 			}
 			int dpi = Native.DpiOf(hwnd);
-			double oldLeft = Left;
-			double oldTop = Top;
-			Left = -20000.0;
-			Top = -20000.0;
-			// 保留旧底图不动：黑帧重试期间窗口仍显示旧壁纸底图，捕到有效帧才替换。
 			CaptureRegion(rect, dpi);
-			Left = oldLeft;
-			Top = oldTop;
 			RefreshBackdropStyle();
 		}
 		catch (Exception ex)
@@ -488,14 +528,23 @@ public class GlassWindow : Window
 
 	private void AddBackdrop(BitmapImage bitmapImage)
 	{
-		if (!SlowRender && backdropBlur == null)
+		Border element = Root.Children.OfType<Border>().FirstOrDefault((Border b) => b.Tag as string == "backdrop" && b.Child is Border);
+		if (element != null && element.Child is Border existing)
 		{
-			backdropBlur = new BlurEffect
+			Geometry existingClip = BackdropClip();
+			existing.Background = new ImageBrush(bitmapImage) { Stretch = Stretch.Fill };
+			existing.CornerRadius = Surface.CornerRadius;
+			existing.Opacity = LightTheme ? 0.8 : 0.66;
+			existing.Clip = existingClip;
+			element.Clip = existingClip;
+			element.Opacity = GlassPercent / 100.0;
+			foreach (Border duplicate in Root.Children.OfType<Border>().Where((Border b) => b.Tag as string == "backdrop" && b != element).ToList())
 			{
-				Radius = MaterialBlur,
-				RenderingBias = RenderingBias.Performance
-			};
+				Root.Children.Remove(duplicate);
+			}
+			return;
 		}
+		RemoveBackdropBorders();
 		Border border = new Border
 		{
 			Tag = "backdrop",
@@ -506,40 +555,60 @@ public class GlassWindow : Window
 			},
 			Opacity = (LightTheme ? 0.8 : 0.66)
 		};
-		border.Clip = new RectangleGeometry(new Rect(0.0, 0.0, Width - 28.0, Height - 28.0), Surface.CornerRadius.TopLeft, Surface.CornerRadius.TopLeft);
-		border.Effect = backdropBlur;
-		Border element = new Border
+		// 模糊已烘进底图（见 CaptureRegion），运行时不再挂 BlurEffect。
+		border.Clip = BackdropClip();
+		Border wrapper = new Border
 		{
 			Tag = "backdrop",
 			Clip = border.Clip,
 			Child = border,
 			Opacity = GlassPercent / 100.0
 		};
-		Root.Children.Insert(0, element);
+		Root.Children.Insert(0, wrapper);
 	}
 
-	private void RefreshBackdropStyle()
+	// 底图/材质层统一的显示裁剪区：与捕获源区同源（Root.Margin 内容区），
+	// 四角独立圆角（灵动岛吸附模式上下圆角不同）。
+	protected Geometry BackdropClip()
 	{
-		if (!SlowRender && backdropBlur == null)
+		try
 		{
-			backdropBlur = new BlurEffect
+			double w = Math.Max(1.0, Width - Root.Margin.Left - Root.Margin.Right);
+			double h = Math.Max(1.0, Height - Root.Margin.Top - Root.Margin.Bottom);
+			if (double.IsNaN(w) || double.IsInfinity(w) || double.IsNaN(h) || double.IsInfinity(h) || w <= 0.0 || h <= 0.0)
 			{
-				Radius = MaterialBlur,
-				RenderingBias = RenderingBias.Performance
-			};
+				return null;
+			}
+			CornerRadius c = Surface.CornerRadius;
+			return IslandChrome.RoundedRect(w, h, c.TopLeft, c.TopRight, c.BottomRight, c.BottomLeft);
 		}
+		catch
+		{
+			return null;
+		}
+	}
+
+	protected void RefreshBackdropStyle()
+	{
+		Geometry clip = BackdropClip();
 		foreach (Border item in from b in Root.Children.OfType<Border>()
 			where b.Tag as string == "backdrop"
 			select b)
 		{
-			RectangleGeometry clip = (RectangleGeometry)(item.Clip = new RectangleGeometry(new Rect(0.0, 0.0, Math.Max(1.0, Width - 28.0), Math.Max(1.0, Height - 28.0)), Surface.CornerRadius.TopLeft, Surface.CornerRadius.TopLeft));
+			item.Clip = clip;
 			if (item.Child is Border border)
 			{
 				border.Clip = clip;
 				border.CornerRadius = Surface.CornerRadius;
 				border.Opacity = (LightTheme ? 0.8 : 0.66);
-				border.Effect = backdropBlur;
 			}
+		}
+		// 材质层（gloss/grain）同步裁剪：Border 的 CornerRadius 不会裁剪其背景内容，
+		// 圆角外的直角纹理残影也是"污点"来源之一。
+		Border mat = Root.Children.OfType<Border>().FirstOrDefault((Border b) => b.Tag as string == "material");
+		if (mat != null)
+		{
+			mat.Clip = BackdropClip();
 		}
 	}
 
@@ -557,13 +626,17 @@ public class GlassWindow : Window
 	{
 		GlassPercent = LayoutRules.GlassOpacity(percent);
 		string sig = (LightTheme ? 1 : 0) + "|" + CurrentMaterial.Kind + "|" + CurrentMaterial.Gloss + "|" + CurrentMaterial.Grain + "|" + CurrentMaterial.Tint + "|" + AccentIndex + "|" + CurrentMaterial.Shadow;
-		if (glassApplied && sig == materialSig && Math.Abs(GlassPercent - lastGlassPercent) < 0.001)
+		bool materialChanged = !glassApplied || sig != materialSig;
+		if (!materialChanged && Math.Abs(GlassPercent - lastGlassPercent) < 0.001)
 		{
 			return;
 		}
 		lastGlassPercent = GlassPercent;
-		materialSig = sig;
-		glassApplied = true;
+		if (materialChanged)
+		{
+			materialSig = sig;
+			glassApplied = true;
+		}
 		if (surfaceShadow == null)
 		{
 			surfaceShadow = new DropShadowEffect
@@ -594,8 +667,14 @@ public class GlassWindow : Window
 			Root.Children.Insert(Math.Min(1, Root.Children.Count), border);
 		}
 		border.CornerRadius = Surface.CornerRadius;
-		Grid grid = (Grid)(border.Child = new Grid());
+		// 材质层裁剪：圆角外的直角 gloss/grain 纹理残影是"污点"来源之一
+		border.Clip = BackdropClip();
 		border.Opacity = GlassPercent / 100.0;
+		if (!materialChanged && border.Child != null)
+		{
+			return;
+		}
+		Grid grid = (Grid)(border.Child = new Grid());
 		if (CurrentMaterial.Gloss > 0.0)
 		{
 			grid.Children.Add(new Border

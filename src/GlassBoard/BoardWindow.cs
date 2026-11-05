@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -248,16 +248,15 @@ public class BoardWindow : GlassWindow
 			}
 		};
 		Drop += ExternalDrop;
-		Deactivated += (object s, EventArgs e) =>
+		// 点击外部收起改为鼠标钩子驱动（不再依赖失焦）：Win+D 无鼠标点击，永不误收；
+		// 收起前提沿用原失焦逻辑的判定（未激活/非弹窗/非拖拽/无打开菜单）。
+		PanelDismissGuard.Track(this, () =>
 		{
-			Dispatcher.BeginInvoke((Action)(() =>
+			if (C.Prefs.BoardDismissOnDeactivate && IsVisible && !IsActive && !ModalBusy && !activeDrag && !IsContextMenuOpen() && !ShellContextMenu.Active)
 			{
-				if (C.Prefs.BoardDismissOnDeactivate && IsVisible && !IsActive && !ModalBusy && !activeDrag && !IsContextMenuOpen() && !ShellContextMenu.Active && Mouse.LeftButton != MouseButtonState.Pressed)
-				{
-					CollapseSmooth();
-				}
-			}));
-		};
+				CollapseSmooth();
+			}
+		});
 		moveGrip = new Thumb
 		{
 			Width = 60.0,
@@ -545,6 +544,16 @@ public class BoardWindow : GlassWindow
 			return false;
 		}
 		return true;
+	}
+
+	// 大面板展开时不显示捕获的壁纸背景（纯玻璃）。基类会在壁纸变化/拖拽结束时
+	// 自动重捕底图——全部屏蔽，面板始终保持干净。
+	public override void Backdrop(bool light)
+	{
+	}
+
+	public override void RecaptureBackdrop(bool light)
+	{
 	}
 
 	public void Open()

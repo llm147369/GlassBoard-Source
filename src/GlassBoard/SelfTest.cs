@@ -382,7 +382,7 @@ public static class SelfTest
 			{
 				throw new Exception("面板未创建");
 			}
-			controller.Board.Hide();
+			controller.Board.HideWithConsent();
 			controller.Board.ModalBusy = true;
 			if (controller.Board.ReleaseHiddenView())
 			{

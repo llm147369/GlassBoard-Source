@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -90,10 +92,20 @@ public static class WeatherClient
 		httpWebRequest.Timeout = 8000;
 		httpWebRequest.ReadWriteTimeout = 8000;
 		httpWebRequest.UserAgent = "GlassBoard/" + Assembly.GetExecutingAssembly().GetName().Version;
-		httpWebRequest.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+		httpWebRequest.AutomaticDecompression = DecompressionMethods.GZip;
 		using WebResponse webResponse = httpWebRequest.GetResponse();
-		using Stream stream = webResponse.GetResponseStream();
-		return Read<T>(stream);
+		Stream stream = webResponse.GetResponseStream();
+		string text = webResponse.Headers["Content-Encoding"] ?? "";
+		if (text.IndexOf("deflate", StringComparison.OrdinalIgnoreCase) >= 0)
+		{
+			// 部分气象接口的 deflate 是 zlib 封装（RFC1950），HttpWebRequest 的原始 deflate
+			// 解码器只认裸流 → InvalidDataException；改用手动 DeflateStream（.NET Framework 即 zlib 格式）。
+			stream = new DeflateStream(stream, CompressionMode.Decompress);
+		}
+		using (stream)
+		{
+			return Read<T>(stream);
+		}
 	}
 
 	public static bool Coordinates(string value, out GeoPlace place)
@@ -147,23 +159,66 @@ public static class WeatherClient
 			}
 			list2.Add(text + ", " + text2);
 		}
+		// 中文地名：不带国家限定常被匹配到海外同名地点（大量小城市“获取不到”的根因），
+		// 追加“中国”限定变体后按顺序尝试。
+		bool cjk = Regex.IsMatch(city, "[\\u3400-\\u9fff]");
+		if (cjk)
+		{
+			list.Add(city + ", CN");
+			list.Add(city + " 中国");
+		}
 		foreach (string item in list)
 		{
 			GeoReply geoReply = reader("https://geocoding-api.open-meteo.com/v1/search?count=10&language=zh&format=json&name=" + Uri.EscapeDataString(item));
-			if (geoReply == null || geoReply.Results == null || geoReply.Results.Count <= 0)
+			if (geoReply != null && geoReply.Results != null && geoReply.Results.Count > 0)
 			{
-				continue;
-			}
-			GeoPlace geoPlace = geoReply.Results.FirstOrDefault((GeoPlace x) => NormalizeCity(x.Name).Equals(city, StringComparison.OrdinalIgnoreCase)) ?? geoReply.Results[0];
-			lock (gate)
-			{
-				if (places.Count >= 100)
+				GeoPlace geoPlace = geoReply.Results.FirstOrDefault((GeoPlace x) => NormalizeCity(x.Name).Equals(city, StringComparison.OrdinalIgnoreCase)) ?? geoReply.Results[0];
+				lock (gate)
 				{
-					places.Clear();
+					if (places.Count >= 100)
+					{
+						places.Clear();
+					}
+					places[city] = geoPlace;
 				}
-				places[city] = geoPlace;
+				return geoPlace;
 			}
-			return geoPlace;
+		}
+		// open-meteo 找不到时用 Nominatim 兜底（覆盖区县、乡镇等更细的地名）
+		foreach (string item in list)
+		{
+			try
+			{
+				NominatimReply[] hits = Get<NominatimReply[]>("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&accept-language=zh&q=" + Uri.EscapeDataString(item));
+				NominatimReply hit = ((hits == null) ? null : hits.FirstOrDefault((NominatimReply x) => x != null && double.TryParse(x.Lat, NumberStyles.Float, CultureInfo.InvariantCulture, out var _) && double.TryParse(x.Lon, NumberStyles.Float, CultureInfo.InvariantCulture, out var _)));
+				if (hit != null)
+				{
+					string name = (hit.DisplayName ?? "").Split(',')[0].Trim();
+					if (name.Length == 0)
+					{
+						name = city;
+					}
+					GeoPlace geoPlace2 = new GeoPlace
+					{
+						Name = name,
+						Country = "CN",
+						Latitude = double.Parse(hit.Lat, CultureInfo.InvariantCulture),
+						Longitude = double.Parse(hit.Lon, CultureInfo.InvariantCulture)
+					};
+					lock (gate)
+					{
+						if (places.Count >= 100)
+						{
+							places.Clear();
+						}
+						places[city] = geoPlace2;
+					}
+					return geoPlace2;
+				}
+			}
+			catch
+			{
+			}
 		}
 		throw new InvalidOperationException("未找到城市，请填写城市名、城市加国家，或纬度,经度");
 	}
@@ -177,6 +232,152 @@ public static class WeatherClient
 				select x.Value);
 		}
 		return "";
+	}
+
+	// —— IP 自动定位（无需手动设置城市）：依次尝试多个免费定位服务 ——
+	[DataContract]
+	internal sealed class IpInfoReply
+	{
+		[DataMember(Name = "city")]
+		public string City = "";
+
+		[DataMember(Name = "region")]
+		public string Region = "";
+
+		[DataMember(Name = "country")]
+		public string Country = "";
+
+		[DataMember(Name = "loc")]
+		public string Loc = "";
+	}
+
+	[DataContract]
+	internal sealed class IpApiReply
+	{
+		[DataMember(Name = "status")]
+		public string Status = "";
+
+		[DataMember(Name = "lat")]
+		public double Lat = 0.0;
+
+		[DataMember(Name = "lon")]
+		public double Lon = 0.0;
+
+		[DataMember(Name = "city")]
+		public string City = "";
+
+		[DataMember(Name = "regionName")]
+		public string Region = "";
+
+		[DataMember(Name = "country")]
+		public string Country = "";
+	}
+
+	[DataContract]
+	internal sealed class IpapiCoReply
+	{
+		[DataMember(Name = "latitude")]
+		public double Latitude = 0.0;
+
+		[DataMember(Name = "longitude")]
+		public double Longitude = 0.0;
+
+		[DataMember(Name = "city")]
+		public string City = "";
+
+		[DataMember(Name = "region")]
+		public string Region = "";
+
+		[DataMember(Name = "country_name")]
+		public string Country = "";
+	}
+
+	[DataContract]
+	internal sealed class NominatimReply
+	{
+		[DataMember(Name = "lat")]
+		public string Lat = "";
+
+		[DataMember(Name = "lon")]
+		public string Lon = "";
+
+		[DataMember(Name = "display_name")]
+		public string DisplayName = "";
+	}
+
+	private static string JoinName(string city, string region)
+	{
+		city = (city ?? "").Trim();
+		region = (region ?? "").Trim();
+		if (city.Length == 0)
+		{
+			return (region.Length == 0) ? "自动定位" : region;
+		}
+		if (region.Length == 0 || string.Equals(city, region, StringComparison.OrdinalIgnoreCase))
+		{
+			return city;
+		}
+		return city + " · " + region;
+	}
+
+	public static GeoPlace AutoLocate()
+	{
+		Exception last = null;
+		try
+		{
+			IpInfoReply info = Get<IpInfoReply>("https://ipinfo.io/json");
+			if (info != null && !string.IsNullOrWhiteSpace(info.Loc) && Coordinates(info.Loc, out GeoPlace place))
+			{
+				place.Name = JoinName(info.City, info.Region);
+				place.Country = string.IsNullOrWhiteSpace(info.Country) ? "自动定位" : info.Country;
+				return place;
+			}
+		}
+		catch (Exception ex)
+		{
+			last = ex;
+		}
+		try
+		{
+			IpApiReply api = Get<IpApiReply>("http://ip-api.com/json/?lang=zh-CN&fields=status,lat,lon,city,regionName,country");
+			if (api != null && (api.Status == "success") && Math.Abs(api.Lat) <= 90.0 && Math.Abs(api.Lon) <= 180.0 && (Math.Abs(api.Lat) > 0.01 || Math.Abs(api.Lon) > 0.01))
+			{
+				return new GeoPlace
+				{
+					Name = JoinName(api.City, api.Region),
+					Country = string.IsNullOrWhiteSpace(api.Country) ? "自动定位" : api.Country,
+					Latitude = api.Lat,
+					Longitude = api.Lon
+				};
+			}
+		}
+		catch (Exception ex)
+		{
+			last = ex;
+		}
+		try
+		{
+			IpapiCoReply co = Get<IpapiCoReply>("https://ipapi.co/json/");
+			if (co != null && Math.Abs(co.Latitude) <= 90.0 && Math.Abs(co.Longitude) <= 180.0 && (Math.Abs(co.Latitude) > 0.01 || Math.Abs(co.Longitude) > 0.01))
+			{
+				return new GeoPlace
+				{
+					Name = JoinName(co.City, co.Region),
+					Country = string.IsNullOrWhiteSpace(co.Country) ? "自动定位" : co.Country,
+					Latitude = co.Latitude,
+					Longitude = co.Longitude
+				};
+			}
+		}
+		catch (Exception ex)
+		{
+			last = ex;
+		}
+		if (last != null)
+		{
+			throw new InvalidOperationException("无法自动定位当前城市（" + Failure(last) + "），请检查网络或手动填写城市", last);
+		}
+		throw new InvalidOperationException("无法自动定位当前城市，请检查网络或手动填写城市");
 	}
 
 	public static WeatherSnapshot FromWttr(WttrReply reply)
@@ -264,13 +465,27 @@ public static class WeatherClient
 			throw new ArgumentException("请先在设置中填写天气城市");
 		}
 		city = NormalizeCity(city);
-		GeoPlace geoPlace = null;
+		GeoPlace geoPlace = Resolve(city, geoReader);
+		return FetchAt(geoPlace, forecastReader, backupReader);
+	}
+
+	// 直接按已解析的位置取天气（自动定位路径共用同一套主/备服务）
+	public static WeatherSnapshot FetchAt(GeoPlace geoPlace)
+	{
+		return FetchAt(geoPlace, Get<WeatherReply>, Get<WttrReply>);
+	}
+
+	private static WeatherSnapshot FetchAt(GeoPlace geoPlace, Func<string, WeatherReply> forecastReader, Func<string, WttrReply> backupReader)
+	{
+		if (geoPlace == null || double.IsNaN(geoPlace.Latitude) || double.IsNaN(geoPlace.Longitude) || double.IsInfinity(geoPlace.Latitude) || double.IsInfinity(geoPlace.Longitude) || Math.Abs(geoPlace.Latitude) > 90.0 || Math.Abs(geoPlace.Longitude) > 180.0)
+		{
+			throw new ArgumentException("无效的天气位置");
+		}
+		string text = geoPlace.Latitude.ToString(CultureInfo.InvariantCulture);
+		string text2 = geoPlace.Longitude.ToString(CultureInfo.InvariantCulture);
 		Exception ex = null;
 		try
 		{
-			geoPlace = Resolve(city, geoReader);
-			string text = geoPlace.Latitude.ToString(CultureInfo.InvariantCulture);
-			string text2 = geoPlace.Longitude.ToString(CultureInfo.InvariantCulture);
 			WeatherReply weatherReply = forecastReader("https://api.open-meteo.com/v1/forecast?latitude=" + text + "&longitude=" + text2 + "&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto");
 			if (weatherReply == null || weatherReply.Current == null)
 			{
@@ -289,8 +504,7 @@ public static class WeatherClient
 		}
 		try
 		{
-			string stringToEscape = ((geoPlace == null) ? city : (geoPlace.Latitude.ToString(CultureInfo.InvariantCulture) + "," + geoPlace.Longitude.ToString(CultureInfo.InvariantCulture)));
-			return FromWttr(backupReader("https://wttr.in/" + Uri.EscapeDataString(stringToEscape) + "?format=j1&lang=zh"));
+			return FromWttr(backupReader("https://wttr.in/" + Uri.EscapeDataString(text + "," + text2) + "?format=j1&lang=zh"));
 		}
 		catch (Exception ex3)
 		{

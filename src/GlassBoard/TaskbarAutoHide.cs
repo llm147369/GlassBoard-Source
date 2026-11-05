@@ -60,14 +60,31 @@ public static class TaskbarAutoHide
 	private static uint State()
 	{
 		APPBARDATA data = Data();
-		return (uint)SHAppBarMessage(4u, ref data).ToUInt64();
+		// SHAppBarMessage 与 explorer 通信：explorer 崩溃/挂起时该调用会阻塞。
+		// 后台线程 + 400ms 超时兜底，返回 0 视为"无自动隐藏"，不让 UI 线程陪冻。
+		try
+		{
+			System.Threading.Tasks.Task<uint> task = System.Threading.Tasks.Task.Run(() => (uint)SHAppBarMessage(4u, ref data).ToUInt64());
+			return task.Wait(400) ? task.Result : 0u;
+		}
+		catch
+		{
+			return 0u;
+		}
 	}
 
 	private static void Apply(uint state)
 	{
 		APPBARDATA data = Data();
 		data.Param = new IntPtr(state);
-		SHAppBarMessage(10u, ref data);
+		// 异步投递：调用方不依赖结果；explorer 挂起时后台任务自然排队，不冻结 UI。
+		try
+		{
+			System.Threading.Tasks.Task.Run(() => SHAppBarMessage(10u, ref data));
+		}
+		catch
+		{
+		}
 	}
 
 	public static void Set(bool enabled)

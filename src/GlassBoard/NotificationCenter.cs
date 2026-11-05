@@ -64,18 +64,26 @@ public static class NotificationCenter
 	private static DispatcherTimer snapshotTimer;
 	private static System.Threading.Timer resyncTimer;
 
+	// 灵动岛通知内容：事件路径与轮询对账路径共用同一推送入口，按系统通知 ID 去重；
+	// 初始快照只建立基线（历史通知不伪装成新消息）。诊断计数不含任何通知内容。
+	private static readonly Dictionary<uint, long> islandSeen = new Dictionary<uint, long>(); // notificationId -> push TickCount
+	private static int islandPushCount;
+	private static int islandSkipCount;
+	private static string islandMode = "未启动";
+
 	public static void Start(Controller c)
 	{
 		if (started)
 		{
 			return;
 		}
-		started = true;
 		controller = c;
+		islandMode = "正在启动…";
 		try
 		{
 			if (!Windows.Foundation.Metadata.ApiInformation.IsTypePresent("Windows.UI.Notifications.Management.UserNotificationListener"))
 			{
+				islandMode = "不可用：当前 Windows 版本过旧，不支持通知监听 API";
 				Store.Trace("NOTIFY listener type not present (system too old)");
 				return;
 			}
@@ -88,6 +96,7 @@ public static class NotificationCenter
 				Task<UserNotificationListenerAccessStatus> req = listener.RequestAccessAsync().AsTask();
 				if (!req.Wait(8000))
 				{
+					islandMode = "授权请求超时：请点“重新检查授权”重试";
 					Store.Trace("NOTIFY access request timeout");
 					return;
 				}
@@ -96,6 +105,7 @@ public static class NotificationCenter
 			}
 			if (status != UserNotificationListenerAccessStatus.Allowed)
 			{
+				islandMode = "未授权：请在 Windows 设置 → 隐私和安全性 → 通知 中允许“GlassBoard”读取通知，然后点“重新检查授权”";
 				Store.Trace("NOTIFY access denied — 通知红点停用（可在 Windows 设置里授权）");
 				return;
 			}
@@ -111,19 +121,31 @@ public static class NotificationCenter
 			{
 				Store.Trace("NOTIFY event unavailable (" + ex.Message + ") — fallback to polling");
 			}
+			// 成功路径才算“已启动”：失败后设置页可重新检查授权重试
+			started = true;
+			islandMode = (eventAvailable ? "事件模式" : "轮询模式") + "，运行正常";
+			if (snapshotTimer != null)
+			{
+				snapshotTimer.Stop();
+			}
+			if (resyncTimer != null)
+			{
+				resyncTimer.Dispose();
+			}
 			RefreshEntrySnapshot();
 			snapshotTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
 			snapshotTimer.Tick += (s, e) => RefreshEntrySnapshot();
 			snapshotTimer.Start();
-			// 初始对账：只同步徽标状态，不播弹跳动画
+			// 初始对账：只同步徽标状态与灵动岛基线，不播弹跳动画
 			Task.Run(() => SyncSnapshot(false));
-			// 周期对账：有事件时 60 秒兜底；无事件（轮询模式）时 10 秒一拍保持响应速度
-			int pollMs = eventAvailable ? 60000 : 3000; // 事件不可用时提高轮询频率，缩短漏报窗口
+			// 周期对账：有事件时 60 秒兜底；无事件（轮询模式）时 3 秒一拍保持响应速度
+			int pollMs = eventAvailable ? 60000 : 3000;
 			resyncTimer = new System.Threading.Timer(_ => SyncSnapshot(true), null, TimeSpan.FromMilliseconds(pollMs), TimeSpan.FromMilliseconds(pollMs));
 			Store.Trace("NOTIFY started event=" + eventAvailable + " pollMs=" + pollMs);
 		}
 		catch (Exception ex)
 		{
+			islandMode = "启动失败：" + ex.GetType().Name + "（详见日志）";
 			Store.Log(ex);
 		}
 	}
@@ -182,6 +204,9 @@ public static class NotificationCenter
 				catch
 				{
 				}
+				// 灵动岛通知内容：与轮询对账路径共用同一推送入口（按通知 ID 去重）。
+				// 正文只进内存列表，绝不写日志。
+				PushIslandToast(n, item.Id, aumid, display);
 				lock (gate)
 				{
 					idToApp[item.Id] = aumid;
@@ -241,6 +266,166 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 		}
 	}
 
+	// 灵动岛通知推送：事件路径与轮询对账路径都走这里，按系统通知 ID 去重。
+	// 正文提取必须在 UI 线程（WinRT 对象线程仿射）；提取不到内容时不推送、不猜测。
+	private static void PushIslandToast(UserNotification n, uint id, string aumid, string display)
+	{
+		try
+		{
+			bool fresh;
+			lock (gate)
+			{
+				fresh = !islandSeen.ContainsKey(id);
+				if (fresh)
+				{
+					islandSeen[id] = Environment.TickCount;
+				}
+			}
+			if (!fresh)
+			{
+				lock (gate)
+				{
+					islandSkipCount++;
+				}
+				return;
+			}
+			OnUi(() =>
+			{
+				try
+				{
+					string islandApp = display;
+					string islandTitle = "";
+					string islandBody = "";
+					var binding = n.Notification?.Visual?.GetBinding(KnownNotificationBindings.ToastGeneric);
+					if (binding != null)
+					{
+						List<string> texts = new List<string>();
+						foreach (var el in binding.GetTextElements())
+						{
+							string t = (el.Text ?? "").Trim();
+							if (t.Length > 0)
+							{
+								texts.Add(t);
+							}
+						}
+						// 未打包应用没有 AppInfo 显示名：toast 首元素通常是应用名，拆出来作来源
+						if (islandApp.Length == 0 && texts.Count >= 2)
+						{
+							islandApp = texts[0];
+							texts.RemoveAt(0);
+						}
+						if (texts.Count > 0)
+						{
+							islandTitle = texts[0];
+							texts.RemoveAt(0);
+						}
+						if (texts.Count > 0)
+						{
+							islandBody = string.Join(" ", texts);
+						}
+					}
+					// 来源应用兜底：未打包应用没有显示名时用 AUMID 标识来源（不猜测内容）。
+					if (islandApp.Length == 0)
+					{
+						islandApp = (aumid ?? "").Trim();
+					}
+					// 正文不可读时只显示来源应用和“有新通知”，不猜测内容、不伪造未读数。
+					if (islandTitle.Length == 0)
+					{
+						islandTitle = "有新通知";
+					}
+					if (islandApp.Length > 0)
+					{
+						IslandNotifications.Push(new IslandNotification
+						{
+							AppName = islandApp,
+							Aumid = aumid,
+							Title = islandTitle,
+							Body = islandBody,
+							Stamp = DateTime.Now
+						});
+						lock (gate)
+						{
+							islandPushCount++;
+						}
+						// 分阶段诊断：分发结果（仅长度与来源长度，不含标题/正文）
+						Store.Trace("NOTIFY island push #" + islandPushCount + " ok a=" + islandApp.Length + " t=" + islandTitle.Length + " b=" + islandBody.Length);
+					}
+					else
+					{
+						Store.Trace("NOTIFY island push skip no-source");
+					}
+				}
+				catch
+				{
+					// 提取失败：不推送、不猜测（来源应用仍经红点归属链路处理）
+				}
+				return 0;
+			});
+		}
+		catch
+		{
+		}
+	}
+
+	// 灵动岛通知诊断：给设置页展示授权/模式/计数状态（不含任何通知内容）。
+	public static string IslandStatus()
+	{
+		string access = "未知";
+		try
+		{
+			UserNotificationListener l = listener;
+			if (l != null)
+			{
+				access = OnUi(() => l.GetAccessStatus()).ToString();
+			}
+		}
+		catch
+		{
+		}
+		int pushed;
+		int skipped;
+		lock (gate)
+		{
+			pushed = islandPushCount;
+			skipped = islandSkipCount;
+		}
+		return "监听模式：" + islandMode +
+			"；系统授权：" + access +
+			"；已推送 " + pushed + " 条、去重跳过 " + skipped + " 条。" +
+			"授权被拒绝或撤销、API 不可用时收不到新通知；正文不可读时只显示来源应用与“有新通知”。";
+	}
+
+	// 授权失败后的重试入口：重置启动标记并重新初始化监听（设置页“重新检查授权”按钮）。
+	public static void Recheck()
+	{
+		try
+		{
+			if (snapshotTimer != null)
+			{
+				snapshotTimer.Stop();
+			}
+			if (resyncTimer != null)
+			{
+				resyncTimer.Dispose();
+			}
+		}
+		catch
+		{
+		}
+		lock (gate)
+		{
+			started = false;
+			listener = null;
+			islandMode = "正在重新检查…";
+		}
+		OnUi(() =>
+		{
+			Start(controller);
+			return 0;
+		});
+	}
+
 	// 全量对账：与系统当前通知列表逐项比对，修正徽标状态。
 	// listener 是线程仿射（STA/UI）对象，跨线程调用会抛 RPC_E_WRONG_THREAD(0x8001010E)，
 	// 因此 WinRT 检索一律经 OnUi 在 UI 线程执行，差异计算仍留在后台线程。
@@ -255,6 +440,8 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 			}
 			if (OnUi(() => l.GetAccessStatus()) != UserNotificationListenerAccessStatus.Allowed)
 			{
+				islandMode = "授权已撤销：请在 Windows 设置中重新允许访问通知，然后点“重新检查授权”";
+				Store.Trace("NOTIFY sync skipped — access revoked");
 				return;
 			}
 			IReadOnlyList<UserNotification> list = OnUi(() => l.GetNotificationsAsync(NotificationKinds.Toast).AsTask().GetAwaiter().GetResult());
@@ -266,6 +453,69 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 			foreach (UserNotification n in list)
 			{
 				allIds.Add(n.Id);
+			}
+			// 灵动岛：初始快照只建立基线（历史通知不算新消息）；之后只有“新增”的
+			// 通知才推送，并按系统通知 ID 去重——事件路径与轮询路径共用同一套标记。
+			lock (gate)
+			{
+				if (islandSeen.Count == 0)
+				{
+					foreach (UserNotification n in list)
+					{
+						islandSeen[n.Id] = Environment.TickCount;
+					}
+				}
+				// 长期运行后修剪过期标记，防止字典无限增长
+				if (islandSeen.Count > 1500)
+				{
+					long cutoff = Environment.TickCount - 3600000L;
+					foreach (uint key in islandSeen.Keys.Where((uint k) => islandSeen[k] < cutoff).ToList())
+					{
+						islandSeen.Remove(key);
+					}
+				}
+			}
+			List<(UserNotification N, string Aumid, string Display)> freshIsland = new List<(UserNotification, string, string)>();
+			foreach (UserNotification n in list)
+			{
+				bool fresh;
+				lock (gate)
+				{
+					fresh = !islandSeen.ContainsKey(n.Id);
+				}
+				if (fresh)
+				{
+					try
+					{
+						freshIsland.Add((n, (n.AppInfo?.AppUserModelId ?? "").ToLowerInvariant(), n.AppInfo?.DisplayInfo?.DisplayName ?? ""));
+					}
+					catch
+					{
+						freshIsland.Add((n, "", ""));
+					}
+				}
+			}
+			if (freshIsland.Count > 0)
+			{
+				if (pulse)
+				{
+					foreach ((UserNotification N, string Aumid, string Display) f in freshIsland)
+					{
+						PushIslandToast(f.N, f.N.Id, f.Aumid, f.Display);
+					}
+				}
+				else
+				{
+					// 初始对账阶段：不弹卡，直接并入基线
+					lock (gate)
+					{
+						foreach ((UserNotification N, string Aumid, string Display) f in freshIsland)
+						{
+							islandSeen[f.N.Id] = Environment.TickCount;
+						}
+					}
+				}
+				Store.Trace("NOTIFY sync total=" + list.Count + " fresh=" + freshIsland.Count + " pulse=" + pulse);
 			}
 			HashSet<uint> newIds;
 			lock (gate)
@@ -668,6 +918,30 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 	}
 
 	// 通知归属评分：快捷方式 AUMID 精确匹配 100 > 目标名与 AUMID 互含 70 > 显示名与目标名互含 60 > 入口名精确 55
+	public static string ResolvePath(string aumid)
+	{
+		if (string.IsNullOrEmpty(aumid))
+		{
+			return null;
+		}
+		string key = aumid.ToLowerInvariant();
+		lock (gate)
+		{
+			if (aumidToPath.TryGetValue(key, out string p) && !string.IsNullOrEmpty(p))
+			{
+				return p;
+			}
+		}
+		try
+		{
+			return Match(key, "");
+		}
+		catch
+		{
+			return null;
+		}
+	}
+
 	private static string Match(string aumid, string display)
 	{
 		List<Entry> entries;

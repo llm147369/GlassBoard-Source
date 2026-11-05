@@ -19,6 +19,9 @@ public class NoteItem : INotifyPropertyChanged
 	public long Updated = DateTime.UtcNow.Ticks;
 
 	[DataMember]
+	public long RemindAt = 0; // UTC ticks；0 = 无提醒（旧数据缺该字段时反序列化为 0，兼容）
+
+	[DataMember]
 	public string Title
 	{
 		get

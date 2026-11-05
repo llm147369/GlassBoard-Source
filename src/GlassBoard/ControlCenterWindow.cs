@@ -134,13 +134,14 @@ public class ControlCenterWindow : GlassWindow
 				RefreshDynamic();
 			}
 		};
-		Deactivated += (object s, EventArgs e) =>
+		// 点击外部收起改为鼠标钩子驱动（不再依赖失焦）：Win+D 无鼠标点击，永不误收。
+		PanelDismissGuard.Track(this, () =>
 		{
-			if (!suppressHide && !ShellContextMenu.Active)
+			if (!suppressHide && !ShellContextMenu.Active && !IsActive)
 			{
 				ClosePanel();
 			}
-		};
+		});
 	}
 
 	private Brush LineBrush()
@@ -853,7 +854,7 @@ public class ControlCenterWindow : GlassWindow
 		closing = true;
 		refreshTimer.Stop();
 		closing = false;
-		Hide();
+		HideWithConsent();
 		Close();
 	}
 
@@ -948,7 +949,7 @@ public class ControlCenterWindow : GlassWindow
 			suppressHide = false;
 			if (!IsKeyboardFocusWithin && !IsActive)
 			{
-				Hide();
+				HideWithConsent();
 			}
 		};
 		menu.PlacementTarget = powerCard;
@@ -1594,7 +1595,7 @@ public class ControlCenterWindow : GlassWindow
 			suppressHide = false;
 			if (!IsKeyboardFocusWithin && !IsActive)
 			{
-				Hide();
+				HideWithConsent();
 			}
 		};
 		menu.PlacementTarget = outputButton;
@@ -1710,7 +1711,7 @@ public class ControlCenterWindow : GlassWindow
 			suppressHide = false;
 			if (!IsKeyboardFocusWithin && !IsActive)
 			{
-				Hide();
+				HideWithConsent();
 			}
 		};
 		menu.PlacementTarget = anchor;

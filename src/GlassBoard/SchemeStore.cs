@@ -51,6 +51,17 @@ public static class SchemeStore
 				item.IconPath = "[asset]" + text;
 			}
 		}
+		// 灵动岛自定义背景图片：嵌入方案内，导出/导入不依赖可能失效的本地路径。
+		if (data.Island != null && !string.IsNullOrWhiteSpace(data.Island.CustomImage) && File.Exists(data.Island.CustomImage))
+		{
+			byte[] array = File.ReadAllBytes(data.Island.CustomImage);
+			if (array.Length <= 524288)
+			{
+				string text = "island-bg" + Path.GetExtension(data.Island.CustomImage).ToLowerInvariant();
+				data.Icons[text] = Convert.ToBase64String(array);
+				data.Island.CustomImage = "[asset]" + text;
+			}
+		}
 	}
 
 	public static void Materialize(AppearanceScheme data)
@@ -75,6 +86,33 @@ public static class SchemeStore
 			string text = Path.Combine(Store.Folder, "icons", Guid.NewGuid().ToString("N") + ".png");
 			File.WriteAllBytes(text, array);
 			item.IconPath = text;
+		}
+		// 灵动岛背景图片物化到应用管理的本地目录。
+		if (data.Island != null && data.Island.CustomImage != null && data.Island.CustomImage.StartsWith("[asset]", StringComparison.Ordinal))
+		{
+			string key = data.Island.CustomImage.Substring(7);
+			if (data.Icons.TryGetValue(key, out var value) && value.Length <= 700000)
+			{
+				byte[] array = Convert.FromBase64String(value);
+				if (array.Length > 524288)
+				{
+					throw new InvalidDataException("方案背景图片过大");
+				}
+				string dir = Path.Combine(Store.Folder, "island");
+				Directory.CreateDirectory(dir);
+				string ext = Path.GetExtension(key);
+				if (string.IsNullOrEmpty(ext))
+				{
+					ext = ".png";
+				}
+				string text = Path.Combine(dir, "bg-" + Guid.NewGuid().ToString("N") + ext.ToLowerInvariant());
+				File.WriteAllBytes(text, array);
+				data.Island.CustomImage = text;
+			}
+			else
+			{
+				data.Island.CustomImage = "";
+			}
 		}
 	}
 }

@@ -29,3 +29,11 @@ SHA256SUMS.txt
 !GlassBoard.exe
 !GlassBoard.exe.config
 !Interop.UIAutomationClient.dll
+# 本地备份/工作目录（不进仓库）
+GlassBoard.exe.pre-*
+GlassBoard.exe.config.pre-*
+wallpapers/
+_scratch/
+_review/
+_release-check/
+.codex/

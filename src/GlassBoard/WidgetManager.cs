@@ -256,7 +256,7 @@ public sealed class WidgetManager : IDisposable
 				TryStop(value);
 			}
 		}
-		if (!o.Music && Music != null)
+		if (!C.MusicNeeded && Music != null)
 		{
 			MusicEngine music = Music;
 			Music = null;
@@ -268,11 +268,15 @@ public sealed class WidgetManager : IDisposable
 			{
 				Store.Log(ex);
 			}
+			// 引擎已销毁：让灵动岛解绑旧实例（否则岛挂死）
+			C.ReattachMusic();
 		}
-		if (o.Music && Music == null)
+		if (C.MusicNeeded && Music == null)
 		{
 			Music = new MusicEngine(C);
 			Music.Changed += RefreshMusic;
+			// 新实例：让灵动岛重新绑定，保证音乐页/收起条继续工作
+			C.ReattachMusic();
 		}
 		foreach (KeyValuePair<int, List<string>> item in dictionary)
 		{

@@ -526,7 +526,7 @@ public static class Native
 	}
 
 	// —— 渲染诊断支持：物理坐标与每显示器 DPI ——
-	// 背景捕获（CopyFromScreen）必须用物理像素坐标。WPF 的 TransformToDevice 矩阵
+	// 背景捕获（GDI 区域）必须用物理像素坐标。WPF 的 TransformToDevice 矩阵
 	// 基于主屏 DPI，在混合 DPI 多显示器（主屏 150% + 副屏 100% 等）下算出的区域是错的，
 	// 这正是部分设备（尤其配合动态壁纸）背景错位/黑块的根因。
 
@@ -539,8 +539,62 @@ public static class Native
 		public int Bottom;
 	}
 
+	// EnumDisplaySettingsW 所需最小 DEVMODE（dmSize 必须由调用方填成结构体大小；
+	// dmDisplayFrequency>1 才是有效刷新率，1 表示可变刷新率占位）。
+	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+	public struct DEVMODE
+	{
+		[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+		public string dmDeviceName;
+		public ushort dmSpecVersion;
+		public ushort dmDriverVersion;
+		public ushort dmSize;
+		public ushort dmDriverExtra;
+		public uint dmFields;
+		public int dmPositionX;
+		public int dmPositionY;
+		public uint dmDisplayOrientation;
+		public uint dmDisplayFixedOutput;
+		public short dmColor;
+		public short dmDuplex;
+		public short dmYResolution;
+		public short dmTTOption;
+		public short dmCollate;
+		[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+		public string dmFormName;
+		public ushort dmLogPixels;
+		public uint dmBitsPerPel;
+		public uint dmPelsWidth;
+		public uint dmPelsHeight;
+		public uint dmDisplayFlags;
+		public uint dmDisplayFrequency;
+		public uint dmICMMethod;
+		public uint dmICMIntent;
+		public uint dmMediaType;
+		public uint dmDitherType;
+		public uint dmReserved1;
+		public uint dmReserved2;
+		public uint dmPanningWidth;
+		public uint dmPanningHeight;
+	}
+
 	[DllImport("user32.dll", SetLastError = true)]
 	public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+	/// <summary>WinEvent 回调：EVENT_SYSTEM_FOREGROUND 前台窗口变化通知。</summary>
+	public delegate void WinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
+
+	[DllImport("user32.dll")]
+	public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+	[DllImport("user32.dll")]
+	public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+	[DllImport("user32.dll")]
+	public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+	[DllImport("user32.dll")]
+	public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
 
 	[DllImport("user32.dll")]
 	public static extern int GetDpiForWindow(IntPtr hWnd);

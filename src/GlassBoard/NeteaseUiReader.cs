@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -266,7 +266,6 @@ public sealed class NeteaseUiReader
 		}
 		return mediaSnapshot;
 	}
-
 	public static int Run()
 	{
 		int code = 0;

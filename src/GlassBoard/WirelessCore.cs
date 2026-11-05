@@ -396,6 +396,42 @@ public static class WirelessCore
 		return set;
 	}
 
+	// 当前已连接 Wi-Fi 的 SSID（带 10 秒缓存：灵动岛控制页 1.5s 轮询调用，
+	// 枚举网络列表较重，缓存避免频繁开销；连接/断开/开关 Wi-Fi 后由 InvalidateSsidCache 失效）
+	private static string cachedSsid;
+	private static DateTime cachedSsidAt = DateTime.MinValue;
+
+	public static string CurrentSsid()
+	{
+		if (cachedSsidAt.AddSeconds(10) > DateTime.Now)
+		{
+			return cachedSsid;
+		}
+		string ssid = null;
+		try
+		{
+			foreach (WifiNetwork n in Networks())
+			{
+				if (n.Connected)
+				{
+					ssid = n.Ssid;
+					break;
+				}
+			}
+		}
+		catch
+		{
+		}
+		cachedSsid = ssid;
+		cachedSsidAt = DateTime.Now;
+		return ssid;
+	}
+
+	public static void InvalidateSsidCache()
+	{
+		cachedSsidAt = DateTime.MinValue;
+	}
+
 	// 按真实 SSID 找到系统里对应的配置文件名称（切换连接用）
 	private static string FindProfileName(IntPtr client, ref Guid iface, string target)
 	{

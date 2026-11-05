@@ -91,6 +91,13 @@ public class DockOptions
 	[DataMember]
 	public bool ShowSettings = false;
 
+	// 桌面图标开关 + 游戏模式：不受收纳整合影响，可各自独立开启
+	[DataMember]
+	public bool ShowDesktopIcons = true;
+
+	[DataMember]
+	public bool ShowGameMode = true;
+
 	[DataMember]
 	public List<string> ItemOrder = new List<string>();
 
@@ -102,6 +109,10 @@ public class DockOptions
 
 	[DataMember]
 	public bool SharperIcons;
+
+	// 点击波纹：按下图标时从点击点扩散的圆形水波
+	[DataMember]
+	public bool IconRipple = true;
 
 	[DataMember]
 	public MaterialOptions Material = new MaterialOptions();
@@ -140,6 +151,8 @@ public class DockOptions
 		AlwaysOnTop = false;
 		MotionEnabled = true;
 		ShowSettings = false;
+		ShowDesktopIcons = true;
+		ShowGameMode = true;
 		ShowControlCenter = true;
 		ShowRunningList = true;
 		IconPack = 0;
@@ -150,6 +163,7 @@ public class DockOptions
 		SpringReveal = true;
 		ShowShortcutOverlays = false;
 		SharperIcons = false;
+		IconRipple = true;
 		HideDelay = 900.0;
 		EdgeRange = 12.0;
 		BlurRadius = 18.0;
@@ -197,12 +211,13 @@ public class DockOptions
 
 	public int SystemCount()
 	{
+		int quick = (ShowDesktopIcons ? 1 : 0) + (ShowGameMode ? 1 : 0);
 		if (Consolidate)
 		{
-			// 收纳开启：Dock 上只剩应用面板 + 控制中心 + 运行列表
-			return 1 + (ShowControlCenter ? 1 : 0) + (ShowRunningList ? 1 : 0);
+			// 收纳开启：Dock 上只剩应用面板 + 控制中心 + 运行列表（快捷功能不受收纳影响）
+			return 1 + (ShowControlCenter ? 1 : 0) + (ShowRunningList ? 1 : 0) + quick;
 		}
-		return 1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 1 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0);
+		return 1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 1 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0) + quick;
 	}
 
 	public int VisiblePinned(double availableWidth, int count)

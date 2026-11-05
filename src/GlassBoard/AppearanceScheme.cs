@@ -57,6 +57,10 @@ public class AppearanceScheme
 	[DataMember(EmitDefaultValue = false)]
 	public List<string> DockOrder;
 
+	// 灵动岛外观（可空）：旧方案没有该字段，Apply 时保持当前设置不变。
+	[DataMember(EmitDefaultValue = false)]
+	public IslandOptions Island;
+
 	[DataMember]
 	public Dictionary<string, string> Icons = new Dictionary<string, string>();
 

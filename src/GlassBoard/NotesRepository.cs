@@ -15,6 +15,11 @@ public sealed class NotesRepository : IDisposable
 		Interval = TimeSpan.FromMilliseconds(650.0)
 	};
 
+	private readonly DispatcherTimer remind = new DispatcherTimer
+	{
+		Interval = TimeSpan.FromSeconds(30)
+	};
+
 	private bool dirty;
 
 	public NoteBook Book;
@@ -31,6 +36,36 @@ public sealed class NotesRepository : IDisposable
 			timer.Stop();
 			Flush();
 		};
+		// 提醒调度：每 30 秒检查一次到期的随手记，通过灵动岛通知通道弹卡。
+		remind.Tick += (object s, EventArgs e) =>
+		{
+			try
+			{
+				long now = DateTime.UtcNow.Ticks;
+				foreach (NoteItem n in Book.Items)
+				{
+					if (n.RemindAt > 0 && n.RemindAt <= now)
+					{
+						n.RemindAt = 0;
+						Changed();
+						Flush();
+						IslandNotifications.Push(new IslandNotification
+						{
+							AppName = "随手记",
+							Title = "提醒 · " + n.DisplayTitle,
+							Body = string.IsNullOrWhiteSpace(n.Body) ? "（无内容）" : (n.Body.Length > 200 ? n.Body.Substring(0, 200) : n.Body),
+							Stamp = DateTime.Now,
+							AlwaysFresh = true
+						});
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Store.Log(ex);
+			}
+		};
+		remind.Start();
 	}
 
 	private NoteBook Load()
@@ -117,6 +152,7 @@ public sealed class NotesRepository : IDisposable
 	public void Dispose()
 	{
 		timer.Stop();
+		remind.Stop();
 		Flush();
 	}
 }

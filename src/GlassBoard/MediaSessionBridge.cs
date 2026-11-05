@@ -120,12 +120,25 @@ public sealed class MediaSessionBridge : IDisposable
 		string text = (nativeOnly ? "NativeMediaBridge.ps1" : "MediaBridge.ps1");
 		string location = Assembly.GetExecutingAssembly().Location;
 		string text2 = "GlassBoard." + text;
-		string s;
+		string script;
 		using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(text2))
 		{
 			if (stream != null)
 			{
-				s = "$a=[Reflection.Assembly]::LoadFile('" + location.Replace("'", "''") + "');$r=New-Object IO.StreamReader($a.GetManifestResourceStream('" + text2 + "'));try{$s=$r.ReadToEnd()}finally{$r.Dispose()};& ([ScriptBlock]::Create($s))";
+				// 用临时文件 + -File 启动：-EncodedCommand 路径在部分环境会使 WinRT 会话枚举返回空（GetCurrentSession 失效）
+				string tmp = Path.Combine(Path.GetTempPath(), "GlassBoard-" + text);
+				try
+				{
+					using (StreamReader reader = new StreamReader(stream))
+					{
+						File.WriteAllText(tmp, reader.ReadToEnd(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+					}
+				}
+				catch (Exception ex)
+				{
+					throw new IOException("音乐读取模块写入临时目录失败：" + tmp + "：" + ex.Message, ex);
+				}
+				script = tmp;
 			}
 			else
 			{
@@ -134,13 +147,13 @@ public sealed class MediaSessionBridge : IDisposable
 				{
 					throw new FileNotFoundException("音乐读取模块缺失；主程序内置模块和外部脚本均不可用：" + text3, text3);
 				}
-				s = "& '" + text3.Replace("'", "''") + "'";
+				script = text3;
 			}
 		}
 		ProcessStartInfo processStartInfo = new ProcessStartInfo
 		{
 			FileName = (neteaseOnly ? location : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe")),
-			Arguments = (neteaseOnly ? "--netease-ui-bridge" : ("-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(s)))),
+			Arguments = (neteaseOnly ? "--netease-ui-bridge" : ("-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script.Replace("\"", "\\\"") + "\"")),
 			UseShellExecute = false,
 			CreateNoWindow = true,
 			RedirectStandardInput = true,

@@ -259,6 +259,26 @@ public static class OnlineUpdate
 		return info == null ? "" : (info.TagName ?? "");
 	}
 
+	// 启动自动检查用的托盘提示文案：区分「主更新」（版本号更高）与「次更新」
+	// （同版本号的新构建，包含最新修复）；无更新返回 (null, null)。
+	public static async Task<(string title, string body)> AutoUpdateNoticeAsync()
+	{
+		ReleaseInfo info = await LatestAvailableAsync();
+		if (info == null || string.IsNullOrEmpty(info.TagName))
+		{
+			return (null, null);
+		}
+		string tag = info.TagName.TrimStart('v', 'V');
+		string summary = ReleaseNotesSummary(info, 200);
+		string body = string.IsNullOrEmpty(summary) ? "设置 → 通用 → 检查更新，一键升级到最新版。" : summary;
+		int cmp = CompareVersion(info.TagName, CurrentVersion());
+		if (cmp > 0)
+		{
+			return ("发现主更新 v" + tag, body);
+		}
+		return ("发现次更新 v" + tag + "（同版本号新构建，含最新修复）", body);
+	}
+
 	// WPF 的 MessageBox.Show(owner=null, …) 会抛 ArgumentNullException("window")；
 	// 托盘菜单调用时没有所属窗口，走无 owner 重载。
 	private static MessageBoxResult ShowDialog(Window owner, string text, string caption, MessageBoxButton buttons = MessageBoxButton.OK)
@@ -306,8 +326,8 @@ public static class OnlineUpdate
 			string notes = ReleaseNotesSummary(info, 400);
 			string noteBlock = string.IsNullOrEmpty(notes) ? "" : ("\n\n更新内容：\n" + notes);
 			string prompt = (cmp > 0)
-				? ("发现新版本 v" + tag + noteBlock + "\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？")
-				: ("发现 v" + tag + " 的新构建（同版本号，包含最新修复）。" + noteBlock + "\n\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？");
+				? ("发现主更新 v" + tag + noteBlock + "\n\n主更新：新版本号，功能与修复较多，建议尽快更新。\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？")
+				: ("发现次更新 v" + tag + "（同版本号新构建，包含最新修复）。" + noteBlock + "\n\n次更新：同版本号的最新构建，改动较小。\n更新只替换程序文件，配置与自定义图标不受影响。\n现在下载并更新？");
 			if (ShowDialog(owner, prompt, "GlassBoard-Source 在线更新", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
 			{
 				Set("已取消更新，当前版本 v" + current + "。");

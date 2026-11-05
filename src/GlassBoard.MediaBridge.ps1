@@ -53,9 +53,9 @@ function Initialize-MediaManager {
     $script:asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
         $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
     } | Select-Object -First 1
-    function script:Await($operation, $resultType) {
+    function script:Await($operation, $resultType, $timeoutMs = 4000) {
         $task = $asTask.MakeGenericMethod($resultType).Invoke($null, @($operation))
-        if (-not $task.Wait(4000)) { throw 'Media operation timed out' }
+        if (-not $task.Wait($timeoutMs)) { throw 'Media operation timed out' }
         return $task.Result
     }
     # 精简版/非零售版 Windows 上 RequestAsync 可能返回 null（媒体组件缺失）：
@@ -113,7 +113,7 @@ while ($null -ne ($line = [Console]::ReadLine())) {
             if ($null -ne $current) {
                 $pb0 = $current.GetPlaybackInfo()
                 $t0 = [string]$pb0.PlaybackType
-                if (($t0 -eq 'Music' -or $t0 -eq 'Unknown' -or $t0 -eq '') -and [string]$current.SourceAppUserModelId -notmatch $blockPattern) { $session = $current }
+                if (($t0 -eq 'Music' -or $t0 -eq 'Unknown' -or $t0 -eq '') -and [string]$current.SourceAppUserModelId -notmatch $blockPattern -and [string]$pb0.PlaybackStatus -eq 'Playing') { $session = $current }
             }
         } catch { }
         if ($null -eq $session) {
@@ -143,7 +143,14 @@ while ($null -ne ($line = [Console]::ReadLine())) {
             $result = $true
             $properties = $null
             $metadataStatus='OK'
-            try { $properties = Await ($session.TryGetMediaPropertiesAsync()) $propertiesType } catch { $metadataStatus=$_.Exception.GetBaseException().Message }
+            try { $properties = Await ($session.TryGetMediaPropertiesAsync()) $propertiesType } catch {
+                # 切歌/启动瞬间播放器忙，首次读取常超时：稍候重试一次，避免整次轮询因此丢封面
+                try { $properties = Await ($session.TryGetMediaPropertiesAsync()) $propertiesType; $metadataStatus='OK' } catch { $metadataStatus=$_.Exception.GetBaseException().Message }
+            }
+            if ($null -eq $properties) {
+                $lastCoverKey = ''; $cover = ''
+                $reply = @{Available=$false; Status='Media properties unavailable: ' + $metadataStatus; Cover=''}
+            } else {
             $key = [string]$session.SourceAppUserModelId + '|' + [string]$properties.Title + '|' + [string]$properties.Artist + '|' + [string]$properties.AlbumTitle
             $playback = $session.GetPlaybackInfo()
             $timeline = Get-TimelineSafely $session ([bool]$request.CoverOnly)
@@ -181,7 +188,16 @@ while ($null -ne ($line = [Console]::ReadLine())) {
                 'previous' { $result = Await ($session.TrySkipPreviousAsync()) ([bool]) }
                 'next' { $result = Await ($session.TrySkipNextAsync()) ([bool]) }
                 'seek' {
-                    if ($request.Key -and [string]$request.Key -ne $key) { $result=$false }
+                    $seekFailed = $false
+                    # 部分播放器元数据是异步发布的：请求端保存的 Key（上一次轮询）与本次
+                    # 现场计算的 $key 可能只在标题/歌手上有差异。全等比较会永远拒绝跳转。
+                    # 按来源(AUMID)前缀放宽匹配；来源不同仍拒绝，避免把跳转发到别的播放器。
+                    if ($request.Key) {
+                        $reqSource = ([string]$request.Key).Split('|')[0]
+                        $curSource = ([string]$key).Split('|')[0]
+                        if ($reqSource -ne $curSource) { $result=$false; $seekFailed = $true }
+                    }
+                    if ($seekFailed) { }
                     elseif ($duration -le 0 -or (-not $playback.Controls.IsPlaybackPositionEnabled -and -not $nativeSeek)) { $result=$false }
                     else {
                         $seconds = [Math]::Max($minimum, [Math]::Min($maximum, [double]$request.Seconds))
@@ -216,7 +232,7 @@ while ($null -ne ($line = [Console]::ReadLine())) {
                 if ($null -ne $properties.Thumbnail) {
                     $winStream=$null; $reader=$null
                     try {
-                        $winStream=Await ($properties.Thumbnail.OpenReadAsync()) $streamType
+                        $winStream=Await ($properties.Thumbnail.OpenReadAsync()) $streamType 8000
                         if ($winStream.Size -gt 0 -and $winStream.Size -le 8388608) {
                             $readerType=[Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType=WindowsRuntime]
                             $reader=$readerType::new($winStream.GetInputStreamAt(0))
@@ -244,6 +260,7 @@ while ($null -ne ($line = [Console]::ReadLine())) {
             }
             if($request.Command -eq 'cover' -and -not $newCover){$newCover=$cover}
             $reply = @{Available=$true; Status=($(if($result){'OK'}else{'Player did not accept this action'})); Title=[string]$properties.Title; Artist=[string]$properties.Artist; Album=[string]$properties.AlbumTitle; Source=[string]$session.SourceAppUserModelId; Key=$key; Cover=$newCover; Playing=([string]$playback.PlaybackStatus -eq 'Playing'); Position=$position; Duration=$duration; Age=$age; Rate=$rate; MinSeek=$minimum; MaxSeek=$maximum; Backend=$backend; MetadataStatus=$metadataStatus; TimelineStatus=($(if($timeline.Error){[string]$timeline.Error}else{'OK'})); CoverStatus=$coverStatus; CanSeek=((([bool]$playback.Controls.IsPlaybackPositionEnabled) -or $nativeSeek) -and $duration -gt 0); CanPrevious=[bool]$playback.Controls.IsPreviousEnabled; CanNext=[bool]$playback.Controls.IsNextEnabled; CanToggle=([bool]$playback.Controls.IsPlayEnabled -or [bool]$playback.Controls.IsPauseEnabled)}
+            }
         }
     } catch { $reply = @{Available=$false; Status=$_.Exception.GetBaseException().Message; Cover=''} }
     [Console]::WriteLine(($reply | ConvertTo-Json -Compress -Depth 4))

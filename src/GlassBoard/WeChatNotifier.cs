@@ -199,6 +199,9 @@ namespace GlassBoard
 						{
 							Store.Trace("WEIXIN shellflash → badge on (pid=" + pid + ")");
 							DispatchBadge(true, true);
+							// 灵动岛通知：微信不弹气泡，只能靠任务栏闪烁。尝试读主窗口
+							// 最新会话的发送人；读不到就显示“你有一条微信通知”。
+							TryPushWechatIsland(flashHwnd);
 						}
 					}
 					catch (Exception ex)
@@ -519,6 +522,7 @@ namespace GlassBoard
 							return;
 						}
 						badgeLitByUs = false;
+						wxMsgCount = 0; // 用户已处理消息：重置未读计数
 					}
 					Store.Trace("WEIXIN foreground 1.5s → badge off");
 					DispatchBadge(false, false);
@@ -658,9 +662,41 @@ namespace GlassBoard
 			}
 		}
 
-		// 在 Dock 入口快照里找微信入口（目标 exe 为 Weixin.exe 的快捷方式，或名为微信/Weixin 的入口）
-		private static string ResolveWeChatPath()
+		// —— 灵动岛通知：微信不弹气泡，靠任务栏闪烁推“你有一条微信通知” ——
+		// 闪烁会连续重复多次，用 2.5 秒间隔区分“同一条消息的连续闪烁”与“新消息”。
+		// 不读取主窗口会话列表：读到的可能是用户选中的聊天对象而不是发送人，宁缺毋滥。
+		private static long lastFlashTick;
+		private static int wxMsgCount;
+
+		private static void TryPushWechatIsland(IntPtr flashHwnd)
 		{
+			int now = Environment.TickCount;
+			string title;
+			lock (gate)
+			{
+				bool newBurst = now - (int)lastFlashTick > 2500;
+				lastFlashTick = now;
+				if (!newBurst)
+				{
+					return; // 同一条消息的重复闪烁
+				}
+				wxMsgCount++;
+				title = wxMsgCount <= 1 ? "你有一条微信通知" : "你有 " + wxMsgCount + " 条微信通知";
+			}
+			Store.Trace("WEIXIN island push count=" + wxMsgCount);
+			IslandNotifications.Push(new IslandNotification
+			{
+				AppName = "微信",
+				Aumid = "popup:weixin",
+				Title = title,
+				Body = "",
+				Stamp = DateTime.Now,
+				AlwaysFresh = true // 闪烁通道已按 2.5s 突发去重，这里不再合并
+			});
+		}
+
+		// 在 Dock 入口快照里找微信入口（目标 exe 为 Weixin.exe 的快捷方式，或名为微信/Weixin 的入口）
+		private static string ResolveWeChatPath()		{
 			lock (gate)
 			{
 				int now = Environment.TickCount;

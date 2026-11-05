@@ -20,7 +20,12 @@ public static class DockLayoutRules
 
 	public const string Settings = "glassboard://dock/settings";
 
-	public static readonly string[] SystemKeys = new string[7] { "glassboard://dock/apps", "glassboard://dock/computer", "glassboard://dock/control", "glassboard://dock/power", "glassboard://dock/network", "glassboard://dock/settings", "glassboard://dock/running" };
+	// 快捷功能：不受收纳整合影响，可独立开启
+	public const string DesktopIcons = "glassboard://dock/desktop-icons";
+
+	public const string GameMode = "glassboard://dock/gamemode";
+
+	public static readonly string[] SystemKeys = new string[9] { "glassboard://dock/apps", "glassboard://dock/computer", "glassboard://dock/control", "glassboard://dock/power", "glassboard://dock/network", "glassboard://dock/settings", "glassboard://dock/running", "glassboard://dock/desktop-icons", "glassboard://dock/gamemode" };
 
 	public static bool SystemItem(string key)
 	{
@@ -45,6 +50,10 @@ public static class DockLayoutRules
 			return o.ShowRunningList;
 		case "glassboard://dock/settings":
 			return !folded && o.ShowSettings;
+		case "glassboard://dock/desktop-icons":
+			return o.ShowDesktopIcons;
+		case "glassboard://dock/gamemode":
+			return o.ShowGameMode;
 		default:
 			return true;
 		}

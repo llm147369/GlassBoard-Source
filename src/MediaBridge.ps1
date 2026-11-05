@@ -1,4 +1,4 @@
-﻿# GlassBoard media-session bridge. No network or account access.
+# GlassBoard media-session bridge. No network or account access.
 param([switch]$NoNative)
 $bridgeRoot=[Environment]::GetEnvironmentVariable('GLASSBOARD_HOME')
 if(-not $bridgeRoot){$bridgeRoot=Split-Path $PSScriptRoot -Parent}
@@ -53,9 +53,9 @@ function Initialize-MediaManager {
     $script:asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
         $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
     } | Select-Object -First 1
-    function script:Await($operation, $resultType) {
+    function script:Await($operation, $resultType, $timeoutMs = 4000) {
         $task = $asTask.MakeGenericMethod($resultType).Invoke($null, @($operation))
-        if (-not $task.Wait(4000)) { throw 'Media operation timed out' }
+        if (-not $task.Wait($timeoutMs)) { throw 'Media operation timed out' }
         return $task.Result
     }
     $script:manager = Await ($managerType::RequestAsync()) $managerType
@@ -75,9 +75,12 @@ while ($null -ne ($line = [Console]::ReadLine())) {
         $currentPlaying=$false;try{$currentPlaying=$null -ne $session -and [string]$session.GetPlaybackInfo().PlaybackStatus -eq 'Playing'}catch{}
         # Prefer a playing session over an inactive browser or stale current session.
         if (-not $currentPlaying) {
-            foreach ($candidate in $manager.GetSessions()) {
-                try { if ([string]$candidate.GetPlaybackInfo().PlaybackStatus -eq 'Playing') { $session = $candidate; break } } catch { }
-            }
+            try {
+                $sessionList = Await ($manager.GetSessions()) ([System.Collections.Generic.IReadOnlyList[Windows.Media.Control.GlobalSystemMediaTransportControlsSession]])
+                foreach ($candidate in $sessionList) {
+                    try { if ([string]$candidate.GetPlaybackInfo().PlaybackStatus -eq 'Playing') { $session = $candidate; break } } catch { }
+                }
+            } catch { }
         }
         if ($null -eq $session) {
             $lastCoverKey = ''; $cover = ''
@@ -86,7 +89,14 @@ while ($null -ne ($line = [Console]::ReadLine())) {
             $result = $true
             $properties = $null
             $metadataStatus='OK'
-            try { $properties = Await ($session.TryGetMediaPropertiesAsync()) $propertiesType } catch { $metadataStatus=$_.Exception.GetBaseException().Message }
+            try { $properties = Await ($session.TryGetMediaPropertiesAsync()) $propertiesType } catch {
+                # 切歌/启动瞬间播放器忙，首次读取常超时：稍候重试一次，避免整次轮询因此丢封面
+                try { $properties = Await ($session.TryGetMediaPropertiesAsync()) $propertiesType; $metadataStatus='OK' } catch { $metadataStatus=$_.Exception.GetBaseException().Message }
+            }
+            if ($null -eq $properties) {
+                $reply = @{Available=$false; Status='Media properties unavailable: '+$metadataStatus; Cover=''}
+                [Console]::WriteLine(($reply | ConvertTo-Json -Compress -Depth 4)); [Console]::Out.Flush(); continue
+            }
             $key = [string]$session.SourceAppUserModelId + '|' + [string]$properties.Title + '|' + [string]$properties.Artist + '|' + [string]$properties.AlbumTitle
             $playback = $session.GetPlaybackInfo()
             $timeline = Get-TimelineSafely $session ([bool]$request.CoverOnly)
@@ -159,7 +169,8 @@ while ($null -ne ($line = [Console]::ReadLine())) {
                 if ($null -ne $properties.Thumbnail) {
                     $winStream=$null; $reader=$null
                     try {
-                        $winStream=Await ($properties.Thumbnail.OpenReadAsync()) $streamType
+                        # 封面流常比元数据慢（云歌单远程图），给更长超时，减少偶发取不到
+                        $winStream=Await ($properties.Thumbnail.OpenReadAsync()) $streamType 8000
                         if ($winStream.Size -gt 0 -and $winStream.Size -le 8388608) {
                             $readerType=[Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType=WindowsRuntime]
                             $reader=$readerType::new($winStream.GetInputStreamAt(0))

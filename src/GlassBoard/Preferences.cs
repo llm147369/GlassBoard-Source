@@ -49,6 +49,10 @@ public class Preferences
 	[DataMember]
 	public bool HideTaskbar;
 
+	// 进入游戏模式前隐藏任务栏为开：游戏模式期间暂时显示任务栏，退出后恢复隐藏
+	[DataMember(EmitDefaultValue = false)]
+	public bool GameModeRevealTaskbar;
+
 	[DataMember]
 	public bool HideDesktopIcons;
 
@@ -108,6 +112,16 @@ public class Preferences
 
 	[DataMember(EmitDefaultValue = false)]
 	public ControlCenterOptions ControlCenter = new ControlCenterOptions();
+
+	// 灵动岛：整块外观与功能开关都由 IslandOptions 管理，与 Dock/面板互不影响。
+	// 旧配置没有此字段时反序列化为 null，Normalize() 里补齐默认值。
+	[DataMember(EmitDefaultValue = false)]
+	public IslandOptions Island = new IslandOptions();
+
+	// 桌面壁纸：本地导入 + 官方图库 + 开机恢复，样式与系统还原记录都由 WallpaperOptions 管理。
+	// 旧配置没有此字段时反序列化为 null，Normalize() 里补齐默认值。
+	[DataMember(EmitDefaultValue = false)]
+	public WallpaperOptions Wallpaper = new WallpaperOptions();
 
 	[DataMember(EmitDefaultValue = false)]
 	public Dictionary<string, string> SystemIconGlyphs;
@@ -240,5 +254,15 @@ public class Preferences
 			Widgets = new WidgetOptions();
 		}
 		Widgets.Normalize();
+		if (Island == null)
+		{
+			Island = new IslandOptions();
+		}
+		Island.Normalize();
+		if (Wallpaper == null)
+		{
+			Wallpaper = new WallpaperOptions();
+		}
+		Wallpaper.Normalize();
 	}
 }

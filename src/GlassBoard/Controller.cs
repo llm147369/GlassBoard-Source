@@ -64,6 +64,9 @@ public class Controller
 
 	private WidgetManager widgets;
 
+	// 灵动岛：协调器（延迟到 CompleteDeferredStartup 创建）
+	private IslandHub islandHub;
+
 	public ControlCenterWindow ControlCenter;
 
 	public bool CanUndoRemoval => editHistory.CanUndo;
@@ -76,6 +79,45 @@ public class Controller
 
 	public string UndoLabel => editHistory.UndoLabel;
 
+	// 供灵动岛复用的音乐引擎（WidgetManager 拥有；不新建轮询）
+	public MusicEngine Music
+	{
+		get
+		{
+			if (widgets != null)
+			{
+				return widgets.Music;
+			}
+			return null;
+		}
+	}
+
+	// 供灵动岛复用的天气引擎（WidgetManager 拥有；不新建轮询）
+	public WeatherEngine Weather
+	{
+		get
+		{
+			if (widgets != null)
+			{
+				return widgets.Weather;
+			}
+			return null;
+		}
+	}
+
+	// 供灵动岛复用的随手记（WidgetManager 拥有；不新建轮询）
+	public NotesRepository Notes
+	{
+		get
+		{
+			if (widgets != null)
+			{
+				return widgets.Notes;
+			}
+			return null;
+		}
+	}
+
 	public bool MusicVisible
 	{
 		get
@@ -85,6 +127,30 @@ public class Controller
 				return widgets.MusicVisible;
 			}
 			return false;
+		}
+	}
+
+	// 音乐引擎是否仍被需要：桌面音乐组件开启，或灵动岛收起条/音乐页任一开启。
+	// WidgetManager 只在“谁都不需要”时才销毁引擎，否则灵动岛会被连带停掉。
+	public bool MusicNeeded
+	{
+		get
+		{
+			bool islandNeeds = false;
+			if (Prefs.Island != null)
+			{
+				islandNeeds = Prefs.Island.ShowMusic || Prefs.Island.ShowMusicPage;
+			}
+			return Prefs.Widgets.Music || islandNeeds;
+		}
+	}
+
+	// WidgetManager 重建/销毁音乐引擎后调用，让灵动岛重新绑定当前实例。
+	public void ReattachMusic()
+	{
+		if (islandHub != null && widgets != null)
+		{
+			islandHub.AttachMusic(widgets.Music);
 		}
 	}
 
@@ -170,6 +236,33 @@ public class Controller
 		Store.Trace("START phase=watcher ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		EnsureSystemEntries();
 		ApplyShellPreferences();
+		try
+		{
+			// 开机恢复用户设置的壁纸（文件已被移动/删除时保持现状，不打扰）。
+			// 放在后台线程：explorer 设置大图需要转码，主线程执行会拖慢启动。
+			Prefs.Wallpaper?.Normalize();
+			if (Prefs.Wallpaper != null && Prefs.Wallpaper.Enabled && (Prefs.Wallpaper.AutoRestore ?? true) && !string.IsNullOrEmpty(Prefs.Wallpaper.Path) && File.Exists(Prefs.Wallpaper.Path))
+			{
+				string wallpaperPath = Prefs.Wallpaper.Path;
+				int wallpaperStyle = Prefs.Wallpaper.Style;
+				System.Threading.Tasks.Task.Run(delegate
+				{
+					try
+					{
+						WallpaperCore.Apply(wallpaperPath, wallpaperStyle);
+						Store.Trace("START phase=wallpaper ms=" + (Environment.TickCount - Program.ProcessStartTick));
+					}
+					catch (Exception ex)
+					{
+						Store.Log(ex);
+					}
+				});
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 		// 桌面图标与桌面右键菜单状态同步：右键切换「显示桌面图标」时，以系统实际状态为准
 		// 更新偏好与设置界面开关；维护循环常驻监听（2 秒间隔，仅读注册表，开销可忽略）。
 		DesktopVisibility.ExternalIconsChange = (bool hidden) =>
@@ -263,6 +356,16 @@ public class Controller
 		{
 			Store.Log(ex);
 		}
+		try
+		{
+			// 聊天软件消息气泡实时读取（微信/QQ/钉钉/飞书/Telegram 等），推送到灵动岛通知。
+			// 文字只进内存通知列表，绝不写日志。
+			ChatPopupReader.Start();
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 		Store.Trace("START phase=services ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		if (Prefs.HotkeyMigrationConflict)
 		{
@@ -270,6 +373,20 @@ public class Controller
 			Save();
 		}
 		RefreshWidgets();
+		try
+		{
+			// 灵动岛：独立的窗口与协调器；音乐复用 WidgetManager 的 MusicEngine。
+			islandHub = new IslandHub(this);
+			islandHub.Start();
+			if (widgets != null && widgets.Music != null)
+			{
+				islandHub.AttachMusic(widgets.Music);
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex); // 灵动岛失败不影响 Dock/主界面
+		}
 		if (!Prefs.Imported)
 		{
 			Toggle(force: true);
@@ -373,6 +490,10 @@ public class Controller
 			{
 				Prefs.AutoGameMode = false;
 				Prefs.GameMode = false;
+				if (Prefs.GameModeRevealTaskbar)
+				{
+					RestoreTaskbarAfterGameMode();
+				}
 				Save();
 				ApplyGameMode();
 				RefreshTrayMenu();
@@ -417,6 +538,10 @@ public class Controller
 		contextMenuStrip2.Items.Add("恢复并开启全部组件", null, (object s, EventArgs e) =>
 		{
 			RecoverWidgets();
+		});
+		contextMenuStrip2.Items.Add("灵动岛  " + (Prefs.Island != null && Prefs.Island.Enabled ? "●" : "○"), null, (object s, EventArgs e) =>
+		{
+			ToggleIsland();
 		});
 		string[] kinds = WidgetRules.Kinds;
 		foreach (string text in kinds)
@@ -479,11 +604,10 @@ public class Controller
 			}
 			Prefs.LastUpdateCheckUtc = now;
 			Save();
-			OnlineUpdate.ReleaseInfo update = await OnlineUpdate.LatestAvailableAsync();
-			if (update != null)
+			(string title, string body) notice = await OnlineUpdate.AutoUpdateNoticeAsync();
+			if (notice.title != null)
 			{
-				string summary = OnlineUpdate.ReleaseNotesSummary(update, 200);
-				Tray.ShowBalloonTip(6000, "发现新版本 v" + update.TagName.TrimStart('v', 'V'), string.IsNullOrEmpty(summary) ? "设置 → 通用 → 检查更新，一键升级到最新版。" : summary, ToolTipIcon.Info);
+				Tray.ShowBalloonTip(6000, notice.title, notice.body, ToolTipIcon.Info);
 			}
 		}
 		catch
@@ -542,6 +666,62 @@ public class Controller
 				ControlCenter = new ControlCenterWindow(this);
 			}
 			ControlCenter.Toggle();
+		}
+	}
+
+	// 灵动岛开关（托盘菜单/快捷键入口）
+	public void ToggleIsland()
+	{
+		try
+		{
+			if (islandHub == null)
+			{
+				islandHub = new IslandHub(this);
+				islandHub.Start();
+			}
+			Prefs.Island = Prefs.Island ?? new IslandOptions();
+			Prefs.Island.Normalize();
+			if (!Prefs.Island.Enabled)
+			{
+				Prefs.Island.Enabled = true;
+				Save();
+			}
+			islandHub.OnPrefsChanged();
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+	}
+
+	// 设置页实时应用灵动岛样式（不改 Dock/面板）
+	internal void ApplyIslandLive()
+	{
+		try
+		{
+			Prefs.Island?.Normalize();
+			islandHub?.OnPrefsChanged();
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+	}
+
+	// 设置页实时应用壁纸（不改 Dock/面板等其它配置）
+	internal void ApplyWallpaperLive()
+	{
+		try
+		{
+			Prefs.Wallpaper?.Normalize();
+			if (Prefs.Wallpaper != null && Prefs.Wallpaper.Enabled && !string.IsNullOrEmpty(Prefs.Wallpaper.Path) && File.Exists(Prefs.Wallpaper.Path))
+			{
+				WallpaperCore.Apply(Prefs.Wallpaper.Path, Prefs.Wallpaper.Style);
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
 		}
 	}
 
@@ -1747,7 +1927,7 @@ public class Controller
 			{
 				if (selectedPage >= 0 && settingsTabs != null)
 				{
-					settingsTabs.SelectedIndex = Math.Max(0, Math.Min(7, selectedPage));
+					settingsTabs.SelectedIndex = Math.Max(0, Math.Min(8, selectedPage));
 				}
 				// 与 Dock 其它图标一致：设置窗口在前台时再点 → 最小化；否则恢复并激活。
 				// 显式指定页面（selectedPage>=0）时总是恢复并激活，不做最小化。
@@ -1822,7 +2002,7 @@ public class Controller
 		};
 		try
 		{
-			Board.Hide();
+			Board.HideWithConsent();
 			Window w = new Window
 			{
 				Title = "GlassBoard-Source · 个性化与控制 v0.9.20.41",
@@ -1973,21 +2153,18 @@ public class Controller
 			UsageGuide.Build(tabs);
 			tabs.SelectionChanged += (object ss, SelectionChangedEventArgs ee) =>
 			{
-				if (tabs.SelectedIndex == 6)
+				if (tabs.SelectedIndex == 8)
 				{
 					loadCreator();
 				}
 			};
-			tabs.SelectedIndex = Math.Max(0, Math.Min(6, selectedPage));
-			if (tabs.SelectedIndex == 6)
-			{
-				loadCreator();
-			}
 			DockOptions draft = Prefs.Dock.Copy();
 			bool loading = false;
 			preview.Tick += (object s, EventArgs e) =>
 			{
 				preview.Stop();
+				// 完整实时刷新：尺寸类滑块（图标大小/间距/缩放）需要连窗口宽高和图标行
+				// 一起重算重建才能看到即时效果；capture:false 表示不重捕背景玻璃（不闪烁）。
 				Dock.Refresh(capture: false);
 			};
 			Action live = () =>
@@ -2074,6 +2251,74 @@ public class Controller
 				};
 				return control;
 			};
+			// —— “个性化 → 灵动岛”设置页：插到“面板与主题”之后，全部设置只作用于灵动岛 ——
+			{
+				Border islandBorder = Polish.Section("灵动岛", "顶部居中的动态浮层：音乐、电量、通知、剪贴板与快捷控制。所有调整仅影响灵动岛，实时生效。", light: false);
+				StackPanel islandInner = (StackPanel)islandBorder.Child;
+				TextElement.SetForeground(islandInner, System.Windows.Media.Brushes.White);
+				StackPanel islandWrap = new StackPanel
+				{
+					Margin = new Thickness(10.0, 8.0, 0.0, 8.0)
+				};
+				islandWrap.Children.Add(islandBorder);
+				TabItem islandTab = new TabItem
+				{
+					Header = "灵动岛",
+					Content = new ScrollViewer
+					{
+						Content = islandWrap,
+						VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+						HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+					}
+				};
+				tabs.Items.Insert(1, islandTab);
+				try
+				{
+					IslandSettingsUi.Build(islandInner, this, light: false, func2, func3, func4, ApplyIslandLive);
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
+			}
+			// —— “个性化 → 壁纸”设置页：插到“灵动岛”之后，全部设置只作用于桌面壁纸 ——
+			{
+				Border wallBorder = Polish.Section("壁纸", "静态桌面壁纸：本地导入或官方图库下载，样式可调，支持一键还原系统壁纸。", light: false);
+				StackPanel wallInner = (StackPanel)wallBorder.Child;
+				TextElement.SetForeground(wallInner, System.Windows.Media.Brushes.White);
+				StackPanel wallWrap = new StackPanel
+				{
+					Margin = new Thickness(10.0, 8.0, 0.0, 8.0)
+				};
+				wallWrap.Children.Add(wallBorder);
+				TabItem wallTab = new TabItem
+				{
+					Header = "壁纸",
+					Content = new ScrollViewer
+					{
+						Content = wallWrap,
+						VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+						HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+					}
+				};
+				tabs.Items.Insert(2, wallTab);
+				try
+				{
+					WallpaperSettingsUi.Build(wallInner, this, light: false, func2, func3, func4, ApplyWallpaperLive);
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
+			}
+			// 侧边栏最终顺序：更新(0) / 灵动岛(1) / 壁纸(2) / 面板与主题(3) / Dock DIY(4) / 快捷键与开关(5) /
+			// 桌面组件(6) / 通用(7) / 支持创作者(8) / 在线反馈(9) / 使用指南(10)。
+			// 初始选中与懒加载检查都以插入完成后的最终索引为准（支持创作者 = 8）。
+			tabs.SelectedIndex = Math.Max(0, Math.Min(8, selectedPage));
+			if (tabs.SelectedIndex == 8)
+			{
+				loadCreator();
+			}
 			Action liveGlobal = delegate
 			{
 				live();
@@ -2148,6 +2393,8 @@ public class Controller
 			{
 				Prefs.Light = light;
 				live();
+				// 灵动岛“跟随面板”配色需要随面板明暗同步刷新
+				islandHub?.OnPrefsChanged();
 			});
 			func4(stackPanel2, "大面板尺寸", new string[3] { "舒适 · 中号", "宽阔 · 大号", "铺满 · 全屏" }, Prefs.PanelSize, (int panelSize) =>
 			{
@@ -2336,13 +2583,23 @@ public class Controller
 			});
 			TextBlock consolidateTip = new TextBlock
 			{
-				Text = "开启后自动关闭下方「此电脑 / 设置 / 电源 / Wi-Fi·蓝牙」入口（运行列表与控制中心不受影响）；关闭收纳后各开关可独立开启。",
+				Text = "开启后自动关闭下方「此电脑 / 设置 / 电源 / Wi-Fi·蓝牙」入口（运行列表、控制中心与快捷功能不受影响）；关闭收纳后各开关可独立开启。",
 				TextWrapping = TextWrapping.Wrap,
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				FontSize = 11.0,
 				Margin = new Thickness(0.0, -4.0, 0.0, 6.0)
 			};
 			stackPanel3.Children.Add(consolidateTip);
+			func3(stackPanel3, "显示快捷功能：桌面图标开关（一键隐藏 / 显示桌面图标）", draft.ShowDesktopIcons, (bool showDesktopIcons) =>
+			{
+				draft.ShowDesktopIcons = showDesktopIcons;
+				live();
+			});
+			func3(stackPanel3, "显示快捷功能：游戏模式开关", draft.ShowGameMode, (bool showGameMode) =>
+			{
+				draft.ShowGameMode = showGameMode;
+				live();
+			});
 			cbComputer = func3(stackPanel3, "显示此电脑", draft.ShowComputer, (bool showComputer) =>
 			{
 				draft.ShowComputer = showComputer;
@@ -2411,6 +2668,11 @@ public class Controller
 			func3(stackPanel3, "弹簧弹出效果（也可右键 Dock 切换）", draft.SpringReveal, (bool springReveal) =>
 			{
 				draft.SpringReveal = springReveal;
+				live();
+			});
+			func3(stackPanel3, "点击波纹（按下图标时的圆形水波）", draft.IconRipple, (bool iconRipple) =>
+			{
+				draft.IconRipple = iconRipple;
 				live();
 			});
 			func3(stackPanel3, "锁定 Dock 位置", Prefs.Placement.DockLocked, (bool dockLocked) =>
@@ -2954,7 +3216,7 @@ public class Controller
 			});
 			stackPanel5.Children.Add(new TextBlock
 			{
-				Text = "天气城市（启用天气后联网查询）",
+				Text = "天气城市（留空 = 自动按当前网络定位，无需手动设置）",
 				Margin = new Thickness(0.0, 14.0, 0.0, 8.0)
 			});
 			System.Windows.Controls.TextBox city = new System.Windows.Controls.TextBox
@@ -2969,6 +3231,13 @@ public class Controller
 			stackPanel5.Children.Add(FeatureUi.Button("应用天气城市", () =>
 			{
 				Prefs.Widgets.City = city.Text.Trim();
+				Prefs.Widgets.Normalize();
+				RefreshWidgets();
+				Save();
+			}));
+			stackPanel5.Children.Add(FeatureUi.Button("自动定位（清除城市）", () =>
+			{
+				Prefs.Widgets.City = "";
 				Prefs.Widgets.Normalize();
 				RefreshWidgets();
 				Save();
@@ -3355,6 +3624,23 @@ public class Controller
 		catch (Exception ex4)
 		{
 			Store.Log(ex4);
+		}
+		try
+		{
+			islandHub?.Dispose();
+			islandHub = null;
+		}
+		catch (Exception exIsland)
+		{
+			Store.Log(exIsland);
+		}
+		try
+		{
+			ChatPopupReader.Stop();
+		}
+		catch (Exception exChat)
+		{
+			Store.Log(exChat);
 		}
 		if (Tray != null)
 		{
@@ -3953,9 +4239,32 @@ public class Controller
 	public void SetGameMode(bool enabled)
 	{
 		Prefs.GameMode = enabled;
+		if (enabled)
+		{
+			// 进入游戏模式：若用户开了隐藏任务栏，先暂时把任务栏显示出来，
+			// 否则游戏里找不到系统界面；记录状态供退出时恢复。
+			if (Prefs.HideTaskbar)
+			{
+				DesktopVisibility.SetHidden(taskbar: true, hide: false);
+				Prefs.GameModeRevealTaskbar = true;
+				Prefs.HideTaskbar = false;
+			}
+		}
+		else if (Prefs.GameModeRevealTaskbar)
+		{
+			RestoreTaskbarAfterGameMode();
+		}
 		Save();
 		ApplyGameMode();
 		RefreshTrayMenu();
+	}
+
+	private void RestoreTaskbarAfterGameMode()
+	{
+		// 退出游戏模式：恢复进入前开启的隐藏任务栏；原本没开隐藏的用户不受影响。
+		DesktopVisibility.SetHidden(taskbar: true, hide: true);
+		Prefs.HideTaskbar = true;
+		Prefs.GameModeRevealTaskbar = false;
 	}
 
 	public void CheckGameMode()
@@ -3977,7 +4286,7 @@ public class Controller
 		glassSuppressed = flag;
 		if (flag)
 		{
-			Board.Hide();
+			Board.HideWithConsent();
 			Dock.HideWithConsent();
 			if (widgets != null)
 			{
@@ -4576,7 +4885,7 @@ public class Controller
 
 	public void ConfigureWidgets()
 	{
-		Settings(4);
+		Settings(6); // 设置侧边栏最终顺序中“桌面组件”页索引
 	}
 
 	public void AddFolder()
@@ -5007,7 +5316,7 @@ public class Controller
 					applied = true;
 					Refresh();
 					RefreshTrayMenu();
-					Board.Hide();
+					Board.HideWithConsent();
 					w.Close();
 				}
 				catch (Exception ex)

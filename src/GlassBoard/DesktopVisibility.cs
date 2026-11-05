@@ -78,6 +78,11 @@ public static class DesktopVisibility
 	private static WinEventProc revealProc;
 	private static readonly Dictionary<long, DateTime> lastRehide = new Dictionary<long, DateTime>();
 
+	// 任务栏窗口"刚显示"记录：窗口第一次变为可见的时刻（TickCount）。
+	// 显示后的 900ms 内不压制——开始菜单/搜索弹出动画需要任务栏窗口在场，
+	// 动画中途 SW_HIDE 会拉扯 Win10 explorer 状态机（崩溃 → 桌面黑屏）。
+	private static readonly Dictionary<long, int> shownTick = new Dictionary<long, int>();
+
 	private const string ExplorerAdvancedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
 
 	private static readonly DispatcherTimer maintenance;
@@ -230,7 +235,18 @@ public static class DesktopVisibility
 		{
 			return 0u;
 		}
-		return (uint)SHAppBarMessage(4u, ref data).ToUInt64();
+		// SHAppBarMessage 会与 explorer 进程通信：explorer 崩溃或挂起时该调用会长时间
+		// 阻塞（等 shell 响应）。必须放到线程池并在 400ms 内拿不到结果就放弃，绝不
+		// 让 UI 线程陪着 explorer 一起冻住（Win10 上 explorer 崩溃会让整个程序看似退出）。
+		try
+		{
+			System.Threading.Tasks.Task<uint> task = System.Threading.Tasks.Task.Run(() => (uint)SHAppBarMessage(4u, ref data).ToUInt64());
+			return task.Wait(400) ? task.Result : 0u;
+		}
+		catch
+		{
+			return 0u;
+		}
 	}
 
 	private static void ApplyAppBarState(uint state)
@@ -241,7 +257,14 @@ public static class DesktopVisibility
 			return;
 		}
 		data.Param = new IntPtr(state);
-		SHAppBarMessage(10u, ref data);
+		// 异步投递：调用方都不依赖结果，explorer 挂起时后台任务自然排队，不影响 UI。
+		try
+		{
+			System.Threading.Tasks.Task.Run(() => SHAppBarMessage(10u, ref data));
+		}
+		catch
+		{
+		}
 	}
 
 	// 还原隐藏前记录的 AppBar 状态（含 ABS_AUTOHIDE 位），恢复任务栏工作区占用
@@ -666,6 +689,7 @@ public static class DesktopVisibility
 		revealHook = IntPtr.Zero;
 		revealProc = null;
 		lastRehide.Clear();
+		shownTick.Clear();
 	}
 
 	// 用户正在与任务栏区域交互：前台是开始菜单/搜索/任务栏本身，或鼠标悬停在已显示的任务栏上。
@@ -692,7 +716,24 @@ public static class DesktopVisibility
 				}
 			}
 		}
-		return false;
+		// 键盘 Win 键 / 其它程序弹出开始菜单、搜索、通知面板时，前台窗口仍是原来的应用，
+		// 任务栏会先于菜单出现。此时若立即 SW_HIDE 任务栏，菜单弹出动画被打断，
+		// Win10 的 explorer 状态机被拉扯会直接崩溃（桌面黑屏）。枚举可见的系统面板
+		// 窗口兜底：面板存续期间完全放手，面板关闭后由维护循环接管。
+		bool shellPanelOpen = false;
+		EnumWindows((IntPtr h, IntPtr d) =>
+		{
+			if (!shellPanelOpen && IsWindowVisible(h))
+			{
+				string text = Class(h);
+				if (text == "Windows.UI.Core.CoreWindow" || text == "SearchApp" || text == "StartMenuDocked" || text == "Shell_CharmWindow" || text == "DV2ControlHost" || text == "ImmersiveLauncher" || text == "Shell_SystemDialogProxy" || text == "MultitaskingViewFrame")
+				{
+					shellPanelOpen = true;
+				}
+			}
+			return true;
+		}, IntPtr.Zero);
+		return shellPanelOpen;
 	}
 
 	// 交互结束后给 Explorer 状态机一个宽限期收尾动画（开始菜单关闭、任务栏自动隐藏回落），
@@ -735,6 +776,11 @@ public static class DesktopVisibility
 			{
 				return;
 			}
+			if (RecentlyShown(hwnd))
+			{
+				// 刚显示 900ms 内：菜单弹出动画进行中，不打断
+				return;
+			}
 			Store.Trace("TASKBAR reveal " + cls + " -> re-hide");
 			ShowWindowAsync(hwnd, 0);
 		}
@@ -744,12 +790,12 @@ public static class DesktopVisibility
 		}
 	}
 
-	// 单窗口压回节流（800ms）：Explorer 反复重试显示时避免高频拉扯闪屏。
+	// 单窗口压回节流（1000ms）：Explorer 反复重试显示时避免高频拉扯闪屏。
 	private static bool ThrottledRehide(IntPtr h)
 	{
 		long key = h.ToInt64();
 		DateTime utcNow = DateTime.UtcNow;
-		if (lastRehide.TryGetValue(key, out DateTime value) && utcNow - value < TimeSpan.FromMilliseconds(800.0))
+		if (lastRehide.TryGetValue(key, out DateTime value) && utcNow - value < TimeSpan.FromMilliseconds(1000.0))
 		{
 			return false;
 		}
@@ -760,6 +806,35 @@ public static class DesktopVisibility
 			lastRehide.Remove(oldest);
 		}
 		return true;
+	}
+
+	// 窗口刚变为可见的 900ms 宽限：首次发现可见时记录时刻并返回 true（放过本轮），
+	// 之后每次检查：仍在 900ms 内返回 true；超时则刷新时刻并放行压制。
+	private static bool RecentlyShown(IntPtr h)
+	{
+		long key = h.ToInt64();
+		int now = Environment.TickCount;
+		if (!IsWindowVisible(h))
+		{
+			shownTick.Remove(key);
+			return false;
+		}
+		if (!shownTick.TryGetValue(key, out int t))
+		{
+			if (shownTick.Count > 64)
+			{
+				long oldest = shownTick.OrderBy((KeyValuePair<long, int> pair) => pair.Value).First().Key;
+				shownTick.Remove(oldest);
+			}
+			shownTick[key] = now;
+			return true;
+		}
+		if (now - t < 900)
+		{
+			return true;
+		}
+		shownTick[key] = now;
+		return false;
 	}
 
 	private static void Maintain()
@@ -780,6 +855,9 @@ public static class DesktopVisibility
 					ExternalIconsChange?.Invoke(iconsOsHidden);
 				}
 			}
+			// 一次枚举，图标同步与任务栏压制共用：explorer 崩溃期间 Taskbars() 返回空，
+			// 后续压制循环自然跳过（窗口已销毁，无从拉起）。
+			List<IntPtr> bars = Taskbars();
 			if (taskbarHidden == true)
 			{
 				// 用户正在打开/使用开始菜单、搜索或任务栏：完全放手（Explorer 状态机正在
@@ -795,10 +873,12 @@ public static class DesktopVisibility
 					return;
 				}
 				// explorer 重启/其他软件改动后可能清掉 ABS_AUTOHIDE：重新断言，保持工作区全屏。
-				// 冷却 5 秒：工作区变化会触发桌面与壁纸层重新布局，频繁翻转必黑屏。
+				// explorer 重启后 8 秒内不碰（ShellBooting 宽限）：初始化期断言会拉扯状态机，
+				// 引发崩溃循环。冷却 5 秒：工作区变化会触发桌面与壁纸层重新布局，频繁翻转必黑屏。
+				IntPtr firstBar = bars.Count > 0 ? bars[0] : IntPtr.Zero;
 				try
 				{
-					if (originalAppBarState.HasValue && (AppBarState() & 1u) == 0 && Environment.TickCount - lastAppBarTick > 5000)
+					if (originalAppBarState.HasValue && (AppBarState() & 1u) == 0 && Environment.TickCount - lastAppBarTick > 5000 && (firstBar == IntPtr.Zero || !ShellBooting(firstBar)))
 					{
 						lastAppBarTick = Environment.TickCount;
 						ApplyAppBarState(originalAppBarState.Value | 1u);
@@ -808,10 +888,10 @@ public static class DesktopVisibility
 				{
 					Store.Log(ex);
 				}
-				// 任务栏窗口被 explorer 重建为可见时重新隐藏（带启动宽限与节流）。
-				foreach (IntPtr item in Taskbars())
+				// 任务栏窗口被 explorer 重建为可见时重新隐藏（带启动宽限、显示宽限与节流）。
+				foreach (IntPtr item in bars)
 				{
-					if (IsWindowVisible(item) && !ShellBooting(item) && ThrottledHide(item))
+					if (IsWindowVisible(item) && !ShellBooting(item) && ThrottledHide(item) && !RecentlyShown(item))
 					{
 						ShowWindowAsync(item, 0);
 					}

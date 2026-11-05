@@ -32,6 +32,7 @@ public sealed class WidgetWindow : GlassWindow
 	private string musicLayoutSignature = "";
 
 	private readonly WidgetManager M;
+	private bool desktopRaised;
 
 	private readonly Thumb moveGrip;
 
@@ -585,6 +586,11 @@ public sealed class WidgetWindow : GlassWindow
 		InitializeBareDragging();
 		Title = "GlassBoard 组件面板 " + (char)(65 + id);
 		ShowActivated = false;
+		DesktopCoverGuard.Track(this, (bool r) =>
+		{
+			desktopRaised = r;
+			ApplyTopmost();
+		});
 		moveGrip = new Thumb
 		{
 			Width = 48.0,
@@ -707,6 +713,11 @@ public sealed class WidgetWindow : GlassWindow
 		M.C.ShuttingDown = true;
 	}
 
+	private void ApplyTopmost()
+	{
+		Topmost = desktopRaised || M.C.Prefs.Widgets.Topmost;
+	}
+
 	public void UpdateOptions(List<string> kinds)
 	{
 		WidgetOptions widgets = M.C.Prefs.Widgets;
@@ -717,7 +728,7 @@ public sealed class WidgetWindow : GlassWindow
 		MotionLevel = M.C.Prefs.Dock.MotionLevel;
 		ConfigureGlass(M.C.Prefs.Dock, widgets.Material);
 		GlassPercent = (BareShell ? 0.0 : WidgetSizing.Background(widgets, widgets.Position(PanelId)));
-		Topmost = widgets.Topmost;
+		ApplyTopmost();
 		moveGrip.Visibility = ((BareShell || widgets.Locked || Kinds.SequenceEqual(new string[1] { "clock" })) ? Visibility.Collapsed : Visibility.Visible);
 		resizeGrip.Visibility = ((BareShell || widgets.Locked) ? Visibility.Collapsed : Visibility.Visible);
 		Polish.Apply(this, LightTheme);
@@ -1511,7 +1522,6 @@ public sealed class WidgetWindow : GlassWindow
 			Margin = new Thickness(0.0, 5.0, 0.0, 8.0)
 		};
 		parent.Children.Add(weatherDetails);
-		Grid grid2 = new Grid();
 		weatherStatus = new TextBlock
 		{
 			Foreground = MutedBrush,
@@ -1523,26 +1533,6 @@ public sealed class WidgetWindow : GlassWindow
 			Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
 		};
 		parent.Children.Add(weatherStatus);
-		StackPanel stackPanel2 = new StackPanel
-		{
-			Orientation = Orientation.Horizontal,
-			HorizontalAlignment = HorizontalAlignment.Right
-		};
-		stackPanel2.Children.Add(Small("刷新", () =>
-		{
-			M.Weather.Update(force: true);
-		}, 45.0));
-		Button button = Small("天气来源", () =>
-		{
-			Process.Start(new ProcessStartInfo((M.Weather.Snapshot != null && M.Weather.Snapshot.Provider == "wttr.in") ? "https://wttr.in/" : "https://open-meteo.com/")
-			{
-				UseShellExecute = true
-			});
-		}, 88.0);
-		button.FontSize = 10.0;
-		stackPanel2.Children.Add(button);
-		grid2.Children.Add(stackPanel2);
-		parent.Children.Add(grid2);
 	}
 
 	private void Music(StackPanel parent)
@@ -1883,7 +1873,7 @@ public sealed class WidgetWindow : GlassWindow
 			}
 			else
 			{
-				text = (string.IsNullOrWhiteSpace(M.C.Prefs.Widgets.City) ? "选择你的城市" : M.C.Prefs.Widgets.City);
+				text = (string.IsNullOrWhiteSpace(M.C.Prefs.Widgets.City) ? "自动定位天气" : M.C.Prefs.Widgets.City);
 			}
 			textBlock.Text = text;
 			if (weatherIcon != null)

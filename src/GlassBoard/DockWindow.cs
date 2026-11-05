@@ -141,6 +141,7 @@ public class DockWindow : GlassWindow
 	private bool externalDockDrag;
 
 	private bool boardPinDragging;
+	private bool desktopRaised;
 
 	private TextBlock taskHint;
 
@@ -239,6 +240,11 @@ public class DockWindow : GlassWindow
 		Height = 112.0;
 		ShowActivated = false;
 		Topmost = false;
+		DesktopCoverGuard.Track(this, (bool r) =>
+		{
+			desktopRaised = r;
+			ApplyTopmost();
+		});
 		ContentGrid.Children.Add(Items);
 		InitDockPointer();
 		InitializeBackgroundMove();
@@ -524,7 +530,7 @@ public class DockWindow : GlassWindow
 	{
 		Dispatcher.BeginInvoke((Action)(() =>
 		{
-			C.Board.Hide();
+			C.Board.HideWithConsent();
 			settledTop = null;
 			Refresh();
 		}));
@@ -756,7 +762,7 @@ public class DockWindow : GlassWindow
 		MotionEnabled = dock.MotionEnabled;
 		MotionLevel = dock.MotionLevel;
 		ConfigureGlass(dock);
-		Topmost = dock.AlwaysOnTop || dock.AutoHide || boardPinDragging;
+		ApplyTopmost();
 		revealSerial++;
 		BeginAnimation(Window.TopProperty, null);
 		renderedHidden = false;
@@ -771,6 +777,12 @@ public class DockWindow : GlassWindow
 		notifyIcons.Clear();
 		Items.Margin = new Thickness(dock.HoverPadding(), 0.0, dock.HoverPadding(), 0.0);
 		Surface.CornerRadius = new CornerRadius(dock.Radius);
+		Rect rect = (dockWorkingArea = DesktopWindowPolicy.WorkArea(this));
+		dockScreenArea = DesktopWindowPolicy.WorkArea(this, pointer: false, fullScreen: true);
+		List<Entry> list = DockOrderRules.Ordered(C.Prefs);
+		int num = (taskWheel.Running ? taskGroups.Count : list.Count);
+		int num2 = dock.VisiblePinned(rect.Width - 20.0, num);
+		int num3 = ((num > num2) ? Math.Max(0, num2 - 1) : num2);
 		AddSystemButton("glassboard://dock/apps", DockButton("▦", null, () =>
 		{
 			C.Toggle();
@@ -784,24 +796,24 @@ public class DockWindow : GlassWindow
 			// 不做激活/最小化切换，行为与任务栏固定图标一致。
 			AddSystemButton("glassboard://dock/computer", DockButton("computer", null, () =>
 			{
-				C.Board.Hide();
+				C.Board.HideWithConsent();
 				Native.Computer();
 			}, "此电脑"), () =>
 			{
-				C.Board.Hide();
+				C.Board.HideWithConsent();
 				Native.Computer();
 			});
 			// 回收站：单击打开系统回收站窗口；把文件拖到图标上直接送入回收站（可恢复）
 			AddSystemButton("glassboard://dock/recycle", DockButton("recycle", null, () =>
 			{
-				C.Board.Hide();
+				C.Board.HideWithConsent();
 				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
 				{
 					UseShellExecute = true
 				});
 			}, "回收站"), () =>
 			{
-				C.Board.Hide();
+				C.Board.HideWithConsent();
 				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
 				{
 					UseShellExecute = true
@@ -819,12 +831,6 @@ public class DockWindow : GlassWindow
 				C.ToggleControlCenter();
 			});
 		}
-		Rect rect = (dockWorkingArea = DesktopWindowPolicy.WorkArea(this));
-		dockScreenArea = DesktopWindowPolicy.WorkArea(this, pointer: false, fullScreen: true);
-		List<Entry> list = DockOrderRules.Ordered(C.Prefs);
-		int num = (taskWheel.Running ? taskGroups.Count : list.Count);
-		int num2 = dock.VisiblePinned(rect.Width - 20.0, num);
-		int num3 = ((num > num2) ? Math.Max(0, num2 - 1) : num2);
 		if (taskWheel.Running)
 		{
 			BuildTaskButtons(num3, num2);
@@ -898,6 +904,28 @@ public class DockWindow : GlassWindow
 			}
 		}
 		AddQuickButtons();
+		if (dock.ShowDesktopIcons)
+		{
+			string tip = C.Prefs.HideDesktopIcons ? "显示桌面图标" : "隐藏桌面图标";
+			AddSystemButton("glassboard://dock/desktop-icons", DockButton(null, null, () =>
+			{
+				C.ShellAction(2);
+			}, tip, null, "desktop"), () =>
+			{
+				C.ShellAction(2);
+			});
+		}
+		if (dock.ShowGameMode)
+		{
+			string tip = C.Prefs.GameMode ? "游戏模式已开启，点击退出" : "进入游戏模式";
+			AddSystemButton("glassboard://dock/gamemode", DockButton(null, null, () =>
+			{
+				C.SetGameMode(!C.Prefs.GameMode);
+			}, tip, null, "gamepad"), () =>
+			{
+				C.SetGameMode(!C.Prefs.GameMode);
+			});
+		}
 		if (dock.ShowSettings && !dock.Consolidate)
 		{
 			AddSystemButton("glassboard://dock/settings", DockButton("⚙", null, () =>
@@ -954,22 +982,9 @@ public class DockWindow : GlassWindow
 		else
 		{
 			SetGlassOpacity(GlassPercent);
-			foreach (Border item3 in from b in Root.Children.OfType<Border>()
-				where b.Tag as string == "backdrop"
-				select b)
-			{
-				RectangleGeometry clip = (RectangleGeometry)(item3.Clip = new RectangleGeometry(new Rect(0.0, 0.0, Math.Max(1.0, Width - 28.0), Math.Max(1.0, Height - 28.0)), dock.Radius, dock.Radius));
-				if (item3.Child is Border border)
-				{
-					border.Clip = clip;
-					border.CornerRadius = Surface.CornerRadius;
-					border.Effect = new BlurEffect
-					{
-						Radius = MaterialBlur,
-						RenderingBias = RenderingBias.Performance
-					};
-				}
-			}
+			// 模糊已烘进底图（捕获时一次性模糊），这里只同步裁剪/圆角/材质层裁剪，
+			// 不再挂运行时 BlurEffect（透明窗上的 GPU 高斯模糊是 banding 污斑来源之一）。
+			RefreshBackdropStyle();
 		}
 		System.Windows.Media.Color color = Accent(dock.Accent);
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? ((System.Windows.Media.Brush)System.Windows.Media.Brushes.Transparent) : ((System.Windows.Media.Brush)new LinearGradientBrush(System.Windows.Media.Color.FromArgb((byte)Math.Min(255.0, 160.0 * EdgeStrength), color.R, color.G, color.B), System.Windows.Media.Color.FromArgb((byte)Math.Min(255.0, 30.0 * EdgeStrength), byte.MaxValue, byte.MaxValue, byte.MaxValue), 90.0)));
@@ -978,6 +993,43 @@ public class DockWindow : GlassWindow
 		{
 			AnimateDockLayout(left, width);
 		}
+	}
+
+	// 设置页实时预览（透明度/模糊/材质/圆角滑块）走这里：只更新玻璃层与表面属性，
+	// 不清空重建整排图标。预览每个 tick 都重建会闪烁，并打断图标提取回填。
+	public void RefreshAppearance(bool capture = false)
+	{
+		if (DockInputBusy)
+		{
+			return;
+		}
+		DockOptions dock = C.Prefs.Dock;
+		dock.Normalize();
+		LightTheme = C.Prefs.Light;
+		MenuTheme.Apply(ContextMenu, C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
+		MotionEnabled = dock.MotionEnabled;
+		MotionLevel = dock.MotionLevel;
+		ConfigureGlass(dock);
+		ApplyTopmost();
+		Items.Margin = new Thickness(dock.HoverPadding(), 0.0, dock.HoverPadding(), 0.0);
+		Surface.CornerRadius = new CornerRadius(dock.Radius);
+		dockWorkingArea = DesktopWindowPolicy.WorkArea(this);
+		// 预览期间不重算窗口宽高：拖“图标尺寸/间距”滑杆时若窗口尺寸连续变化
+		// 而图标行未重建，会出现窗口与内容不匹配的畸形（两端空档反复变宽/收缩）。
+		// 尺寸统一等设置面板关闭后由完整 Refresh() 一次性重算并重建图标行。
+		GlassPercent = dock.OpacityPercent;
+		if (capture)
+		{
+			Backdrop(C.Prefs.Light);
+		}
+		else
+		{
+			SetGlassOpacity(GlassPercent);
+			// 模糊已烘进底图（捕获时一次性模糊），这里只同步裁剪/圆角/材质层裁剪。
+			RefreshBackdropStyle();
+		}
+		System.Windows.Media.Color color = Accent(dock.Accent);
+		Surface.BorderBrush = ((GlassPercent == 0.0) ? ((System.Windows.Media.Brush)System.Windows.Media.Brushes.Transparent) : ((System.Windows.Media.Brush)new LinearGradientBrush(System.Windows.Media.Color.FromArgb((byte)Math.Min(255.0, 160.0 * EdgeStrength), color.R, color.G, color.B), System.Windows.Media.Color.FromArgb((byte)Math.Min(255.0, 30.0 * EdgeStrength), byte.MaxValue, byte.MaxValue, byte.MaxValue), 90.0)));
 	}
 
 	private void UpdateAutoHide()
@@ -1445,6 +1497,8 @@ public class DockWindow : GlassWindow
 		{
 			VisualTree = frameworkElementFactory
 		};
+		// 点击后按钮会获得焦点，WPF 默认焦点视觉会画一个虚线方块；dock 图标不需要它。
+		button.FocusVisualStyle = null;
 		FrameworkElement element;
 		if (glyphKind != null)
 		{
@@ -1545,10 +1599,10 @@ public class DockWindow : GlassWindow
 				TextAlignment = TextAlignment.Center,
 				Foreground = TextBrush,
 				VerticalAlignment = VerticalAlignment.Center,
-				// 整数像素对齐 + 理想度量：避免字形图标亚像素发虚/裁边
+				// 整数像素对齐 + Display 度量：避免字形图标亚像素发虚/裁边
 				UseLayoutRounding = true
 			};
-			TextOptions.SetTextFormattingMode(element, TextFormattingMode.Ideal);
+			TextOptions.SetTextFormattingMode(element, TextFormattingMode.Display);
 		}
 		else
 		{
@@ -1596,7 +1650,7 @@ public class DockWindow : GlassWindow
 				// 整数像素对齐：避免亚像素偏移让文字发虚
 				UseLayoutRounding = true
 			};
-			TextOptions.SetTextFormattingMode(dockLabel, TextFormattingMode.Ideal);
+			TextOptions.SetTextFormattingMode(dockLabel, TextFormattingMode.Display);
 			// 测量时必须放开 MaxWidth，否则 MaxWidth 会把 DesiredSize 截断到上限，字号自适应永不生效。
 			for (double fontSize = 12.0; fontSize >= 9.0; fontSize -= 1.0)
 			{
@@ -1622,11 +1676,72 @@ public class DockWindow : GlassWindow
 			IsHitTestVisible = false
 		};
 		grid2.Children.Add(stackPanel);
+		if (o.IconRipple)
+		{
+			// 点击波纹：按下图标时从鼠标点击点向外扩散的圆形水波，约束在内容区域内；
+			// 走 Preview 通道不拦截 Click，按钮行为完全不变。波纹颜色取图标前景色。
+			Border rippleHost = new Border
+			{
+				IsHitTestVisible = false,
+				ClipToBounds = true
+			};
+			grid2.Children.Add(rippleHost);
+			System.Windows.Media.Brush rippleBrush = new SolidColorBrush((TextBrush is SolidColorBrush tb2) ? tb2.Color : System.Windows.Media.Color.FromArgb(110, byte.MaxValue, byte.MaxValue, byte.MaxValue));
+			button.PreviewMouseLeftButtonDown += (object s, System.Windows.Input.MouseButtonEventArgs e) =>
+			{
+				if (dockIconDragging || !MotionEnabled || !o.IconRipple)
+				{
+					return;
+				}
+				System.Windows.Point p = e.GetPosition(rippleHost);
+				// 波纹直径封顶在按钮内容宽度内：超过会被 ClipToBounds 裁成方块，
+				// 动效强度拉得越高越明显。封顶后始终呈现完整圆形水波。
+				double waveSize = Math.Min(iconSize * 2.2 * Math.Max(0.6, MotionLevel), iconSize + 12.0);
+				System.Windows.Shapes.Ellipse wave = new System.Windows.Shapes.Ellipse
+				{
+					Width = waveSize,
+					Height = waveSize,
+					HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+					VerticalAlignment = VerticalAlignment.Top,
+					Margin = new Thickness(p.X - waveSize / 2.0, p.Y - waveSize / 2.0, 0.0, 0.0),
+					Fill = rippleBrush,
+					Opacity = 0.32,
+					IsHitTestVisible = false,
+					RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
+					RenderTransform = new ScaleTransform(0.01, 0.01)
+				};
+				rippleHost.Child = wave;
+				CubicEase ease = new CubicEase
+				{
+					EasingMode = EasingMode.EaseOut
+				};
+				DoubleAnimation grow = new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(340.0))
+				{
+					EasingFunction = ease
+				};
+				DoubleAnimation fadeOut = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(300.0))
+				{
+					BeginTime = TimeSpan.FromMilliseconds(140.0)
+				};
+				grow.Completed += delegate
+				{
+					// 扩散结束后清理波纹；新一轮点击会先覆盖 Child 再播动画
+					if (ReferenceEquals(rippleHost.Child, wave))
+					{
+						rippleHost.Child = null;
+					}
+				};
+				wave.RenderTransform.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
+				wave.RenderTransform.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+				wave.BeginAnimation(UIElement.OpacityProperty, fadeOut);
+			};
+		}
 		if (entry != null)
 		{
 			button.Tag = entry;
 			// 内容 Grid 只按图标/可选标签的高度居中；Bottom 对齐时正底边距会把标记往上推，
 			// 因此用负底边距把它延伸到内容块下方，并在图标或标签后留出 RunMarkerGap。
+			// 倒影开启时按钮整体变高、内容块居中，指示点自动落在倒影正下方，无需额外补偿。
 			System.Windows.Media.Color markerColor = RunMarkerColor(o, C.Prefs.Light);
 			runMarkerColorCache = markerColor;
 			runMarkerBrush = new SolidColorBrush(markerColor);
@@ -2470,7 +2585,9 @@ public class DockWindow : GlassWindow
 		taskGroups = RunningWindows.SnapshotWithBackground().GroupBy(TaskKey, StringComparer.OrdinalIgnoreCase).OrderBy((IGrouping<string, RunningWindow> g) => g.Key, StringComparer.OrdinalIgnoreCase)
 			.Select((IGrouping<string, RunningWindow> g) =>
 			{
-				List<RunningWindow> windows = g.OrderBy((RunningWindow w) => w.Handle.ToInt64()).ToList();
+				// 有效窗口句柄排前：Handle=0 的 background 项（无窗口进程）放在最后，
+				// 否则 OpenTask 的 windows[0] 会选中 Handle=0 项，激活失败直接走到重启分支。
+				List<RunningWindow> windows = g.OrderBy((RunningWindow w) => (w.Handle == IntPtr.Zero) ? 1 : 0).ThenBy((RunningWindow w) => w.Handle.ToInt64()).ToList();
 				string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(windows[0].Path ?? "");
 				Entry entry = C.Prefs.Apps.FirstOrDefault((Entry a) => !a.IsFolder && WindowActivationRules.Executables(a).Contains(windows[0].Path, StringComparer.OrdinalIgnoreCase));
 				return new TaskGroup
@@ -2779,8 +2896,13 @@ public class DockWindow : GlassWindow
 		ClearExternalDockDrag();
 		if (IsVisible)
 		{
-			Topmost = C.Prefs.Dock.AlwaysOnTop || C.Prefs.Dock.AutoHide;
+			ApplyTopmost();
 		}
+	}
+
+	private void ApplyTopmost()
+	{
+		Topmost = desktopRaised || C.Prefs.Dock.AlwaysOnTop || C.Prefs.Dock.AutoHide || boardPinDragging;
 	}
 
 	internal void CheckTaskDock()
@@ -3282,6 +3404,8 @@ public class DockWindow : GlassWindow
 			"glassboard://dock/power" => "电源",
 			"glassboard://dock/network" => "Wi-Fi / 蓝牙",
 			"glassboard://dock/running" => "正在运行的程序",
+			"glassboard://dock/desktop-icons" => "桌面图标",
+			"glassboard://dock/gamemode" => "游戏模式",
 			_ => "系统入口"
 		};
 	}
@@ -3299,6 +3423,8 @@ public class DockWindow : GlassWindow
 			"glassboard://dock/power" => "power",
 			"glassboard://dock/network" => "wifi",
 			"glassboard://dock/running" => "running",
+			"glassboard://dock/desktop-icons" => "desktop",
+			"glassboard://dock/gamemode" => "gamepad",
 			_ => "apps"
 		};
 	}
