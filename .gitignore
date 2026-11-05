@@ -37,3 +37,4 @@ _scratch/
 _review/
 _release-check/
 .codex/
+*.local
