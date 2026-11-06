@@ -13,7 +13,7 @@ namespace GlassBoard;
 // 与桌面组件（默认非置顶）就是这样"消失"的；灵动岛因 Topmost=true 天然免疫。
 // 状态机：
 //   idle   → 任一注册窗口的 Z 序位于 Progman 之下（被桌面盖住）→ raised：全部临时置顶
-//   raised → Progman 之下不再有可见的非本进程窗口（桌面已回底）→ idle：全部复位
+//   raised → 所有注册窗口连续 3 tick 不再被桌面盖住（或桌面确认回底）→ idle：全部复位
 // 150ms 轮询，开销仅数次 GetWindow。
 public static class DesktopCoverGuard
 {
@@ -23,9 +23,15 @@ public static class DesktopCoverGuard
 
 	private static bool raised;
 
+	// raised 复位的连续稳定 tick 数：置顶解除后窗口可能立刻又被桌面盖住（振荡），
+	// 需要连续几拍都确认"不再被盖"才真正复位。
+	private static int relaxTicks;
+
 	public static void Track(Window win, Action<bool> apply)
 	{
-		new WindowInteropHelper(win).EnsureHandle();
+		// 注意：这里绝不 EnsureHandle——强制创建窗口句柄会把 SourceInitialized
+		// 提前到调用方构造器内部触发，导致构造器后半段挂上的 SourceInitialized
+		// 订阅（如 DockWindow 的全局热键注册）永远错过事件。
 		Windows.Add((win, apply));
 		win.Closed += (object s, EventArgs e) =>
 		{
@@ -52,13 +58,43 @@ public static class DesktopCoverGuard
 						if (win.IsVisible && CoveredByDesktop(new WindowInteropHelper(win).Handle))
 						{
 							raised = true;
+							Store.Trace("COVERGUARD raised=true");
 							break;
 						}
 					}
 				}
-				else if (DesktopRelaxed())
+				else
 				{
-					raised = false;
+					// 复位判定：所有注册的可见窗口都不再被 Progman 盖住。
+					// 不用 DesktopRelaxed 单独判定——用户有最小化窗口时它们 vis=1 且排在
+					// Progman 之下，DesktopRelaxed 会永远返回 false，导致 raised 卡死、
+					// 所有窗口被每 150ms 强制置顶（"组件一直置顶"反馈的根因）。
+					// 用"不再被盖"为主判定 + 3 tick 稳定期防振荡；DesktopRelaxed 为真
+					// 时立即复位（快速路径，桌面确认已回底）。
+					bool anyCovered = false;
+					for (int i = 0; i < Windows.Count; i++)
+					{
+						Window win = Windows[i].win;
+						if (win.IsVisible && CoveredByDesktop(new WindowInteropHelper(win).Handle))
+						{
+							anyCovered = true;
+							break;
+						}
+					}
+					if (!anyCovered)
+					{
+						relaxTicks++;
+						if (relaxTicks >= 3 || DesktopRelaxed())
+						{
+							raised = false;
+							relaxTicks = 0;
+							Store.Trace("COVERGUARD raised=false");
+						}
+					}
+					else
+					{
+						relaxTicks = 0;
+					}
 				}
 				if (raised)
 				{

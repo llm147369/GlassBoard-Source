@@ -31,6 +31,7 @@ public sealed class IslandWindow : GlassWindow
 
 	private const long WS_EX_NOACTIVATE = 0x08000000L;
 	private const long WS_EX_TOOLWINDOW = 0x00000080L;
+	private const long WS_EX_TOPMOST = 0x00000008L;
 	private const int GWL_EXSTYLE = -20;
 	private const int WM_MOUSEACTIVATE = 0x0021;
 
@@ -2875,7 +2876,11 @@ private string lastFgProc;
 				style &= ~WS_EX_NOACTIVATE;
 			}
 			SetWindowLongW(hwnd, GWL_EXSTYLE, (int)style);
-			SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+			// 注意：这里绝不能传 HWND_TOPMOST(-1)——会把岛塞进置顶层且绕过 WPF 的
+			// Topmost 属性（ApplyTopmost 检测不到，置顶位永远不恢复，灵动岛就一直
+			// 浮在窗口最上方）。用 HWND_TOP(0) 只重排 Z，置顶与否交给 ApplyTopmost。
+			SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+			ApplyTopmost();
 		}
 		catch
 		{
@@ -4970,8 +4975,21 @@ if (!O.ShowOnFullscreen && mode != Mode.Hidden && mode != Mode.Expanded)
 	private void ApplyTopmost()
 	{
 		bool on = desktopRaised || (O != null && O.AlwaysOnTop);
-		if (Topmost != on)
+		// 读 Win32 实际置顶位做同步：曾有代码绕过 WPF 直接 SetWindowPos(HWND_TOPMOST)
+		// 改位（SetNoActivate 旧实现），WPF 属性不知道、永远不同步。这里以属性与
+		// 实际位双重对比，任何不一致都强制拉回。
+		bool actual = false;
+		try
 		{
+			IntPtr hwnd = new WindowInteropHelper(this).Handle;
+			actual = (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+		}
+		catch
+		{
+		}
+		if (Topmost != on || actual != on)
+		{
+			Store.Trace("ISLAND topmost on=" + on + " raised=" + desktopRaised + " setting=" + (O != null && O.AlwaysOnTop));
 			Topmost = on;
 		}
 	}

@@ -325,13 +325,18 @@ public class DockWindow : GlassWindow
 		runningTimer.Start();
 		SourceInitialized += (object s, EventArgs e) =>
 		{
+			try
+			{
+			Store.Trace("HOTKEY SourceInitialized begin");
 			source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
 			source.AddHook(Hook);
 			hotkeys = new HotkeyManager(RegisterKey, (int id) =>
 			{
 				Native.UnregisterHotKey(source.Handle, id);
 			});
+			Store.Trace("HOTKEY init start count=" + C.Prefs.Hotkeys.Count + " enabled=" + C.Prefs.Hotkeys.Count((HotkeySetting k) => k.Enabled));
 			List<string> list = hotkeys.Start(C.Prefs.Hotkeys);
+			Store.Trace("HOTKEY init done active=" + hotkeys.Active.Count + " errors=" + list.Count);
 			foreach (HotkeySetting k2 in hotkeys.Active)
 			{
 				Store.Trace("HOTKEY registered id=" + k2.ActionId + " " + HotkeyRules.Label(k2) + " active=" + hotkeys.Active.Count);
@@ -411,6 +416,11 @@ public class DockWindow : GlassWindow
 				TrayWarning(string.Join("、", (from k in C.Prefs.Hotkeys
 					where k.Enabled && !hotkeys.Active.Any((HotkeySetting a) => a.ActionId == k.ActionId)
 					select HotkeyRules.Actions[k.ActionId - 1] + "（" + HotkeyRules.Label(k) + "）").ToList()));
+			}
+			}
+			catch (Exception ex)
+			{
+				Store.Log(new Exception("HOTKEY init failed", ex));
 			}
 		};
 		System.Windows.Controls.ContextMenu contextMenu = MenuTheme.Create(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
@@ -2902,7 +2912,12 @@ public class DockWindow : GlassWindow
 
 	private void ApplyTopmost()
 	{
-		Topmost = desktopRaised || C.Prefs.Dock.AlwaysOnTop || C.Prefs.Dock.AutoHide || boardPinDragging;
+		bool on2 = desktopRaised || C.Prefs.Dock.AlwaysOnTop || C.Prefs.Dock.AutoHide || boardPinDragging;
+		if (Topmost != on2)
+		{
+			Store.Trace("DOCK topmost on=" + on2 + " raised=" + desktopRaised);
+			Topmost = on2;
+		}
 	}
 
 	internal void CheckTaskDock()
