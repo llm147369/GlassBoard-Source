@@ -418,6 +418,11 @@ public sealed class IslandOptions
 			Material = new MaterialOptions();
 		}
 		Material.Normalize();
+		// 旧版预设皮肤写入的自定义底色/边框色会盖过“黑白配色”与“跟随主题”的明暗计算
+		// （IslandChrome.SolidFill 优先用 BackgroundColor），导致选浅色/深色/跟随主题都无效。
+		// ApplyPreset 已无调用方、设置页也已无皮肤入口，加载时直接清掉旧残留。
+		BackgroundColor = "";
+		BorderColor = "";
 		// 收起态内容开关已从设置中移除（用户要求）：音乐/封面/电量/通知提示恒显示，
 		// 仅在确有有效数据时显示对应项目。旧配置中保存过的 false 一律忽略。
 		ShowMusic = true;

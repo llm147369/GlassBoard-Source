@@ -144,6 +144,12 @@ public class ControlCenterWindow : GlassWindow
 		});
 	}
 
+	public void RefreshAccent()
+	{
+		Polish.ResetTheme();
+		Polish.Apply(this, LightTheme);
+	}
+
 	private Brush LineBrush()
 	{
 		return new SolidColorBrush(LightTheme ? System.Windows.Media.Color.FromArgb(36, 25, 28, 34) : System.Windows.Media.Color.FromArgb(40, byte.MaxValue, byte.MaxValue, byte.MaxValue));
@@ -156,7 +162,9 @@ public class ControlCenterWindow : GlassWindow
 		MotionEnabled = dock.MotionEnabled;
 		MotionLevel = dock.MotionLevel;
 		ConfigureGlass(dock);
-		GlassPercent = dock.OpacityPercent;
+		// 控制中心跟随 Dock 透明度，但始终保留 10% 底与边框：
+		// 统一透明度拉到 100%（Dock 全透无边框）时控制中心仍有可辨识的边缘
+		GlassPercent = Math.Max(10.0, dock.OpacityPercent);
 		Polish.Apply(this, LightTheme);
 		accentColor = IconPacks.AccentColor(dock.Accent);
 		accentBrush = new SolidColorBrush(accentColor);

@@ -40,7 +40,7 @@ public class GlobalStyleOptions
 			Material = new MaterialOptions();
 		}
 		Material.Normalize();
-		OpacityPercent = LayoutRules.Clamp(OpacityPercent, 10.0, 100.0, 72.0);
+		OpacityPercent = LayoutRules.Clamp(OpacityPercent, 0.0, 100.0, 72.0);
 		Blur = LayoutRules.Clamp(Blur, 0.0, 40.0, 18.0);
 		Edge = LayoutRules.Clamp(Edge, 0.2, 2.0, 1.0);
 		Radius = LayoutRules.Clamp(Radius, 0.0, 48.0, 28.0);

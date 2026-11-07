@@ -953,8 +953,9 @@ public class DockWindow : GlassWindow
 		ArrangeDockItems();
 		Width = Math.Min(rect.Width - 20.0, dock.WidthFor((num == 0) ? 1 : num2));
 		double num4 = dock.IconSize + 16.0 + (double)(dock.ShowLabels ? 18 : 0);
-		double num5 = Math.Min(1.6, 1.0 + (dock.Zoom - 1.0) * MotionLevel);
-		Height = 28.0 + num4 + dock.Spacing * 2.0 + Math.Max(0.0, num4 * (num5 - 1.0) * 0.65 - dock.Spacing) * 2.0;
+		// 高度固定：不随悬停放大倍数（Zoom）变化——放大以图标下缘为锚点向下扩展，
+		// 顶部只需固定 6px 安全区，dock 调多大放大都不会变高。
+		Height = 28.0 + num4 + dock.Spacing * 2.0 + 6.0;
 		double num6;
 		if (dock.Alignment != 0)
 		{
@@ -1188,18 +1189,13 @@ public class DockWindow : GlassWindow
 	}
 
 	// 运行指示颜色：按 Dock 玻璃背景“实际呈现”的合成明暗选择（深底→白，浅底→黑）。
-	// 不读屏幕像素：复用 GlassMaterials 的底色/强调色混合公式与透明度，桌面亮度按当前主题估计。
+	// 不读屏幕像素：复用 GlassMaterials 的底色公式（Dock 背景不再掺强调色）与透明度，桌面亮度按当前主题估计。
 	private static System.Windows.Media.Color RunMarkerColor(DockOptions o, bool light)
 	{
 		System.Windows.Media.Color glass;
 		if (string.IsNullOrEmpty(o.Material.Tint))
 		{
 			glass = (light ? System.Windows.Media.Color.FromRgb(234, 237, 244) : System.Windows.Media.Color.FromRgb(24, 26, 32));
-			System.Windows.Media.Color accentColor = IconPacks.AccentColor(o.Accent);
-			glass = System.Windows.Media.Color.FromRgb(
-				(byte)((double)(int)glass.R + ((double)(int)accentColor.R - (double)(int)glass.R) * 0.12),
-				(byte)((double)(int)glass.G + ((double)(int)accentColor.G - (double)(int)glass.G) * 0.12),
-				(byte)((double)(int)glass.B + ((double)(int)accentColor.B - (double)(int)glass.B) * 0.12));
 		}
 		else
 		{
@@ -1321,6 +1317,9 @@ public class DockWindow : GlassWindow
 		})[index];
 	}
 
+	// Dock 玻璃背景不掺强调色：强调色只用于系统图标、名称标签、插入标记等前景元素
+	protected override int AccentForFill => -1;
+
 	// Dock 图标悬停提示：纯文字、无背景底板，颜色跟随主题玻璃文字色
 	private System.Windows.Controls.ToolTip DockTip(string text)
 	{
@@ -1412,12 +1411,17 @@ public class DockWindow : GlassWindow
 			icon.RenderTransform = bounce;
 			DoubleAnimationUsingKeyFrames y = new DoubleAnimationUsingKeyFrames
 			{
-				Duration = TimeSpan.FromMilliseconds(420.0)
+				Duration = TimeSpan.FromMilliseconds(440.0)
 			};
+			// 两段式弹跳：先上跳 -5 再小回弹 +2，比单段上跳更 Q 弹、不突兀
 			y.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(0.0)));
-			y.KeyFrames.Add(new EasingDoubleKeyFrame(-7.0, KeyTime.FromPercent(0.45), new CubicEase
+			y.KeyFrames.Add(new EasingDoubleKeyFrame(-5.0, KeyTime.FromPercent(0.35), new CubicEase
 			{
 				EasingMode = EasingMode.EaseOut
+			}));
+			y.KeyFrames.Add(new EasingDoubleKeyFrame(2.0, KeyTime.FromPercent(0.68), new CubicEase
+			{
+				EasingMode = EasingMode.EaseInOut
 			}));
 			y.KeyFrames.Add(new EasingDoubleKeyFrame(0.0, KeyTime.FromPercent(1.0), new CubicEase
 			{
@@ -1651,7 +1655,7 @@ public class DockWindow : GlassWindow
 				Text = labelText,
 				FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft YaHei UI"),
 				FontSize = 12.0,
-				Foreground = (LightTheme ? Polish.Color("#4A5263") : Polish.Color("#C6CEDF")),
+				Foreground = new System.Windows.Media.SolidColorBrush(IconPacks.AccentColor(C.Prefs.Dock.Accent)),
 				TextAlignment = TextAlignment.Center,
 				TextTrimming = TextTrimming.CharacterEllipsis,
 				MaxWidth = double.PositiveInfinity,
@@ -1816,8 +1820,10 @@ public class DockWindow : GlassWindow
 		ScaleTransform scale = new ScaleTransform(1.0, 1.0);
 		// 悬停只放大、不上浮：上浮会把按钮移离光标，光标停在图标下方（标签下缘）时
 		// MouseEnter/MouseLeave 互相触发形成死循环，图标会不停跳动。
+		// 放大锚点偏下（0.8）：放大主要向下展开，顶部溢出极小，
+		// 窗口高度固定也能容纳，dock 不会因放大倍数调整而变高。
 		button.RenderTransform = scale;
-		button.RenderTransformOrigin = new System.Windows.Point(0.5, 0.65);
+		button.RenderTransformOrigin = new System.Windows.Point(0.5, 0.8);
 		button.UseLayoutRounding = true;
 		double zoomTarget = 1.0;
 		Action<bool> animate = (bool hover) =>
@@ -1827,18 +1833,18 @@ public class DockWindow : GlassWindow
 				// 按下/点击期间冻结悬停动画，点击图标不再“跳动”
 				return;
 			}
-			zoomTarget = (hover ? Math.Min(1.6, 1.0 + (o.Zoom - 1.0) * MotionLevel) : 1.0);
+			zoomTarget = (hover ? Math.Min(1.45, 1.0 + (o.Zoom - 1.0) * MotionLevel) : 1.0);
 			if (MotionEnabled)
 			{
 				CubicEase easingFunction = new CubicEase
 				{
 					EasingMode = EasingMode.EaseOut
 				};
-				scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(zoomTarget, TimeSpan.FromMilliseconds(180.0))
+				scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(zoomTarget, TimeSpan.FromMilliseconds(150.0))
 				{
 					EasingFunction = easingFunction
 				});
-				scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(zoomTarget, TimeSpan.FromMilliseconds(180.0))
+				scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(zoomTarget, TimeSpan.FromMilliseconds(150.0))
 				{
 					EasingFunction = easingFunction
 				});
@@ -3461,7 +3467,7 @@ public class DockWindow : GlassWindow
 				Width = 3.0,
 				Height = C.Prefs.Dock.IconSize + 8.0,
 				CornerRadius = new CornerRadius(2.0),
-				Background = Polish.Accent,
+				Background = new System.Windows.Media.SolidColorBrush(IconPacks.AccentColor(C.Prefs.Dock.Accent)),
 				VerticalAlignment = VerticalAlignment.Center,
 				Visibility = Visibility.Collapsed,
 				IsHitTestVisible = false

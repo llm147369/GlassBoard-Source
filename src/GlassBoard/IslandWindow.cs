@@ -152,6 +152,7 @@ private Grid expandedRoot;
 	private bool lastPlaying;
 	private bool expandEntrance;
 	private string lastSessionKey = "";
+	private ImageSource lastArtwork;
 	private bool lowBatteryArmed = true;
 	private int currentPage = -1;
 	private bool volumeSyncing, brightnessSyncing;
@@ -4753,7 +4754,7 @@ private bool CaptureBackdropAllowDark(Native.RECT? originalRect = null)
 				// 同步基类缓存键：展开态下基类 Backdrop 可见分支校验键匹配后只刷样式，
 				// 不会因"基类缓存空/过期"而反复触发重捕（设置页实时预览会闪窗）。
 				cachedBackdrop = img;
-				backdropKey = BackdropKeyOfRect(rect, dpi, LightTheme, MaterialBlur);
+				backdropKey = BackdropKeyOfRect(rect, dpi, LightTheme, MaterialBlur, CurrentMaterial.Saturation);
 				AddIslandBackdrop(img);
 				return true;
 			}
@@ -5020,7 +5021,7 @@ Root.Margin = SnapTop() ? new Thickness(14, 0, 14, 14) : new Thickness(14);
 
 // 那层噪点就是“磨砂质感”，高光+噪点叠在半透明底色上形成“两层背景”�?
 
-MaterialOptions m = (o.Material ?? new MaterialOptions()).Copy();
+MaterialOptions m = FollowMaterial(o);
 		m.Kind = 0;
 		m.Gloss = 0.0;
 		m.Grain = 0.0;
@@ -5104,6 +5105,34 @@ RefreshMusicPage();
 		PositionAnimated(w, h);
 		// 全屏策略即时生效
 		CheckFullscreen();
+	}
+
+	// “跟随主题”时材质也跟随全局玻璃材质（面板与主题页所选，含 Apple 玻璃的
+	// 模糊半径/饱和度/实时循环）；固定浅色/深色时用灵动岛自己的材质。
+	private MaterialOptions FollowMaterial(IslandOptions o)
+	{
+		MaterialOptions m = (o.FollowSystemTheme && C.Prefs.Dock != null && C.Prefs.Dock.Material != null)
+			? C.Prefs.Dock.Material.Copy()
+			: (o.Material ?? new MaterialOptions()).Copy();
+		return m;
+	}
+
+	// 全局材质变化时的轻量刷新：只重套材质/透明度/背景烘焙，不重建收起态与页面。
+	public void RefreshMaterialOnly()
+	{
+		try
+		{
+			MaterialOptions m = FollowMaterial(O);
+			m.Kind = 0;
+			m.Gloss = 0.0;
+			m.Grain = 0.0;
+			SetMaterial(m);
+			SetGlassOpacity(O.OpacityPercent);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 	}
 
 	private void RestyleStatic()
@@ -5369,6 +5398,8 @@ private void RestyleToast()
 		bool changed = key != lastTrackKey;
 		bool trackSwitched = false;
 		bool playingChanged = M.Playing != lastPlaying;
+		bool artworkChanged = !ReferenceEquals(M.Artwork, lastArtwork);
+		lastArtwork = M.Artwork;
 		lastPlaying = M.Playing;
 		string sessKey = (M.Session != null && M.Session.Key != null) ? M.Session.Key : "";
 		bool sessChanged = sessKey != lastSessionKey;
@@ -5411,7 +5442,9 @@ private void RestyleToast()
 			// 只有布局类别真正变化（切歌/播放暂停切换）才重建收起条：
 			// 媒体会话每次轮询都会发 Changed（位置推进），若每次都重建，
 			// 会不断重置“动态建议”的轮播时钟导致其永远不切换。
-			if (trackSwitched || playingChanged)
+			// 封面晚到（播放开始几秒后 Artwork 才就绪）也要重建收起条，
+			// 否则封面永远停在占位图，只有展开才会刷新。
+			if (trackSwitched || playingChanged || artworkChanged)
 			{
 				RunWhenIdle(delegate
 				{

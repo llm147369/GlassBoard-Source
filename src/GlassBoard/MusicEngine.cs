@@ -106,6 +106,18 @@ public sealed class MusicEngine : IDisposable
 	public MediaSnapshot Session = new MediaSnapshot();
 
 	private DateTime lastArtworkPoll = DateTime.MinValue;
+	private bool lastPollPlaying;
+
+	// ---- 封面救援：网易云本地 API → UIA 窗口截图 → iTunes 检索 ----
+	private string rescueKey = "";
+
+	private int rescueTier = 0;
+
+	private int rescueAttempts = 0;
+
+	private DateTime rescueAt = DateTime.MinValue;
+
+	private bool rescueBusy;
 
 	public bool Local => C.Prefs.Widgets.MusicMode == "local";
 
@@ -787,7 +799,9 @@ public sealed class MusicEngine : IDisposable
 		try
 		{
 			// 封面缺失时加快重试（4s），拿到后回到 10s 节流，避免切歌瞬间桥读取失败导致封面长时间空白
-			bool flag = string.IsNullOrEmpty(systemKey) || (DateTime.UtcNow - lastArtworkPoll).TotalSeconds >= (Artwork == null ? 4.0 : 10.0);
+			bool playingJustStarted = Session.Playing && !lastPollPlaying;
+		lastPollPlaying = Session.Playing;
+		bool flag = string.IsNullOrEmpty(systemKey) || playingJustStarted || (DateTime.UtcNow - lastArtworkPoll).TotalSeconds >= (Artwork == null ? 4.0 : 10.0);
 			if (flag)
 			{
 				lastArtworkPoll = DateTime.UtcNow;
@@ -913,7 +927,7 @@ public sealed class MusicEngine : IDisposable
 		{
 		}
 		string dumpLine = ((sessionDump.Length == 0) ? "会话枚举失败或超时" : sessionDump);
-		return "GlassBoard-Source v" + Assembly.GetExecutingAssembly().GetName().Version?.ToString() + "\n程序位置：" + Assembly.GetExecutingAssembly().Location + "\n主通道：" + primaryStatus + "\n读取后端：" + session.Backend + "\n播放器：" + session.Source + "\n曲目：" + Title + "\n封面：" + session.CoverStatus + "\n曲目信息：" + session.MetadataStatus + "\n封面补充：" + C.Prefs.Widgets.AutoNativeMediaCompatibility + "\n兼容通道：" + nativeStatus + "\n状态：" + session.Status + "\n会话列表（AUMID | 类型 | 状态 | 标题 | 艺术家）：\n" + dumpLine;
+		return "GlassBoard-Source v" + Assembly.GetExecutingAssembly().GetName().Version?.ToString() + "\n程序位置：" + Assembly.GetExecutingAssembly().Location + "\n主通道：" + primaryStatus + "\n读取后端：" + session.Backend + "\n播放器：" + session.Source + "\n曲目：" + Title + "\n封面：" + session.CoverStatus + "\n曲目信息：" + session.MetadataStatus + "\n封面补充：" + C.Prefs.Widgets.AutoNativeMediaCompatibility + "\n兼容通道：" + nativeStatus + "\n状态：" + session.Status + "\n封面救援：" + CoverRescue.LastStatus + " · 层级 " + rescueTier + " · 尝试 " + rescueAttempts + "\n会话列表（AUMID | 类型 | 状态 | 标题 | 艺术家）：\n" + dumpLine;
 	}
 
 	private void Accept(MediaSnapshot data)
@@ -988,6 +1002,14 @@ public sealed class MusicEngine : IDisposable
 						Session.Backend = "window-title";
 						Session.Source = "app:" + runningKey;
 					}
+					TryRescue(new MediaSnapshot
+					{
+						Available = true,
+						Title = track,
+						Artist = ((artist.Length > 0) ? artist : friendlyName),
+						Source = "app:" + runningKey,
+						Key = "window-title|" + runningKey + "|" + track + "|" + artist
+					});
 					return;
 				}
 				Title = friendlyName;
@@ -1062,6 +1084,10 @@ public sealed class MusicEngine : IDisposable
 		}
 		if (string.IsNullOrEmpty(Session.Cover))
 		{
+			if (Artwork == null)
+			{
+				TryRescue(Session.Copy());
+			}
 			return;
 		}
 		string text2 = CoverFingerprint.Of(Session.Cover);
@@ -1081,7 +1107,95 @@ public sealed class MusicEngine : IDisposable
 		}
 		catch
 		{
+			if (Artwork == null)
+			{
+				TryRescue(Session.Copy());
+			}
 		}
+	}
+
+	private void TryRescue(MediaSnapshot snap)
+	{
+		if (stopped || Local || snap == null || !snap.Available || Artwork != null)
+		{
+			return;
+		}
+		if (string.IsNullOrWhiteSpace(snap.Title))
+		{
+			return;
+		}
+		string key = snap.Key ?? "";
+		if (key.Length == 0)
+		{
+			return;
+		}
+		if (key != rescueKey)
+		{
+			rescueKey = key;
+			rescueTier = 0;
+			rescueAttempts = 0;
+			rescueAt = DateTime.MinValue;
+		}
+		if (rescueBusy || rescueTier > 2 || rescueAttempts >= 12)
+		{
+			return;
+		}
+		if ((DateTime.UtcNow - rescueAt).TotalSeconds < ((rescueTier >= 2) ? 25.0 : 4.0))
+		{
+			return;
+		}
+		rescueAt = DateTime.UtcNow;
+		rescueAttempts++;
+		rescueBusy = true;
+		int tier = rescueTier;
+		MediaSnapshot copy = snap.Copy();
+		System.Threading.Tasks.Task.Run(delegate
+		{
+			byte[] bytes = null;
+			try
+			{
+				bytes = CoverRescue.FetchAsync(copy, tier).Result;
+			}
+			catch
+			{
+			}
+			finally
+			{
+				rescueBusy = false;
+			}
+			if (bytes == null)
+			{
+				rescueTier = Math.Min(tier + 1, 2);
+				return;
+			}
+			ImageSource imageSource = Image(bytes);
+			if (imageSource == null)
+			{
+				rescueTier = Math.Min(tier + 1, 2);
+				return;
+			}
+			System.Action apply = delegate
+			{
+				if (stopped || Local || rescueKey != key)
+				{
+					return;
+				}
+				Artwork = imageSource;
+				artworkCache.Put(key, imageSource, DateTime.UtcNow);
+				rescueTier = 99;
+				rescueAttempts = 0;
+				Notify();
+			};
+			System.Windows.Application application = System.Windows.Application.Current;
+			if (application == null || application.Dispatcher.CheckAccess())
+			{
+				apply();
+			}
+			else
+			{
+				application.Dispatcher.BeginInvoke(apply);
+			}
+		});
 	}
 
 	private async void LoadAppIcon(string source)

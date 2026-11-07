@@ -71,10 +71,19 @@ public class GlassWindow : Window
 
 	protected int AccentIndex;
 
+	// 背景填充是否掺入强调色（12% 混色）：Dock / 大面板 / 组件背景均不掺色（统一模式下三处外观一致），
+	// 强调色只用于文字、图标与大面板内界面元素
+	protected virtual int AccentForFill => AccentIndex;
+
 	protected double MaterialBlur
 	{
 		get
 		{
+			// Apple 玻璃等预设自带专属模糊半径（BlurOverride>0）：覆盖"种类×窗口模糊"的默认计算
+			if (CurrentMaterial.BlurOverride > 0.0)
+			{
+				return CurrentMaterial.BlurOverride;
+			}
 			if (CurrentMaterial.Kind != 1)
 			{
 				if (CurrentMaterial.Kind != 2)
@@ -87,9 +96,13 @@ public class GlassWindow : Window
 		}
 	}
 
-	protected System.Windows.Media.Brush TextBrush => new SolidColorBrush(LightTheme ? System.Windows.Media.Color.FromRgb(25, 28, 34) : System.Windows.Media.Color.FromRgb(247, 247, 249));
+	// 表面实际是深色时（深色主题，或浅色主题下材质 tint 为深色调），文字必须切浅色，
+	// 否则深色 tint 压底后深色文字不可读（A6：修复 浓郁深色 等深 tint 材质发灰发暗）。
+	protected bool DarkSurface => GlassMaterials.DarkSurface(CurrentMaterial, LightTheme);
 
-	protected System.Windows.Media.Brush MutedBrush => new SolidColorBrush(LightTheme ? System.Windows.Media.Color.FromRgb(65, 69, 77) : System.Windows.Media.Color.FromRgb(184, 188, 198));
+	protected System.Windows.Media.Brush TextBrush => new SolidColorBrush(DarkSurface ? System.Windows.Media.Color.FromRgb(247, 247, 249) : System.Windows.Media.Color.FromRgb(25, 28, 34));
+
+	protected System.Windows.Media.Brush MutedBrush => new SolidColorBrush(DarkSurface ? System.Windows.Media.Color.FromRgb(184, 188, 198) : System.Windows.Media.Color.FromRgb(65, 69, 77));
 
 	protected void ConfigureGlass(DockOptions options, MaterialOptions material = null)
 	{
@@ -97,6 +110,7 @@ public class GlassWindow : Window
 		EdgeStrength = options.EdgeStrength;
 		AccentIndex = options.Accent;
 		CurrentMaterial = (material ?? options.Material ?? new MaterialOptions()).Copy();
+		EnsureLiveBlur();
 	}
 
 	public void SetMaterial(MaterialOptions material)
@@ -110,6 +124,15 @@ public class GlassWindow : Window
 		{
 			ScheduleBackdropRefresh(LightTheme);
 		}
+		EnsureLiveBlur();
+	}
+
+	protected override void OnClosed(EventArgs e)
+	{
+		// 窗口销毁即释放实时模糊循环（材质切换时 SetMaterial 也会停）
+		liveBlurTimer?.Stop();
+		liveBlurTimer = null;
+		base.OnClosed(e);
 	}
 
 	protected static ControlTemplate GripTemplate(bool corner = false)
@@ -358,10 +381,10 @@ public class GlassWindow : Window
 		CaptureRegion(rect, Native.DpiOf(hwnd));
 	}
 
-	// 缓存键：物理矩形 + DPI + 主题 + 烘焙模糊半径（模糊度变化必须重烘底图）。
-	protected static string BackdropKeyOfRect(Native.RECT rect, int dpi, bool light, double blur)
+	// 缓存键：物理矩形 + DPI + 主题 + 烘焙模糊半径 + 饱和度 + 实时/静态（模糊度/饱和度/烘焙方式变化必须重烘底图）。
+	protected static string BackdropKeyOfRect(Native.RECT rect, int dpi, bool light, double blur, double saturation, bool live = false)
 	{
-		return rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (light ? 1 : 0) + "_" + (int)Math.Round(blur);
+		return rect.Left + "_" + rect.Top + "_" + rect.Right + "_" + rect.Bottom + "_" + dpi + "_" + (light ? 1 : 0) + "_" + (int)Math.Round(blur) + "_" + (int)Math.Round(saturation * 100.0) + "_" + (live ? 1 : 0);
 	}
 
 	private string BackdropKeyOf(out Native.RECT rect)
@@ -372,7 +395,7 @@ public class GlassWindow : Window
 			rect = default(Native.RECT);
 			return "";
 		}
-		return BackdropKeyOfRect(rect, Native.DpiOf(hwnd), LightTheme, MaterialBlur);
+		return BackdropKeyOfRect(rect, Native.DpiOf(hwnd), LightTheme, MaterialBlur, CurrentMaterial.Saturation, CurrentMaterial.LiveBlur);
 	}
 
 	private void RemoveBackdropBorders()
@@ -413,24 +436,8 @@ public class GlassWindow : Window
 			}
 			using (bitmap)
 			{
-				if (!fromFile && IsBlackFrame(bitmap))
-				{
-					// 黑帧：壁纸层正处于暂停/过渡（开始菜单、搜索打开时常见）。
-					// 不替换现有底图，延迟重试数次；重试耗尽则放弃本次刷新。
-					backdropBlackRetries++;
-					if (backdropBlackRetries < 4)
-					{
-						Store.Trace("RENDER capture black → retry #" + backdropBlackRetries + " cls=" + GetType().Name);
-						ScheduleBackdropRefresh(LightTheme);
-						return false;
-					}
-					backdropBlackRetries = 0;
-					Store.Trace("RENDER capture black → skip (keep current) cls=" + GetType().Name);
-					return false;
-				}
-				backdropBlackRetries = 0;
-				cachedBackdrop = GlassMaterials.Bake(bitmap, MaterialBlur, MaterialBlur / 8.0);
-				backdropKey = BackdropKeyOfRect(rect, dpi, LightTheme, MaterialBlur);
+				cachedBackdrop = (CurrentMaterial.LiveBlur ? GlassMaterials.BakeLive(bitmap, MaterialBlur, MaterialBlur / 4.0, CurrentMaterial.Saturation) : GlassMaterials.Bake(bitmap, MaterialBlur, MaterialBlur / 8.0, CurrentMaterial.Saturation));
+				backdropKey = BackdropKeyOfRect(rect, dpi, LightTheme, MaterialBlur, CurrentMaterial.Saturation, CurrentMaterial.LiveBlur);
 				// 不先移除旧层：AddBackdrop 优先原地替换现有 ImageBrush（去掉先删后加造成的闪帧），
 				// 只有图层缺失时才新建。
 				AddBackdrop(cachedBackdrop);
@@ -449,29 +456,61 @@ public class GlassWindow : Window
 	}
 
 	private System.Windows.Threading.DispatcherTimer backdropRefreshTimer;
+	// 实时背景模糊循环（Apple 玻璃 LiveBlur）：~10fps 重捕背景并高质烘焙，
+	// 小米玻璃柔光式动态效果。材质切走/窗口关闭即停，不残留占用。
+	private System.Windows.Threading.DispatcherTimer liveBlurTimer;
 
-	private int backdropBlackRetries;
+	private int liveFrames;
 
-	// 均匀采样判定近黑帧：开始菜单/搜索打开期间（尤其 Wallpaper Engine 暂停渲染、
-	// DWM 过渡瞬间）壁纸层常渲染成纯黑/近黑区域，直接采纳会把 Dock/面板涂黑。
-	// 阈值 4：只拒真正纯黑（显示器关闭/锁屏），深色壁纸（实测亮度≈6）必须放行，
-	// 否则深色壁纸区域永远不更新底图。
-	private static bool IsBlackFrame(Bitmap bitmap)
+	private long liveTotalMs;
+
+	private void EnsureLiveBlur()
 	{
-		int num = bitmap.Width - 1;
-		int num2 = bitmap.Height - 1;
-		for (int i = 0; i < 8; i++)
+		if (CurrentMaterial.LiveBlur)
 		{
-			for (int j = 0; j < 8; j++)
+			if (liveBlurTimer == null)
 			{
-				System.Drawing.Color color = bitmap.GetPixel(num * i / 7, num2 * j / 7);
-				if (color.R >= 4 || color.G >= 4 || color.B >= 4)
+				liveBlurTimer = new System.Windows.Threading.DispatcherTimer
 				{
-					return false;
-				}
+					Interval = TimeSpan.FromMilliseconds(100.0)
+				};
+				liveBlurTimer.Tick += delegate
+				{
+					if (!IsVisible || GlassPercent == 0.0 || Width < 40.0 || Height < 40.0)
+					{
+						return;
+					}
+					long tickStart = Environment.TickCount;
+					// 直接重捕重烘（原来走 Backdrop→ScheduleBackdropRefresh 防抖路径，
+					// 但 100ms tick 每次都重启 240ms 防抖计时器 → 重捕永远不触发，
+					// 模糊滑杆 8-96px 全部无效。改为每帧直捕，约 10fps 真·实时）。
+					cachedBackdrop = null;
+					backdropKey = "";
+					RecaptureBackdrop(LightTheme);
+					// 诊断：每 50 帧记录一次实时循环状态（帧数/平均耗时），
+					// 用于排查"感觉没效果"时确认循环是否在跑。
+					liveTotalMs += Environment.TickCount - tickStart;
+					liveFrames++;
+					if (liveFrames % 50 == 0)
+					{
+						Store.Trace("LIVE " + GetType().Name + " frames=" + liveFrames + " avgMs=" + (liveTotalMs / liveFrames) + " vis=" + IsVisible + " pct=" + GlassPercent + " bg=" + (cachedBackdrop != null));
+					}
+				};
 			}
+			if (!liveBlurTimer.IsEnabled)
+			{
+				Store.Trace("LIVE start cls=" + GetType().Name);
+			}
+			liveBlurTimer.Start();
 		}
-		return true;
+		else
+		{
+			if (liveBlurTimer != null && liveBlurTimer.IsEnabled)
+			{
+				Store.Trace("LIVE stop cls=" + GetType().Name + " frames=" + liveFrames);
+			}
+			liveBlurTimer?.Stop();
+		}
 	}
 
 	// 壁纸/显示器/DPI 变化后的重捕调度：合并连续广播，保持现有底图直到新图就绪。
@@ -534,10 +573,10 @@ public class GlassWindow : Window
 			Geometry existingClip = BackdropClip();
 			existing.Background = new ImageBrush(bitmapImage) { Stretch = Stretch.Fill };
 			existing.CornerRadius = Surface.CornerRadius;
-			existing.Opacity = LightTheme ? 0.8 : 0.66;
+			existing.Opacity = (CurrentMaterial.LiveBlur ? 1.0 : (LightTheme ? 0.8 : 0.66));
 			existing.Clip = existingClip;
 			element.Clip = existingClip;
-			element.Opacity = GlassPercent / 100.0;
+			element.Opacity = (CurrentMaterial.LiveBlur ? 1.0 : GlassPercent / 100.0);
 			foreach (Border duplicate in Root.Children.OfType<Border>().Where((Border b) => b.Tag as string == "backdrop" && b != element).ToList())
 			{
 				Root.Children.Remove(duplicate);
@@ -553,7 +592,7 @@ public class GlassWindow : Window
 			{
 				Stretch = Stretch.Fill
 			},
-			Opacity = (LightTheme ? 0.8 : 0.66)
+			Opacity = (CurrentMaterial.LiveBlur ? 1.0 : (LightTheme ? 0.8 : 0.66))
 		};
 		// 模糊已烘进底图（见 CaptureRegion），运行时不再挂 BlurEffect。
 		border.Clip = BackdropClip();
@@ -562,7 +601,7 @@ public class GlassWindow : Window
 			Tag = "backdrop",
 			Clip = border.Clip,
 			Child = border,
-			Opacity = GlassPercent / 100.0
+			Opacity = (CurrentMaterial.LiveBlur ? 1.0 : GlassPercent / 100.0)
 		};
 		Root.Children.Insert(0, wrapper);
 	}
@@ -625,7 +664,7 @@ public class GlassWindow : Window
 	public void SetGlassOpacity(double percent)
 	{
 		GlassPercent = LayoutRules.GlassOpacity(percent);
-		string sig = (LightTheme ? 1 : 0) + "|" + CurrentMaterial.Kind + "|" + CurrentMaterial.Gloss + "|" + CurrentMaterial.Grain + "|" + CurrentMaterial.Tint + "|" + AccentIndex + "|" + CurrentMaterial.Shadow;
+		string sig = (LightTheme ? 1 : 0) + "|" + CurrentMaterial.Kind + "|" + CurrentMaterial.Gloss + "|" + CurrentMaterial.Grain + "|" + CurrentMaterial.Tint + "|" + AccentIndex + "|" + CurrentMaterial.Shadow + "|" + CurrentMaterial.Saturation + "|" + CurrentMaterial.TintAlpha + "|" + CurrentMaterial.TintBlend + "|" + CurrentMaterial.Specular + "|" + CurrentMaterial.Hairline + "|" + CurrentMaterial.BlurOverride + "|" + CurrentMaterial.LiveBlur;
 		bool materialChanged = !glassApplied || sig != materialSig;
 		if (!materialChanged && Math.Abs(GlassPercent - lastGlassPercent) < 0.001)
 		{
@@ -647,14 +686,14 @@ public class GlassWindow : Window
 				Color = Colors.Black
 			};
 		}
-		Surface.Background = GlassMaterials.Fill(CurrentMaterial, LightTheme, GlassPercent, AccentIndex);
+		Surface.Background = GlassMaterials.Fill(CurrentMaterial, LightTheme, GlassPercent, AccentForFill);
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? System.Windows.Media.Brushes.Transparent : Polish.Line(LightTheme));
 		Surface.Effect = ((GlassPercent == 0.0 || !CurrentMaterial.Shadow || SlowRender) ? null : surfaceShadow);
 		foreach (Border item in from b in Root.Children.OfType<Border>()
 			where b.Tag as string == "backdrop"
 			select b)
 		{
-			item.Opacity = GlassPercent / 100.0;
+			item.Opacity = (CurrentMaterial.LiveBlur ? 1.0 : GlassPercent / 100.0);
 		}
 		Border border = Root.Children.OfType<Border>().FirstOrDefault((Border b) => b.Tag as string == "material");
 		if (border == null)
@@ -669,7 +708,9 @@ public class GlassWindow : Window
 		border.CornerRadius = Surface.CornerRadius;
 		// 材质层裁剪：圆角外的直角 gloss/grain 纹理残影是"污点"来源之一
 		border.Clip = BackdropClip();
-		border.Opacity = GlassPercent / 100.0;
+		// 材质层（高光/发丝/柔光）与底图同随窗口透明度缩放：透明度 100% 时玻璃全隐，
+		// 否则会出现"透明窗口上浮着白色高光边"的脏点。
+		border.Opacity = (CurrentMaterial.LiveBlur ? 1.0 : GlassPercent / 100.0);
 		if (!materialChanged && border.Child != null)
 		{
 			return;
@@ -697,6 +738,88 @@ public class GlassWindow : Window
 				Opacity = CurrentMaterial.Grain
 			});
 		}
+		// Apple 玻璃镜面高光：顶部 3px 三层高光带（强光→柔光渐隐）+ 底部 1px 弱反光，
+		// 模拟玻璃厚度与边缘聚光（Apple 双方向 CASDFHighlightLayer 思路）
+		if (CurrentMaterial.Specular)
+		{
+			grid.Children.Add(new Border
+			{
+				CornerRadius = Surface.CornerRadius,
+				Height = 3.0,
+				VerticalAlignment = VerticalAlignment.Top,
+				Background = new LinearGradientBrush(new GradientStopCollection
+				{
+					new GradientStop(System.Windows.Media.Color.FromArgb((byte)(CurrentMaterial.LiveBlur ? 96 : 56), byte.MaxValue, byte.MaxValue, byte.MaxValue), 0.0),
+					new GradientStop(System.Windows.Media.Color.FromArgb((byte)(CurrentMaterial.LiveBlur ? 45 : 28), byte.MaxValue, byte.MaxValue, byte.MaxValue), 0.55),
+					new GradientStop(System.Windows.Media.Color.FromArgb((byte)(CurrentMaterial.LiveBlur ? 18 : 15), byte.MaxValue, byte.MaxValue, byte.MaxValue), 1.0)
+				}, 90.0)
+			});
+			grid.Children.Add(new Border
+			{
+				CornerRadius = Surface.CornerRadius,
+				Height = 1.0,
+				VerticalAlignment = VerticalAlignment.Bottom,
+				Background = new LinearGradientBrush(Colors.Transparent, System.Windows.Media.Color.FromArgb((byte)(CurrentMaterial.LiveBlur ? 22 : 15), byte.MaxValue, byte.MaxValue, byte.MaxValue), 90.0)
+			});
+		}
+		// Apple 玻璃发丝边框：表面内侧白色 1px 细边框（与边缘高光并存，白线叠在高光内侧）
+		if (CurrentMaterial.Hairline)
+		{
+			grid.Children.Add(new Border
+			{
+				CornerRadius = new CornerRadius(Math.Max(0.0, Surface.CornerRadius.TopLeft - 1.0), Math.Max(0.0, Surface.CornerRadius.TopRight - 1.0), Math.Max(0.0, Surface.CornerRadius.BottomRight - 1.0), Math.Max(0.0, Surface.CornerRadius.BottomLeft - 1.0)),
+				BorderThickness = new Thickness(1.0),
+				BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb((byte)(CurrentMaterial.LiveBlur ? 52 : 38), byte.MaxValue, byte.MaxValue, byte.MaxValue))
+			});
+		}
+		// Apple 玻璃柔光层：70° 右上定向柔光（模拟液体玻璃的定向光源），
+		// 四段渐变 22/16/10/4 从右上到左下渐隐。
+		if (CurrentMaterial.LiveBlur)
+		{
+			grid.Children.Add(new Border
+			{
+				CornerRadius = Surface.CornerRadius,
+				Background = new LinearGradientBrush(new GradientStopCollection
+				{
+					new GradientStop(System.Windows.Media.Color.FromArgb(22, byte.MaxValue, byte.MaxValue, byte.MaxValue), 0.0),
+					new GradientStop(System.Windows.Media.Color.FromArgb(16, byte.MaxValue, byte.MaxValue, byte.MaxValue), 0.35),
+					new GradientStop(System.Windows.Media.Color.FromArgb(10, byte.MaxValue, byte.MaxValue, byte.MaxValue), 0.62),
+					new GradientStop(System.Windows.Media.Color.FromArgb(4, byte.MaxValue, byte.MaxValue, byte.MaxValue), 1.0)
+				}, 70.0)
+			});
+			// 玻璃厚度内阴影（Apple contour）：底部 1px 暗线 + 左右 1px 弱暗线，
+			// 让玻璃边缘有"厚度收口"，而不是一片平色。深色主题暗线用纯黑，浅色用深灰。
+			System.Windows.Media.Color innerShadow = System.Windows.Media.Color.FromArgb((byte)(LightTheme ? 28 : 34), (byte)(LightTheme ? 20 : 0), (byte)(LightTheme ? 24 : 0), (byte)(LightTheme ? 30 : 0));
+			grid.Children.Add(new Border
+			{
+				CornerRadius = Surface.CornerRadius,
+				Height = 1.0,
+				VerticalAlignment = VerticalAlignment.Bottom,
+				Background = new SolidColorBrush(innerShadow)
+			});
+			grid.Children.Add(new Border
+			{
+				CornerRadius = Surface.CornerRadius,
+				Width = 1.0,
+				HorizontalAlignment = HorizontalAlignment.Left,
+				Background = new LinearGradientBrush(System.Windows.Media.Color.FromArgb((byte)Math.Max(0, (int)innerShadow.A - 22), innerShadow.R, innerShadow.G, innerShadow.B), Colors.Transparent, 0.0)
+			});
+			grid.Children.Add(new Border
+			{
+				CornerRadius = Surface.CornerRadius,
+				Width = 1.0,
+				HorizontalAlignment = HorizontalAlignment.Right,
+				Background = new LinearGradientBrush(Colors.Transparent, System.Windows.Media.Color.FromArgb((byte)Math.Max(0, (int)innerShadow.A - 22), innerShadow.R, innerShadow.G, innerShadow.B), 0.0)
+			});
+		}
+	}
+
+	// 统一圆角下发：大面板/组件/Dock 共用 Dock.Radius。改圆角必须同步 Surface、底图层
+	// 与材质层的裁剪，否则圆角外会残留直角玻璃/纹理残影（A2）。
+	public void SetSurfaceRadius(double radius)
+	{
+		Surface.CornerRadius = new CornerRadius(radius);
+		RefreshBackdropStyle();
 	}
 
 	protected void AnimateOpen()

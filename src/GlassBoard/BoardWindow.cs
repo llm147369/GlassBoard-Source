@@ -548,12 +548,26 @@ public class BoardWindow : GlassWindow
 
 	// 大面板展开时不显示捕获的壁纸背景（纯玻璃）。基类会在壁纸变化/拖拽结束时
 	// 自动重捕底图——全部屏蔽，面板始终保持干净。
+	// 例外：Apple 玻璃（LiveBlur）需要实时背景模糊底图，此时转发给基类执行捕获；
+	// 其他材质保持纯玻璃（无底图）。否则大面板选 Apple 玻璃也只有纯色透明、无模糊。
+	// 大面板玻璃背景不掺强调色（统一模式下与 Dock / 组件背景一致）；
+	// 强调色只作用于大面板内的界面元素（选中态 / 搜索焦点 / 指示等）
+	protected override int AccentForFill => -1;
+
 	public override void Backdrop(bool light)
 	{
+		if (C.Prefs.BoardMaterial.LiveBlur)
+		{
+			base.Backdrop(light);
+		}
 	}
 
 	public override void RecaptureBackdrop(bool light)
 	{
+		if (C.Prefs.BoardMaterial.LiveBlur)
+		{
+			base.RecaptureBackdrop(light);
+		}
 	}
 
 	public void Open()
@@ -595,7 +609,11 @@ public class BoardWindow : GlassWindow
 			MotionEnabled = C.Prefs.Dock.MotionEnabled;
 			MotionLevel = C.Prefs.Dock.MotionLevel;
 			ConfigureGlass(C.Prefs.Dock, C.Prefs.BoardMaterial);
+			SetSurfaceRadius(C.Prefs.Dock.Radius);
 			GlassPercent = C.Prefs.OpacityPercent ?? 72.0;
+			// 玻璃表面在 Open() 之外从不主动重建：每次打开时按当前透明度/材质重绘，
+			// 否则统一模式下改过的透明度要等到别处触发 SetGlassOpacity 才生效（迟一拍）
+			SetGlassOpacity(GlassPercent);
 			Polish.Apply(this, LightTheme);
 			BuildForSize();
 			buildMs = openTimer.ElapsedMilliseconds;
@@ -1119,7 +1137,7 @@ public class BoardWindow : GlassWindow
 			}
 			bool sel = string.Equals(chip2.Tag as string, currentGroup);
 			chip2.Background = (sel ? Polish.Card(LightTheme) : Brushes.Transparent);
-			chip2.BorderBrush = (sel ? Polish.Accent : Polish.Line(LightTheme));
+			chip2.BorderBrush = (sel ? new System.Windows.Media.SolidColorBrush(IconPacks.AccentColor(C.Prefs.Dock.Accent)) : Polish.Line(LightTheme));
 			chip2.BorderThickness = new Thickness(1.0);
 			TextBlock label = chip2.Child as TextBlock;
 			if (label != null)
@@ -1205,11 +1223,12 @@ public class BoardWindow : GlassWindow
 			PopupAnimation = PopupAnimation.Fade,
 			VerticalOffset = 2.0
 		};
-		// 搜索结果列表强制高对比：背景只跟明暗主题，不掺玻璃色调（tint 白色时曾出现白底白字看不清）
-		System.Windows.Media.Color bg = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(250, 252, 255) : System.Windows.Media.Color.FromRgb(28, 32, 44);
-		System.Windows.Media.Color ink = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(32, 38, 53) : System.Windows.Media.Color.FromRgb(244, 246, 252);
-		System.Windows.Media.Color line = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(210, 216, 226) : System.Windows.Media.Color.FromRgb(62, 72, 96);
-		bg.A = byte.MaxValue;
+		// 背景跟随大面板材质：同一份玻璃填充叠加在模糊底图上（见 CaptureSearchBackdrop）；
+		// 文字与描边按材质的实际明暗（含深色 tint）判定，杜绝“深色材质配黑字”。
+		Brush popupBg = GlassMaterials.Fill(C.Prefs.BoardMaterial, C.Prefs.Light, 75.0);
+		bool darkSurface = GlassMaterials.DarkSurface(C.Prefs.BoardMaterial, C.Prefs.Light);
+		System.Windows.Media.Color ink = darkSurface ? System.Windows.Media.Color.FromRgb(244, 246, 252) : System.Windows.Media.Color.FromRgb(32, 38, 53);
+		System.Windows.Media.Color line = darkSurface ? System.Windows.Media.Color.FromRgb(126, 136, 158) : System.Windows.Media.Color.FromRgb(210, 216, 226);
 		line.A = 180;
 		searchList = new ListBox
 		{
@@ -1219,17 +1238,53 @@ public class BoardWindow : GlassWindow
 		};
 		ScrollViewer.SetVerticalScrollBarVisibility(searchList, ScrollBarVisibility.Hidden);
 		ScrollViewer.SetHorizontalScrollBarVisibility(searchList, ScrollBarVisibility.Disabled);
+		// 双层结构：底层模糊背景图（遮住弹层后方透出的文字/图标）+ 上层材质 tint + 列表
+		Image blurBackdrop = new Image
+		{
+			Stretch = Stretch.Fill,
+			IsHitTestVisible = false,
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch
+		};
+		Border tintLayer = new Border
+		{
+			Background = popupBg,
+			Padding = new Thickness(6.0),
+			Child = searchList
+		};
+		Grid containerGrid = new Grid();
+		containerGrid.Children.Add(blurBackdrop);
+		containerGrid.Children.Add(tintLayer);
 		Border container = new Border
 		{
 			CornerRadius = new CornerRadius(14.0),
-			Background = new SolidColorBrush(bg),
 			BorderBrush = new SolidColorBrush(line),
 			BorderThickness = new Thickness(1.0),
-			Padding = new Thickness(6.0),
-			MinWidth = 300.0,
-			MaxWidth = 460.0,
-			Child = searchList
+			ClipToBounds = true,
+			Child = containerGrid
 		};
+		// 圆角裁切随实际尺寸更新（内容高度随结果数变化）
+		container.SizeChanged += (object s, SizeChangedEventArgs e2) =>
+		{
+			if (container.ActualWidth > 1.0 && container.ActualHeight > 1.0)
+			{
+				container.Clip = new RectangleGeometry(new Rect(0.0, 0.0, container.ActualWidth, container.ActualHeight), 14.0, 14.0);
+			}
+		};
+		searchPopup.Opened += delegate
+		{
+			CaptureSearchBackdrop(anchor, blurBackdrop, tintLayer);
+		};
+		// 结果面板宽度跟随搜索输入框：初始按当前宽度，输入框尺寸变化（窗口缩放/大面板尺寸切换）时同步
+		Action syncWidth = delegate
+		{
+			if (anchor != null && container != null && anchor.ActualWidth > 20.0)
+			{
+				container.Width = anchor.ActualWidth;
+			}
+		};
+		syncWidth();
+		anchor.SizeChanged += (object s, SizeChangedEventArgs e2) => syncWidth();
 		// Popup 内容不继承窗口隐式样式，这里自带一套：防止系统默认白色 hover/选中底色
 		Style popupListStyle = new Style(typeof(System.Windows.Controls.ListBox));
 		popupListStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
@@ -1238,7 +1293,7 @@ public class BoardWindow : GlassWindow
 		container.Resources[typeof(System.Windows.Controls.ListBox)] = popupListStyle;
 		Style popupItemStyle = new Style(typeof(System.Windows.Controls.ListBoxItem));
 		popupItemStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
-		popupItemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8.0, 6.0, 8.0, 6.0)));
+		popupItemStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10.0, 7.0, 10.0, 7.0)));
 		popupItemStyle.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
 		FrameworkElementFactory popupItemFrame = new FrameworkElementFactory(typeof(Border));
 		popupItemFrame.SetValue(Border.CornerRadiusProperty, new CornerRadius(8.0));
@@ -1250,6 +1305,52 @@ public class BoardWindow : GlassWindow
 		}));
 		container.Resources[typeof(System.Windows.Controls.ListBoxItem)] = popupItemStyle;
 		searchPopup.Child = container;
+	}
+
+	// 弹层打开时抓取搜索框下方的屏幕区域并烘焙模糊，作为结果面板的背景层：
+	// 后面透出的桌面/大面板文字被糊掉，再叠材质 tint（75%）保持可读。失败退回 92% 纯材质底。
+	private void CaptureSearchBackdrop(Border anchor, Image blurBackdrop, Border tintLayer)
+	{
+		try
+		{
+			if (anchor == null || blurBackdrop == null || tintLayer == null || anchor.ActualWidth < 20.0)
+			{
+				return;
+			}
+			Point screenPoint = anchor.PointToScreen(new Point(0.0, anchor.ActualHeight + 2.0));
+			double vsLeft = SystemParameters.VirtualScreenLeft;
+			double vsTop = SystemParameters.VirtualScreenTop;
+			double vsRight = vsLeft + SystemParameters.VirtualScreenWidth;
+			double vsBottom = vsTop + SystemParameters.VirtualScreenHeight;
+			double x = Math.Max(vsLeft, screenPoint.X);
+			double y = Math.Max(vsTop, screenPoint.Y);
+			double w = Math.Min(anchor.ActualWidth, vsRight - x);
+			double h = Math.Min(420.0, vsBottom - y);
+			if (w < 40.0 || h < 40.0)
+			{
+				return;
+			}
+			double scale = Native.DpiOf(new WindowInteropHelper(this).Handle) / 96.0;
+			int px = (int)Math.Round(x * scale);
+			int py = (int)Math.Round(y * scale);
+			int pw = Math.Max(1, (int)Math.Round(w * scale));
+			int ph = Math.Max(1, (int)Math.Round(h * scale));
+			using (System.Drawing.Bitmap bitmap = new System.Drawing.Bitmap(pw, ph, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+			{
+				using (System.Drawing.Graphics graphics = System.Drawing.Graphics.FromImage(bitmap))
+				{
+					graphics.CopyFromScreen(px, py, 0, 0, new System.Drawing.Size(pw, ph), System.Drawing.CopyPixelOperation.SourceCopy);
+				}
+				blurBackdrop.Source = GlassMaterials.Bake(bitmap, 32.0, 4.0);
+			}
+			// 底图就绪：tint 降到 75%，透出模糊层；深色材质下再加一层暗化保证白字对比
+			tintLayer.Background = GlassMaterials.Fill(C.Prefs.BoardMaterial, C.Prefs.Light, 75.0);
+		}
+		catch
+		{
+			// 捕获失败（远程桌面/黑屏/无桌面合成等）：回退 92% 不透明材质底，保证可读
+			tintLayer.Background = GlassMaterials.Fill(C.Prefs.BoardMaterial, C.Prefs.Light, 92.0);
+		}
 	}
 
 	private void RunSearch()
@@ -1353,14 +1454,16 @@ public class BoardWindow : GlassWindow
 
 	private ListBoxItem MakeSearchRow(SystemSearchResult r)
 	{
-		// 与 BuildSearchPopup 一致：强制高对比，不掺玻璃色调
-		System.Windows.Media.Color ink = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(32, 38, 53) : System.Windows.Media.Color.FromRgb(244, 246, 252);
-		System.Windows.Media.Color hoverColor = C.Prefs.Light ? System.Windows.Media.Color.FromRgb(58, 96, 205) : System.Windows.Media.Color.FromRgb(255, 255, 255);
+		// 与弹层一致：文字按材质实际明暗判定；hover 用强调色
+		bool darkSurface = GlassMaterials.DarkSurface(C.Prefs.BoardMaterial, C.Prefs.Light);
+		System.Windows.Media.Color ink = darkSurface ? System.Windows.Media.Color.FromRgb(244, 246, 252) : System.Windows.Media.Color.FromRgb(32, 38, 53);
+		System.Windows.Media.Color accent = IconPacks.AccentColor(C.Prefs.Dock.Accent);
+		System.Windows.Media.Color hoverColor = darkSurface ? System.Windows.Media.Color.FromRgb(255, 255, 255) : accent;
 		SolidColorBrush hoverBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(70, hoverColor.R, hoverColor.G, hoverColor.B));
 		ListBoxItem row = new ListBoxItem
 		{
 			Background = Brushes.Transparent,
-			Padding = new Thickness(8.0, 6.0, 8.0, 6.0),
+			Padding = new Thickness(10.0, 7.0, 10.0, 7.0),
 			HorizontalContentAlignment = HorizontalAlignment.Stretch,
 			Focusable = false
 		};
@@ -1376,18 +1479,18 @@ public class BoardWindow : GlassWindow
 		{
 			Orientation = Orientation.Horizontal
 		};
-		// 左：大图标（32px），应用取真实图标、文件夹用原生文件夹样式
+		// 左：图标（36px），应用取真实图标、文件夹用原生文件夹样式；底衬用强调色弱染
 		Border iconHost = new Border
 		{
-			Width = 32.0,
-			Height = 32.0,
+			Width = 36.0,
+			Height = 36.0,
 			VerticalAlignment = VerticalAlignment.Center,
-			CornerRadius = new CornerRadius(7.0),
-			Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(22, ink.R, ink.G, ink.B)),
+			CornerRadius = new CornerRadius(8.0),
+			Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(26, accent.R, accent.G, accent.B)),
 			Child = new Image
 			{
-				Width = 26.0,
-				Height = 26.0,
+				Width = 30.0,
+				Height = 30.0,
 				Stretch = Stretch.Uniform,
 				HorizontalAlignment = HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Center
@@ -1407,14 +1510,14 @@ public class BoardWindow : GlassWindow
 		StackPanel textColumn = new StackPanel
 		{
 			VerticalAlignment = VerticalAlignment.Center,
-			Margin = new Thickness(10.0, 0.0, 0.0, 0.0),
-			MaxWidth = 330.0
+			Margin = new Thickness(12.0, 0.0, 0.0, 0.0),
+			MaxWidth = 430.0
 		};
 		TextBlock nameBlock = new TextBlock
 		{
 			Text = r.Name,
 			Foreground = new SolidColorBrush(ink),
-			FontSize = 14.0,
+			FontSize = 15.0,
 			TextTrimming = TextTrimming.CharacterEllipsis
 		};
 		textColumn.Children.Add(nameBlock);
@@ -1432,7 +1535,7 @@ public class BoardWindow : GlassWindow
 		{
 			Text = subtitle,
 			Foreground = new SolidColorBrush(System.Windows.Media.Color.FromArgb(160, ink.R, ink.G, ink.B)),
-			FontSize = 12.0,
+			FontSize = 12.5,
 			Margin = new Thickness(0.0, 1.0, 0.0, 0.0),
 			TextTrimming = TextTrimming.CharacterEllipsis
 		};

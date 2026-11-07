@@ -40,7 +40,30 @@ public sealed class IslandHub : IDisposable
 		o.Normalize();
 		C.Prefs.Island = o;
 		IslandSettings.Set(o);
+		// 创建新窗口前先清理任何残留旧实例（正在销毁中/已失效的引用），
+		// 并在 Closed 后自动置空引用——杜绝新旧两个灵动岛并存。
+		IslandWindow oldWindow = window;
 		window = new IslandWindow(C);
+		IslandWindow created = window;
+		window.Closed += delegate
+		{
+			// 该窗口已关闭：若当前引用仍指向它则作废，后续 OnPrefsChanged/Start 才能正确重建
+			if (ReferenceEquals(window, created))
+			{
+				window = null;
+			}
+		};
+		try
+		{
+			if (oldWindow != null)
+			{
+				oldWindow.DisposeBridge();
+				oldWindow.Close();
+			}
+		}
+		catch
+		{
+		}
 		window.ApplyStyle(o);
 		IslandNotifications.Arrived -= OnNotificationArrived;
 		IslandNotifications.Arrived += OnNotificationArrived;
@@ -175,6 +198,16 @@ public sealed class IslandHub : IDisposable
 		}
 	}
 
+	// 全局玻璃材质变化时调用：只刷新灵动岛的材质/模糊背景，不重建收起态与页面。
+	public void RefreshMaterial()
+	{
+		if (window == null || window.IsClosedWindow)
+		{
+			return;
+		}
+		window.RefreshMaterialOnly();
+	}
+
 	// 设置页改动后调用：立即把新样式应用到窗口。
 	public void ApplyLive(IslandOptions o)
 	{
@@ -215,8 +248,18 @@ public sealed class IslandHub : IDisposable
 		else
 		{
 			Store.Trace("ISLAND close by prefs");
-			window.Close();
+			IslandWindow closing = window;
 			window = null;
+			try
+			{
+				closing.DisposeBridge();
+				closing.Close();
+			}
+			catch
+			{
+				// 关闭失败也不复活引用：watchdog 看到 Enabled=false 不会重建，
+				// 若窗口对象仍有残留，下次启用时 Start() 会先清理再新建。
+			}
 		}
 	}
 

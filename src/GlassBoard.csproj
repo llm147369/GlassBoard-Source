@@ -35,6 +35,13 @@
     <EmbeddedResource Include="GlassBoard\Assets\alipay.jpg" LogicalName="GlassBoard.Assets.alipay.jpg" />
   </ItemGroup>
   <ItemGroup>
+    <!-- 原生媒体兼容桥依赖：随输出目录一起发布，否则 NativeMediaBridge 无法加载 -->
+    <None Include="..\lib\NPSMLib.dll">
+      <Link>lib\NPSMLib.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
     <Reference Include="Interop.UIAutomationClient">
       <HintPath>lib\Interop.UIAutomationClient.dll</HintPath>
     </Reference>

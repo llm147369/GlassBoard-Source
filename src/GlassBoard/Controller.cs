@@ -206,6 +206,13 @@ public class Controller
 			return;
 		}
 		Prefs = Store.Load();
+		Polish.AccentIndex = Prefs.Dock.Accent;
+		// 旧版 Apple 玻璃（无 LiveBlur 字段）升级：补全实时模糊等新参数。
+		// 旧配置反序列化后 LiveBlur=false，不迁移则"选中 Apple 却只有普通透明"。
+		UpgradeAppleMaterial(Prefs.GlobalStyle?.Material);
+		UpgradeAppleMaterial(Prefs.Dock?.Material);
+		UpgradeAppleMaterial(Prefs.BoardMaterial);
+		UpgradeAppleMaterial(Prefs.Widgets?.Material);
 		Store.Trace("START phase=prefs ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		// 关机/注销时窗口被系统销毁会触发 Closed 事件；标记正在退出，防止组件被误判为"用户关闭"而全部禁用
 		SystemEvents.SessionEnding += (object s, SessionEndingEventArgs e) =>
@@ -284,6 +291,9 @@ public class Controller
 		DesktopVisibility.StartWatch();
 		Store.Trace("START phase=shell ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		ApplyGlobalStyle();
+		// 启动顺序：Dock 窗口在构造器前段（205 行）已用旧 Prefs 创建，
+		// 统一值在这里才覆盖 —— 补一次材质应用让玻璃背景按统一模糊/材质重烘焙。
+		Dock.SetMaterial(Prefs.Dock.Material);
 		Store.Trace("START phase=style ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		DispatcherTimer memoryTrimTimer = new DispatcherTimer
 		{
@@ -738,8 +748,9 @@ public class Controller
 		Prefs.BoardMaterial = g.Material.Copy();
 		Prefs.Widgets.Material = g.Material.Copy();
 		Prefs.Dock.OpacityPercent = g.OpacityPercent;
-		Prefs.OpacityPercent = g.OpacityPercent;
-		Prefs.Widgets.OpacityPercent = g.OpacityPercent;
+		// 统一透明度拉到 100%：Dock 全透且无边框；大面板/组件保留 10% 底与边框（留一点边）
+		Prefs.OpacityPercent = Math.Max(10.0, g.OpacityPercent);
+		Prefs.Widgets.OpacityPercent = Math.Max(10.0, g.OpacityPercent);
 		Prefs.Dock.BlurRadius = g.Blur;
 		Prefs.Dock.EdgeStrength = g.Edge;
 		Prefs.Dock.Radius = g.Radius;
@@ -1962,6 +1973,8 @@ public class Controller
 		};
 		bool flag = false;
 		bool cleaned = false;
+		// 设置打开前大面板是否开着：关窗后据此决定是否立即重开大面板（及时渲染新样式）
+		bool boardWasOpen = false;
 		Action cleanup = () =>
 		{
 			if (cleaned)
@@ -1994,6 +2007,11 @@ public class Controller
 				{
 					Dock.Refresh();
 					RefreshWidgets();
+					// 大面板及时渲染：设置打开前大面板是开着的 → 关窗后立即重开，样式改动当场可见
+					if (boardWasOpen)
+					{
+						Board.Open();
+					}
 				}
 			}
 			catch (Exception ex2)
@@ -2003,6 +2021,7 @@ public class Controller
 		};
 		try
 		{
+			boardWasOpen = Board.IsVisible;
 			Board.HideWithConsent();
 			Window w = new Window
 			{
@@ -2160,6 +2179,8 @@ public class Controller
 				}
 			};
 			DockOptions draft = Prefs.Dock.Copy();
+			// g 声明在 live()/liveGlobal 之前：两个闭包都要引用统一值
+			GlobalStyleOptions g = Prefs.GlobalStyle;
 			bool loading = false;
 			preview.Tick += (object s, EventArgs e) =>
 			{
@@ -2174,6 +2195,17 @@ public class Controller
 				{
 					draft.ItemOrder = (Prefs.Dock.ItemOrder ?? new List<string>()).ToList();
 					draft.RunningOrder = (Prefs.Dock.RunningOrder ?? new List<string>()).ToList();
+					if (g.Unify)
+					{
+						// 统一模式下保存前把统一字段同步进 draft：draft 是打开设置页时的快照，
+						// 否则用户在统一区调完再动任何走 live() 的项（图标尺寸等），
+						// 会把这五个字段写回旧值 → 重启后样式丢失。
+						draft.Material = g.Material.Copy();
+						draft.OpacityPercent = g.OpacityPercent;
+						draft.BlurRadius = g.Blur;
+						draft.EdgeStrength = g.Edge;
+						draft.Radius = g.Radius;
+					}
 				draft.Normalize();
 				Prefs.Dock = draft.Copy();
 				Save();
@@ -2247,7 +2279,8 @@ public class Controller
 				{
 					if (control.SelectedIndex >= 0)
 					{
-						change(control.SelectedIndex);
+						// 允许传入 null 处理器（如 Dock DIY 一键风格仅用于弹视觉预览，选完即置回 0）
+						change?.Invoke(control.SelectedIndex);
 					}
 				};
 				return control;
@@ -2324,11 +2357,22 @@ public class Controller
 			{
 				live();
 				ApplyGlobalStyle();
+				// 玻璃模糊/材质变化需要重捕重烘焙背景，否则拖完滑杆窗口毫无反应
+				Dock.SetMaterial(Prefs.Dock.Material);
+				Board.SetMaterial(Prefs.BoardMaterial);
+				// 统一透明度实时下发到大面板玻璃：SetMaterial 用的是大面板自己缓存的 GlassPercent 字段，
+				// 统一滑杆改动后该字段是旧值，必须按新的 Prefs.OpacityPercent 重绘一次
+				Board.SetGlassOpacity(Prefs.OpacityPercent ?? 72.0);
+				// 统一圆角同步到大面板表面（材质层/底图裁剪跟着 Surface.CornerRadius 走）
+				Board.SetSurfaceRadius(Prefs.Dock.Radius);
 				Board.Render();
 				RefreshWidgets();
+				// 灵动岛“跟随主题”时材质跟随全局材质（轻量刷新，不重建页面）
+				islandHub?.RefreshMaterial();
 			};
-			GlobalStyleOptions g = Prefs.GlobalStyle;
-			func3(stackPanel2, "统一 Dock / 大面板 / 组件外观（开启后下方全局样式同时作用于三处）", g.Unify, (bool unify) =>
+			Slider uOpacity = null;
+			Slider uBoard = null;
+			System.Windows.Controls.CheckBox unifyBox = func3(stackPanel2, "统一 Dock / 大面板 / 组件外观（开启后下方全局样式同时作用于三处）", g.Unify, (bool unify) =>
 			{
 				g.Unify = unify;
 				if (unify)
@@ -2341,53 +2385,137 @@ public class Controller
 				}
 				liveGlobal();
 			});
-			func4(stackPanel2, "材质风格", new string[4] { "标准毛玻璃", "轻盈渐变", "纯净实色", "明亮渐变" }, g.Material.Kind, (int kind) =>
+			stackPanel2.Children.Add(new TextBlock
 			{
-				g.Material.Kind = kind;
-				liveGlobal();
+				Text = "开启统一后：透明度在 Dock、大面板、组件三个区域读写同一组全局值（圆角请在 Dock DIY 页调整，统一开启时同步三处）；统一开启时 Dock 与大面板的独立透明度灰显，与「统一透明度」同值。关闭统一后下方统一滑杆停用，请到 Dock DIY 或桌面组件页分别调整。大面板在设置打开期间自动收起，透明度 / 材质改动于下次打开大面板时生效。",
+				FontSize = 12.0,
+				TextWrapping = TextWrapping.Wrap,
+				Foreground = System.Windows.Media.Brushes.LightGray,
+				Margin = new Thickness(0.0, 2.0, 0.0, 8.0)
 			});
-			string[] tintNames = new string[7] { "跟随强调色", "雾白", "雾蓝", "暖灰", "墨蓝", "雾紫", "自定义…" };
-			string[] tintValues = new string[7] { "", "#E4E9F2", "#A9C4EB", "#C9C2B4", "#16213A", "#B7A6E8", "" };
-			int tintIndex = Array.IndexOf(tintValues, g.Material.Tint ?? "");
-			if (tintIndex < 0)
+			// 玻璃材质：4 档预设（材质种类/光泽/颗粒/色调打包），单一入口全局生效。
+			// Apple 玻璃选中后下方 5 个细节控件启用；其他材质灰显且渲染零影响。
+			Slider appleSaturation = null;
+			Slider appleTint = null;
+			Slider appleBlur = null;
+			System.Windows.Controls.CheckBox appleSpecular = null;
+			System.Windows.Controls.CheckBox appleHairline = null;
+			TextBlock appleTitle = null;
+			Action applePropagate = delegate
 			{
-				tintIndex = (string.IsNullOrEmpty(g.Material.Tint) ? 0 : 6);
-			}
-			func4(stackPanel2, "玻璃色调", tintNames, tintIndex, (int tint) =>
+				g.Material.Normalize();
+				Prefs.BoardMaterial = g.Material.Copy();
+				Prefs.Widgets.Material = g.Material.Copy();
+				Prefs.Dock.Material = g.Material.Copy();
+				liveGlobal();
+				// 未开统一时 live() 会用打开设置时的快照 draft 覆写 Prefs.Dock（旧材质）——
+				// 再补一次直写，保证 Apple 细节滑杆（模糊/饱和度等）实时作用到 Dock 与灵动岛并持久化
+				Prefs.Dock.Material = g.Material.Copy();
+				Dock.SetMaterial(Prefs.Dock.Material);
+				islandHub?.RefreshMaterial();
+				Save();
+			};
+			Action<bool> setAppleSliders = delegate (bool enabled)
 			{
-				if (tint == 6)
+				if (enabled)
 				{
-					string custom = FeatureUi.Ask(w, "自定义玻璃色调", "输入 #RRGGBB 十六进制颜色（留空 = 跟随强调色）：");
-					if (custom != null)
+					// 切回 Apple 时把细节滑杆同步成当前材质值（预设应用后的同值赋值不会触发 ValueChanged）
+					appleSaturation.Value = g.Material.Saturation;
+					appleTint.Value = g.Material.TintAlpha * 100.0;
+					appleBlur.Value = (g.Material.BlurOverride > 0.0 ? g.Material.BlurOverride : 40.0);
+					appleSpecular.IsChecked = g.Material.Specular;
+					appleHairline.IsChecked = g.Material.Hairline;
+				}
+				appleSaturation.IsEnabled = enabled;
+				appleSaturation.Opacity = (enabled ? 1.0 : 0.45);
+				appleTint.IsEnabled = enabled;
+				appleTint.Opacity = (enabled ? 1.0 : 0.45);
+				appleBlur.IsEnabled = enabled;
+				appleBlur.Opacity = (enabled ? 1.0 : 0.45);
+				appleSpecular.IsEnabled = enabled;
+				appleSpecular.Opacity = (enabled ? 1.0 : 0.45);
+				appleHairline.IsEnabled = enabled;
+				appleHairline.Opacity = (enabled ? 1.0 : 0.45);
+				appleTitle.Opacity = (enabled ? 1.0 : 0.55);
+			};
+			bool appleConfirmGuard = false;
+			System.Windows.Controls.ComboBox materialBox = null;
+			materialBox = func4(stackPanel2, "玻璃材质", MaterialPresetNames, MaterialPresetIndex(g.Material), (int preset) =>
+			{
+				int previousPreset = MaterialPresetIndex(g.Material);
+				if (preset == 3 && !g.Material.LiveBlur && !appleConfirmGuard)
+				{
+					// 启用 Apple 玻璃前的占用提醒：实时背景模糊持续消耗 CPU/GPU
+					MessageBoxResult appleAnswer = System.Windows.MessageBox.Show(w, "Apple 玻璃将启用实时背景模糊（约每秒 10 帧重捕渲染），持续占用较多 CPU / GPU。\n\n切换回其他材质后会自动停止并释放。\n\n确定启用吗？", "启用 Apple 玻璃", MessageBoxButton.YesNo, MessageBoxImage.Information);
+					if (appleAnswer != MessageBoxResult.Yes)
 					{
-						g.Material.Tint = custom.Trim();
+						appleConfirmGuard = true;
+						materialBox.SelectedIndex = previousPreset;
+						appleConfirmGuard = false;
+						return;
 					}
 				}
-				else
-				{
-					g.Material.Tint = tintValues[tint];
-				}
-				g.Material.Normalize();
+				ApplyMaterialPreset(g.Material, preset);
+				applePropagate();
+				setAppleSliders(preset == 3);
+			});
+			appleTitle = new TextBlock
+			{
+				Text = "Apple 玻璃细节（仅选中「Apple 玻璃」材质时可用）",
+				FontSize = 12.0,
+				TextWrapping = TextWrapping.Wrap,
+				Foreground = System.Windows.Media.Brushes.LightGray,
+				Margin = new Thickness(0.0, 8.0, 0.0, 2.0)
+			};
+			stackPanel2.Children.Add(appleTitle);
+			appleSaturation = func2(stackPanel2, "饱和度增强", 1.0, 2.0, g.Material.Saturation, 0.05, " 倍", (double saturation) =>
+			{
+				g.Material.Saturation = saturation;
+				applePropagate();
+			});
+			appleTint = func2(stackPanel2, "色调叠加", 0.0, 50.0, g.Material.TintAlpha * 100.0, 1.0, "%", (double tintAlpha) =>
+			{
+				g.Material.TintAlpha = tintAlpha / 100.0;
+				applePropagate();
+			});
+			appleBlur = func2(stackPanel2, "模糊半径（实时预览）", 8.0, 96.0, (g.Material.BlurOverride > 0.0 ? g.Material.BlurOverride : 40.0), 2.0, " px", (double blurOverride) =>
+			{
+				g.Material.BlurOverride = blurOverride;
+				applePropagate();
+			});
+			stackPanel2.Children.Add(new TextBlock
+			{
+				Text = "拖动时 Dock / 组件 / 灵动岛实时预览；大面板在关闭设置后生效。数值越小越通透、越大背景越糊。",
+				FontSize = 11.0,
+				TextWrapping = TextWrapping.Wrap,
+				Foreground = System.Windows.Media.Brushes.Gray,
+				Margin = new Thickness(0.0, 0.0, 0.0, 4.0)
+			});
+			appleSpecular = func3(stackPanel2, "镜面高光（顶部高光 + 底部弱反光）", g.Material.Specular, (bool specular) =>
+			{
+				g.Material.Specular = specular;
+				applePropagate();
+			});
+			appleHairline = func3(stackPanel2, "发丝边框（白色 1px 内边框）", g.Material.Hairline, (bool hairline) =>
+			{
+				g.Material.Hairline = hairline;
+				applePropagate();
+			});
+			setAppleSliders(MaterialPresetIndex(g.Material) == 3);
+			// 强调色：作用于大面板（选中态 / 焦点 / 指示）+ Dock 与组件的文字与部分图标；Dock / 组件玻璃背景不再掺色
+			func4(stackPanel2, "强调色（大面板 / Dock 与组件文字·图标）", new string[6] { "晴空蓝", "雾紫", "薄荷绿", "暖金", "玫瑰粉", "月光灰" }, draft.Accent, (int accent) =>
+			{
+				draft.Accent = accent;
+				Polish.AccentIndex = accent;
+				Polish.ResetTheme();
+				ControlCenter?.RefreshAccent();
+				Polish.Apply(w, light: false);
 				liveGlobal();
 			});
-			func2(stackPanel2, "统一透明度", 10.0, 100.0, g.OpacityPercent, 5.0, "%", (double opacity) =>
+			uOpacity = func2(stackPanel2, "统一透明度", 0.0, 100.0, 100.0 - g.OpacityPercent, 5.0, "%", (double opacity) =>
 			{
-				g.OpacityPercent = opacity;
-				liveGlobal();
-			});
-			func2(stackPanel2, "统一玻璃模糊", 0.0, 40.0, g.Blur, 2.0, "", (double blur) =>
-			{
-				g.Blur = blur;
-				liveGlobal();
-			});
-			func2(stackPanel2, "统一边缘高光", 0.2, 2.0, g.Edge, 0.1, " 倍", (double edge) =>
-			{
-				g.Edge = edge;
-				liveGlobal();
-			});
-			func2(stackPanel2, "Dock 圆角", 0.0, 48.0, g.Radius, 2.0, " px", (double radius) =>
-			{
-				g.Radius = radius;
+				// 与 Dock/大面板/组件透明度滑杆一致：拉高 = 更透明（100% 全透明）
+				g.OpacityPercent = 100.0 - opacity;
 				liveGlobal();
 			});
 			func3(stackPanel2, "使用浅色玻璃", Prefs.Light, (bool light) =>
@@ -2403,8 +2531,14 @@ public class Controller
 				Prefs.Placement.PanelWidth = (Prefs.Placement.PanelHeight = null);
 				Save();
 			});
-			func2(stackPanel2, "大面板透明度", 0.0, 100.0, 100.0 - (Prefs.OpacityPercent ?? 72.0), 5.0, "%", (double num3) =>
+			uBoard = func2(stackPanel2, "大面板透明度", 0.0, 100.0, 100.0 - (g.Unify ? g.OpacityPercent : (Prefs.OpacityPercent ?? 72.0)), 5.0, "%", (double num3) =>
 			{
+				if (g.Unify)
+				{
+					g.OpacityPercent = 100.0 - num3;
+					liveGlobal();
+					return;
+				}
 				Opacity(100.0 - num3);
 				Save();
 			});
@@ -2418,14 +2552,15 @@ public class Controller
 				draft.MotionLevel = motionLevel;
 				live();
 			});
-			func2(stackPanel2, "玻璃模糊", 0.0, 40.0, draft.BlurRadius, 2.0, "", (double blurRadius) =>
+			func2(stackPanel2, "玻璃模糊", 0.0, 40.0, g.Unify ? g.Blur : draft.BlurRadius, 2.0, "", (double blurRadius) =>
 			{
+				if (g.Unify)
+				{
+					g.Blur = blurRadius;
+					liveGlobal();
+					return;
+				}
 				draft.BlurRadius = blurRadius;
-				live();
-			});
-			func2(stackPanel2, "边缘高光", 0.2, 2.0, draft.EdgeStrength, 0.1, " 倍", (double edgeStrength) =>
-			{
-				draft.EdgeStrength = edgeStrength;
 				live();
 			});
 			func3(stackPanel2, "锁定大面板位置和尺寸", Prefs.Placement.PanelLocked, (bool panelLocked) =>
@@ -2485,13 +2620,7 @@ public class Controller
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				Margin = new Thickness(0.0, 2.0, 0.0, 8.0)
 			});
-			BuildMaterialEditor(stackPanel2, "大面板玻璃材质 DIY", Prefs.BoardMaterial, () =>
-			{
-				Prefs.BoardMaterial.Normalize();
-				Board.SetMaterial(Prefs.BoardMaterial);
-				Board.RefreshIcons();
-				Save();
-			});
+			// 玻璃材质统一走上方全局「玻璃材质」预设下拉（单一入口，避免调了不生效）
 			WrapPanel wrapPanel = new WrapPanel
 			{
 				Margin = new Thickness(0.0, 12.0, 0.0, 0.0)
@@ -2532,9 +2661,7 @@ public class Controller
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				Margin = new Thickness(0.0, 12.0, 0.0, 0.0)
 			});
-			System.Windows.Controls.ComboBox presets = func4(stackPanel3, "一键风格", new string[4] { "自定义", "紧凑", "均衡", "宽松" }, 0, (int num3) =>
-			{
-			});
+			System.Windows.Controls.ComboBox presets = func4(stackPanel3, "一键风格", new string[4] { "自定义", "紧凑", "均衡", "宽松" }, 0, null);
 			Slider icon = func2(stackPanel3, "图标尺寸", 32.0, 64.0, draft.IconSize, 2.0, " px", (double iconSize) =>
 			{
 				draft.IconSize = iconSize;
@@ -2545,16 +2672,40 @@ public class Controller
 				draft.Spacing = spacing2;
 				live();
 			});
-			Slider radius = func2(stackPanel3, "圆角", 0.0, 48.0, draft.Radius, 2.0, " px", (double radius2) =>
+			Slider radius = func2(stackPanel3, "圆角", 0.0, 48.0, g.Unify ? g.Radius : draft.Radius, 2.0, " px", (double radius2) =>
 			{
+				if (g.Unify)
+				{
+					g.Radius = radius2;
+					liveGlobal();
+					return;
+				}
 				draft.Radius = radius2;
 				live();
 			});
-			Slider opacity = func2(stackPanel3, "Dock 透明度", 0.0, 100.0, 100.0 - draft.OpacityPercent, 5.0, "%", (double num3) =>
+			Slider opacity = func2(stackPanel3, "Dock 透明度", 0.0, 100.0, 100.0 - (g.Unify ? g.OpacityPercent : draft.OpacityPercent), 5.0, "%", (double num3) =>
 			{
+				// Dock 透明度只作用于 Dock：统一开启时该滑杆灰显（统一透明度接管三处），
+				// 一键风格预设改动它时也走这里 → 统一模式由 live() 按 g 值覆盖，不会连动大面板/组件。
 				draft.OpacityPercent = 100.0 - num3;
 				live();
 			});
+			// 统一关闭时统一区滑杆只写 g.*、无人消费（死控件），按统一开关状态禁用并降低透明度；
+			// 统一开启时 Dock / 大面板的独立透明度与「统一透明度」同值，灰显去重，避免误以为只调其中一处。
+			Action<bool> setUnifiedSliders = delegate (bool enabled)
+			{
+				uOpacity.IsEnabled = enabled;
+				uOpacity.Opacity = (enabled ? 1.0 : 0.45);
+				uBoard.IsEnabled = !enabled;
+				uBoard.Opacity = (enabled ? 0.45 : 1.0);
+				uBoard.Value = 100.0 - (enabled ? g.OpacityPercent : (Prefs.OpacityPercent ?? 72.0));
+				opacity.IsEnabled = !enabled;
+				opacity.Opacity = (enabled ? 0.45 : 1.0);
+				opacity.Value = 100.0 - (enabled ? g.OpacityPercent : draft.OpacityPercent);
+			};
+			unifyBox.Checked += delegate { setUnifiedSliders(obj: true); };
+			unifyBox.Unchecked += delegate { setUnifiedSliders(obj: false); };
+			setUnifiedSliders(g.Unify);
 			Slider zoom = func2(stackPanel3, "悬停放大", 1.0, 1.6, draft.Zoom, 0.05, " 倍", (double zoom2) =>
 			{
 				draft.Zoom = zoom2;
@@ -2630,11 +2781,6 @@ public class Controller
 			{
 				draft.ShowControlCenter = showControlCenter;
 				live();
-			});
-			func4(stackPanel3, "强调色", new string[6] { "晴空蓝", "雾紫", "薄荷绿", "暖金", "玫瑰粉", "月光灰" }, draft.Accent, (int accent) =>
-			{
-				draft.Accent = accent;
-				liveGlobal();
 			});
 			func3(stackPanel3, "显示分隔线", draft.ShowSeparator, (bool showSeparator) =>
 			{
@@ -3253,9 +3399,16 @@ public class Controller
 				RefreshWidgets();
 				Save();
 			});
-			func2(stackPanel5, "组件背景透明度（100% 全透明）", 0.0, 100.0, 100.0 - Prefs.Widgets.OpacityPercent, 5.0, "%", (double num3) =>
+			func2(stackPanel5, "组件背景透明度（100% 全透明）", 0.0, 100.0, 100.0 - (g.Unify ? g.OpacityPercent : Prefs.Widgets.OpacityPercent), 5.0, "%", (double num3) =>
 			{
-				Prefs.Widgets.OpacityPercent = 100.0 - num3;
+				double pct = 100.0 - num3;
+				if (g.Unify)
+				{
+					g.OpacityPercent = pct;
+					liveGlobal();
+					return;
+				}
+				Prefs.Widgets.OpacityPercent = pct;
 				foreach (WidgetPanelPosition panel2 in Prefs.Widgets.Panels)
 				{
 					panel2.OpacityPercent = null;
@@ -3270,15 +3423,10 @@ public class Controller
 			});
 			stackPanel5.Children.Add(new TextBlock
 			{
-				Text = "音乐支持封面、系统媒体会话、持久播放列表、随机与循环。备忘录自动保存并提供文本导出；切换布局或外观方案保留文字。",
+				Text = "音乐支持封面、系统媒体会话、持久播放列表、随机与循环。备忘录自动保存并提供文本导出；切换布局或外观方案保留文字。玻璃材质在「常规」页统一选择。",
 				TextWrapping = TextWrapping.Wrap,
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				Margin = new Thickness(0.0, 12.0, 0.0, 12.0)
-			});
-			BuildMaterialEditor(stackPanel5, "小组件玻璃材质 DIY", Prefs.Widgets.Material, () =>
-			{
-				RefreshWidgets();
-				Save();
 			});
 			stackPanel5.Children.Add(FeatureUi.Button("重置全部组件位置", () =>
 			{
@@ -3944,7 +4092,7 @@ public class Controller
 				{
 					s.TextOpacity = v;
 				});
-				action("增强可读性 · 轻微文字阴影", s.TextShadow, (bool v) =>
+				action("增强可读性 · 无框底衬", s.TextShadow, (bool v) =>
 				{
 					s.TextShadow = v;
 				});
@@ -4360,6 +4508,69 @@ public class Controller
 			Text = "游戏模式期间玻璃窗口完全隐藏，避免触碰底边误唤醒。右键系统托盘可退出；自动模式离开全屏后恢复 Dock 和组件。组件配置不关闭或清空。",
 			TextWrapping = TextWrapping.Wrap
 		});
+	}
+
+	// 玻璃材质预设：每档自带 材质种类/光泽/颗粒/色调 组合，设置页只暴露「玻璃材质」一个入口。
+	// 4 档：标准毛玻璃 / 磨砂霜感 / 浓郁深色 / Apple 玻璃（轻盈渐变、纯净实色、明亮渐变已删除——
+	// 渐变双档肉眼难分且观感廉价，纯净实色被 Apple 玻璃替代）。
+	// Apple 玻璃 = 饱和度增强 + 色调叠加 + 镜面高光 + 发丝边框 + 专属模糊半径（30px）。
+	// 旧配置只有 Kind 0-3（无色调），MaterialPresetIndex 按种类就近映射，保证升级不丢样式。
+	private static readonly string[] MaterialPresetNames = new string[4]
+	{
+		"标准毛玻璃", "磨砂霜感", "浓郁深色", "Apple 玻璃"
+	};
+
+	private static readonly (int kind, double gloss, double grain, string tint, double saturation, double tintAlpha, bool tintBlend, bool specular, bool hairline, double blurOverride, bool liveBlur)[] MaterialPresetValues = new (int, double, double, string, double, double, bool, bool, bool, double, bool)[]
+	{
+		(0, 0.15, 0.0, "",       1.0, 0.10, false, false, false, 0.0,  false),
+		(0, 0.0,  0.60, "#E4E9F2", 1.0, 0.10, false, false, false, 0.0,  false),
+		(2, 0.10, 0.0, "#16213A", 1.0, 0.10, false, false, false, 0.0,  false),
+		(2, 0.35, 0.06, "",       1.15, 0.10, true,  true,  true,  40.0, true)
+	};
+
+	private static int MaterialPresetIndex(MaterialOptions m)
+	{
+		m.Normalize();
+		// Apple 玻璃的细节滑杆会改动 Saturation/TintAlpha 等，TintBlend 是它唯一的稳定标识
+		if (m.TintBlend)
+		{
+			return 3;
+		}
+		if (m.Kind == 2 && string.Equals(m.Tint, "#16213A", StringComparison.OrdinalIgnoreCase))
+		{
+			return 2;
+		}
+		if (m.Kind == 0 && string.Equals(m.Tint, "#E4E9F2", StringComparison.OrdinalIgnoreCase))
+		{
+			return 1;
+		}
+		return 0;
+	}
+
+	private static void ApplyMaterialPreset(MaterialOptions m, int preset)
+	{
+		int i = Math.Max(0, Math.Min(MaterialPresetValues.Length - 1, preset));
+		m.Kind = MaterialPresetValues[i].kind;
+		m.Gloss = MaterialPresetValues[i].gloss;
+		m.Grain = MaterialPresetValues[i].grain;
+		m.Tint = MaterialPresetValues[i].tint;
+		m.Saturation = MaterialPresetValues[i].saturation;
+		m.TintAlpha = MaterialPresetValues[i].tintAlpha;
+		m.TintBlend = MaterialPresetValues[i].tintBlend;
+		m.Specular = MaterialPresetValues[i].specular;
+		m.Hairline = MaterialPresetValues[i].hairline;
+		m.BlurOverride = MaterialPresetValues[i].blurOverride;
+		m.LiveBlur = MaterialPresetValues[i].liveBlur;
+	}
+
+	// 旧版 Apple 玻璃（TintBlend=true 但无 LiveBlur 字段，反序列化后为 false）升级为
+	// 完整新版预设。启动时对全局/大面板/Dock/组件四处材质各跑一次。
+	private static void UpgradeAppleMaterial(MaterialOptions m)
+	{
+		if (m != null && m.TintBlend && !m.LiveBlur)
+		{
+			ApplyMaterialPreset(m, 3);
+		}
 	}
 
 	private void BuildMaterialEditor(StackPanel panel, string title, MaterialOptions options, Action changed)

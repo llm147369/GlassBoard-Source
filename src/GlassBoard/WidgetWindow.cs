@@ -190,13 +190,6 @@ public sealed class WidgetWindow : GlassWindow
 		{
 			textBlock.Foreground = ink;
 			textBlock.Opacity = 1.0;
-			textBlock.Effect = (s.TextShadow ? new DropShadowEffect
-			{
-				BlurRadius = 3.0,
-				ShadowDepth = 1.0,
-				Opacity = 0.65,
-				Color = Colors.Black
-			} : null);
 		}
 		if (root is Control control)
 		{
@@ -208,9 +201,45 @@ public sealed class WidgetWindow : GlassWindow
 		}
 	}
 
+	private void EnsureBacking(Border card, bool want)
+	{
+		Grid grid = card.Child as Grid;
+		if (want)
+		{
+			if (grid != null && grid.Children.Count > 0 && grid.Children[0] is Border backing0 && backing0.Tag as string == "backing")
+			{
+				return;
+			}
+			UIElement content = card.Child;
+			Border backing = new Border
+			{
+				Tag = "backing",
+				CornerRadius = new CornerRadius(Math.Max(0.0, card.CornerRadius.TopLeft - 1.0)),
+				Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(26, LightTheme ? (byte)255 : (byte)0, LightTheme ? (byte)255 : (byte)0, LightTheme ? (byte)255 : (byte)0)),
+				Margin = new Thickness(1.0),
+				IsHitTestVisible = false
+			};
+			grid = new Grid();
+			grid.Children.Add(backing);
+			card.Child = grid;
+			if (content != null)
+			{
+				grid.Children.Add(content);
+			}
+		}
+		else if (grid != null && grid.Children.Count == 2 && grid.Children[0] is Border backing1 && backing1.Tag as string == "backing")
+		{
+			UIElement content = grid.Children[1];
+			grid.Children.Clear();
+			card.Child = content;
+		}
+	}
+
 	private void PaintCard(Border card, string kind)
 	{
-		PaintText(card, StyleFor(kind), StyleInk(kind));
+		WidgetStyle s = StyleFor(kind);
+		EnsureBacking(card, s.TextShadow && s.Frameless);
+		PaintText(card, s, StyleInk(kind));
 	}
 
 	private void ApplyCardAppearance()
@@ -226,7 +255,7 @@ public sealed class WidgetWindow : GlassWindow
 			{
 				WidgetStyle widgetStyle = StyleFor(text);
 				double num = WidgetSizing.Background(M.C.Prefs.Widgets, M.C.Prefs.Widgets.Position(PanelId));
-				item.Background = ((widgetStyle.Frameless || num == 0.0) ? null : GlassMaterials.Fill(CurrentMaterial, LightTheme, num, AccentIndex));
+				item.Background = ((widgetStyle.Frameless || num == 0.0) ? null : GlassMaterials.Fill(CurrentMaterial, LightTheme, num, AccentForFill));
 				item.BorderBrush = (widgetStyle.Frameless ? null : Polish.Line(LightTheme));
 				item.BorderThickness = new Thickness((!widgetStyle.Frameless) ? 1 : 0);
 				PaintCard(item, text);
@@ -718,16 +747,20 @@ public sealed class WidgetWindow : GlassWindow
 		Topmost = desktopRaised || M.C.Prefs.Widgets.Topmost;
 	}
 
+	// 组件背景不掺强调色（强调色只用于标题文字等前景元素）
+	protected override int AccentForFill => -1;
+
 	public void UpdateOptions(List<string> kinds)
 	{
 		WidgetOptions widgets = M.C.Prefs.Widgets;
 		Kinds = kinds.ToList();
-		bool flag = signature != string.Join(",", Kinds) + "/" + M.C.Prefs.Light + "/" + widgets.CompactMusic + "/" + ControlsHidden + "/" + AppearanceSignature;
+		bool flag = signature != string.Join(",", Kinds) + "/" + M.C.Prefs.Light + "/" + widgets.CompactMusic + "/" + ControlsHidden + "/" + AppearanceSignature + "/" + GlassMaterials.DarkSurface(widgets.Material, M.C.Prefs.Light) + "/" + M.C.Prefs.Dock.Accent;
 		LightTheme = M.C.Prefs.Light;
 		MotionEnabled = M.C.Prefs.Dock.MotionEnabled;
 		MotionLevel = M.C.Prefs.Dock.MotionLevel;
 		ConfigureGlass(M.C.Prefs.Dock, widgets.Material);
-		GlassPercent = (BareShell ? 0.0 : WidgetSizing.Background(widgets, widgets.Position(PanelId)));
+		SetSurfaceRadius(M.C.Prefs.Dock.Radius);
+		GlassPercent = (BareShell ? 0.0 : WidgetSizing.Background(M.C.Prefs, widgets, widgets.Position(PanelId)));
 		ApplyTopmost();
 		moveGrip.Visibility = ((BareShell || widgets.Locked || Kinds.SequenceEqual(new string[1] { "clock" })) ? Visibility.Collapsed : Visibility.Visible);
 		resizeGrip.Visibility = ((BareShell || widgets.Locked) ? Visibility.Collapsed : Visibility.Visible);
@@ -737,7 +770,7 @@ public sealed class WidgetWindow : GlassWindow
 		if (flag)
 		{
 			Build();
-			signature = string.Join(",", Kinds) + "/" + LightTheme + "/" + widgets.CompactMusic + "/" + ControlsHidden + "/" + AppearanceSignature;
+			signature = string.Join(",", Kinds) + "/" + LightTheme + "/" + widgets.CompactMusic + "/" + ControlsHidden + "/" + AppearanceSignature + "/" + GlassMaterials.DarkSurface(widgets.Material, LightTheme) + "/" + M.C.Prefs.Dock.Accent;
 		}
 		Tick();
 		UpdateMusic();
@@ -806,7 +839,7 @@ public sealed class WidgetWindow : GlassWindow
 
 	private void ApplyWidgetGlass()
 	{
-		SetGlassOpacity(BareShell ? 0.0 : WidgetSizing.Background(M.C.Prefs.Widgets, M.C.Prefs.Widgets.Position(PanelId)));
+		SetGlassOpacity(BareShell ? 0.0 : WidgetSizing.Background(M.C.Prefs, M.C.Prefs.Widgets, M.C.Prefs.Widgets.Position(PanelId)));
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? Brushes.Transparent : Polish.Line(LightTheme));
 		ApplyCardAppearance();
 	}
@@ -1176,7 +1209,7 @@ public sealed class WidgetWindow : GlassWindow
 		TextBlock textBlock = new TextBlock
 		{
 			Text = WidgetRules.Names[num],
-			Foreground = MutedBrush,
+			Foreground = new System.Windows.Media.SolidColorBrush(IconPacks.AccentColor(AccentIndex)),
 			FontSize = 11.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
