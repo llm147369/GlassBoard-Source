@@ -4934,7 +4934,10 @@ tl = 0.0;
 // 真正的全屏（F11、无边框全屏游戏）通常没有 WS_MAXIMIZE 样式�?
 
 bool full = FullscreenState.Active() && !ForegroundIsMaximized();
-		if (full)
+		// 游戏模式：手动开启或自动模式检测到全屏游戏时，岛同样避让（用户反馈：
+		// 进入游戏模式后灵动岛还留在上面）。游戏模式下无视“全屏应用时显示”开关。
+		bool game = C.Prefs.GameMode || (C.Prefs.AutoGameMode && FullscreenState.Active());
+		if (full || game)
 		{
 // 用户主动展开的面板不因全屏策略强制隐藏（规格：展开面板打开时不被事件强行关闭）�?
 
@@ -4942,7 +4945,7 @@ bool full = FullscreenState.Active() && !ForegroundIsMaximized();
 // 只有被动状态（收起�?事件卡）在“全屏时隐藏”开启时避让�?
 
 
-if (!O.ShowOnFullscreen && mode != Mode.Hidden && mode != Mode.Expanded)
+if ((game || !O.ShowOnFullscreen) && mode != Mode.Hidden && (game || mode != Mode.Expanded))
 			{
 				HideForFullscreen();
 			}

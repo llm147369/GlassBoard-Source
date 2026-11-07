@@ -677,14 +677,15 @@ public class Controller
 			if (islandHub == null)
 			{
 				islandHub = new IslandHub(this);
-				islandHub.Start();
 			}
 			Prefs.Island = Prefs.Island ?? new IslandOptions();
 			Prefs.Island.Normalize();
-			if (!Prefs.Island.Enabled)
+			// 真开关：关 → 开、开 → 关。旧实现无条件强制开启，导致“关了没反应”。
+			Prefs.Island.Enabled = !Prefs.Island.Enabled;
+			Save();
+			if (Prefs.Island.Enabled && islandHub.Window == null)
 			{
-				Prefs.Island.Enabled = true;
-				Save();
+				islandHub.Start();
 			}
 			islandHub.OnPrefsChanged();
 		}
@@ -4238,6 +4239,10 @@ public class Controller
 
 	public void SetGameMode(bool enabled)
 	{
+		if (enabled && System.Windows.MessageBox.Show(OwnerWindow, "是否进入游戏模式？\n\n进入后 Dock、灵动岛与桌面组件都会隐藏。\n\n退出方法：右键右下角托盘里的 GlassBoard 图标，选择「退出游戏模式」。", "游戏模式", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+		{
+			return;
+		}
 		Prefs.GameMode = enabled;
 		if (enabled)
 		{

@@ -112,7 +112,16 @@ public sealed class IslandHub : IDisposable
 				else if (!window.IsVisible && !window.HiddenByPolicy)
 				{
 					Store.Trace("ISLAND watchdog re-show");
-					window.ShowCollapsed();
+					try
+					{
+						window.ShowCollapsed();
+					}
+					catch
+					{
+						// 已关闭/失效的窗口引用：丢弃并重建，杜绝新旧两个岛并存
+						window = null;
+						Start();
+					}
 				}
 			}
 			catch
@@ -183,23 +192,31 @@ public sealed class IslandHub : IDisposable
 		IslandOptions o = C.Prefs.Island ?? new IslandOptions();
 		o.Normalize();
 		Store.Trace("ISLAND prefs changed enabled=" + o.Enabled + " window=" + (window != null));
-		window?.ApplyStyle(o);
-		IslandSettings.Set(o);
-		if (window != null)
+		if (window == null || window.IsClosedWindow)
 		{
-			if (o.Enabled && window.Visibility != System.Windows.Visibility.Visible)
+			// 窗口引用已失效：清空后按需重建。绝不能对已关闭窗口访问 Visibility/Show，
+			// 否则 WPF 抛 InvalidOperationException 且旧引用残留（“再点开多一个岛”的根因）。
+			window = null;
+			if (o.Enabled)
+			{
+				Start();
+			}
+			return;
+		}
+		window.ApplyStyle(o);
+		IslandSettings.Set(o);
+		if (o.Enabled)
+		{
+			if (window.Visibility != System.Windows.Visibility.Visible)
 			{
 				window.ShowCollapsed();
 			}
-			else if (!o.Enabled)
-			{
-				Store.Trace("ISLAND close by prefs");
-				window.Close();
-			}
 		}
-		else if (o.Enabled)
+		else
 		{
-			Start();
+			Store.Trace("ISLAND close by prefs");
+			window.Close();
+			window = null;
 		}
 	}
 
