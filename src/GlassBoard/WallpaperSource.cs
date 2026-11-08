@@ -147,12 +147,67 @@ internal static class WallpaperSource
 				unit = match ?? new MonitorInfo(monitors[0].Id, vm);
 			}
 			dw.GetWallpaper(unit.Id, out string path);
+			// LiveBlur 降本：同一 tick 波内（约 250ms）多个玻璃窗口共享同一张整单元渲染图，
+			// 只做一次壁纸文件全尺寸缩放，其余窗口 1:1 裁切。超大跨屏单元（>12MP）
+			// 不缓存：整张渲染的内存/耗时反超按区直渲。锁内串行读图+裁切，杜绝并发 GDI+ 共享对象读写。
+			long unitArea = (long)(unit.Rect.Right - unit.Rect.Left) * (unit.Rect.Bottom - unit.Rect.Top);
+			if (unitArea <= 12000000L)
+			{
+				lock (renderLock)
+				{
+					long age = Environment.TickCount - fullUnitTick;
+					bool sameUnit = fullUnitBmp != null && age >= 0 && age < FULL_UNIT_TTL && fullUnitPath == path && fullUnitPos == pos && fullUnitRect.Left == unit.Rect.Left && fullUnitRect.Top == unit.Rect.Top && fullUnitRect.Right == unit.Rect.Right && fullUnitRect.Bottom == unit.Rect.Bottom;
+					if (sameUnit)
+					{
+						return CropUnit(unit.Rect, rect);
+					}
+					Bitmap full = RenderRegion(dw, unit.Rect, unit.Rect, path, pos);
+					if (full == null)
+					{
+						return null;
+					}
+					fullUnitBmp?.Dispose();
+					fullUnitBmp = full;
+					fullUnitRect = unit.Rect;
+					fullUnitPath = path;
+					fullUnitPos = pos;
+					fullUnitTick = Environment.TickCount;
+					return CropUnit(unit.Rect, rect);
+				}
+			}
 			return RenderRegion(dw, unit.Rect, rect, path, pos);
 		}
 		catch
 		{
 			return null;
 		}
+	}
+
+	private static readonly object renderLock = new object();
+
+	private static Native.RECT fullUnitRect;
+
+	private static string fullUnitPath;
+
+	private static DesktopWallpaperPosition fullUnitPos;
+
+	private static Bitmap fullUnitBmp;
+
+	private static long fullUnitTick;
+
+	private const long FULL_UNIT_TTL = 250L;
+
+	// 从共享整单元渲染图 1:1 裁出目标矩形（必须在 renderLock 内调用）。
+	private static Bitmap CropUnit(Native.RECT unit, Native.RECT rect)
+	{
+		int w = rect.Right - rect.Left;
+		int h = rect.Bottom - rect.Top;
+		Bitmap crop = new Bitmap(w, h, PixelFormat.Format24bppRgb);
+		using (Graphics g = Graphics.FromImage(crop))
+		{
+			g.DrawImage(fullUnitBmp, new Rectangle(0, 0, w, h), new Rectangle(rect.Left - unit.Left, rect.Top - unit.Top, w, h), GraphicsUnit.Pixel);
+		}
+		return crop;
 	}
 
 	private static Bitmap RenderRegion(IDesktopWallpaper dw, Native.RECT mr, Native.RECT rect, string path, DesktopWallpaperPosition pos)

@@ -14,6 +14,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
+using System.Threading.Tasks;
 
 namespace GlassBoard;
 
@@ -458,11 +459,22 @@ public class GlassWindow : Window
 	private System.Windows.Threading.DispatcherTimer backdropRefreshTimer;
 	// 实时背景模糊循环（Apple 玻璃 LiveBlur）：~10fps 重捕背景并高质烘焙，
 	// 小米玻璃柔光式动态效果。材质切走/窗口关闭即停，不残留占用。
+	// 降本改造：重捕+烘焙全部移出 UI 线程（Task.Run），UI 线程只做换 ImageBrush；
+	// 上一帧未完成时跳过本 tick（丢帧不排队）；大表面/软件渲染自动降级。
 	private System.Windows.Threading.DispatcherTimer liveBlurTimer;
 
 	private int liveFrames;
 
 	private long liveTotalMs;
+
+	// 后台烘焙在飞标记：true 时跳过 tick，杜绝后台任务堆积把低配机拖死。
+	private bool liveBlurBusy;
+
+	// 代际计数：材质切走/窗口关闭时自增，让在飞的旧结果作废（防过期底图错贴）。
+	private int liveBlurGen;
+
+	// 自动降级状态（诊断用）：大表面（≥3MP）或软件渲染时切静态式烘焙 + 5fps。
+	private bool liveDegraded;
 
 	private void EnsureLiveBlur()
 	{
@@ -484,16 +496,15 @@ public class GlassWindow : Window
 					// 直接重捕重烘（原来走 Backdrop→ScheduleBackdropRefresh 防抖路径，
 					// 但 100ms tick 每次都重启 240ms 防抖计时器 → 重捕永远不触发，
 					// 模糊滑杆 8-96px 全部无效。改为每帧直捕，约 10fps 真·实时）。
-					cachedBackdrop = null;
-					backdropKey = "";
-					RecaptureBackdrop(LightTheme);
+					// 降本：重捕+烘焙在后台线程完成，完成后回 UI 线程换图。
+					TickLiveBlur();
 					// 诊断：每 50 帧记录一次实时循环状态（帧数/平均耗时），
 					// 用于排查"感觉没效果"时确认循环是否在跑。
 					liveTotalMs += Environment.TickCount - tickStart;
 					liveFrames++;
 					if (liveFrames % 50 == 0)
 					{
-						Store.Trace("LIVE " + GetType().Name + " frames=" + liveFrames + " avgMs=" + (liveTotalMs / liveFrames) + " vis=" + IsVisible + " pct=" + GlassPercent + " bg=" + (cachedBackdrop != null));
+						Store.Trace("LIVE " + GetType().Name + " frames=" + liveFrames + " avgMs=" + (liveTotalMs / liveFrames) + " vis=" + IsVisible + " pct=" + GlassPercent + " bg=" + (cachedBackdrop != null) + " dg=" + liveDegraded);
 					}
 				};
 			}
@@ -510,6 +521,114 @@ public class GlassWindow : Window
 				Store.Trace("LIVE stop cls=" + GetType().Name + " frames=" + liveFrames);
 			}
 			liveBlurTimer?.Stop();
+			// 作废在飞的后台烘焙结果，防止材质已切走还贴回旧底图。
+			liveBlurGen++;
+			liveBlurBusy = false;
+		}
+	}
+
+	// 每 tick 触发一次：参数在 UI 线程就地快照（句柄/矩形/DPI/Margin 都是 UI 对象，
+	// 不允许带进后台线程），重捕+烘焙丢到线程池，完成后回到 UI 线程换底图。
+	private void TickLiveBlur()
+	{
+		if (liveBlurBusy)
+		{
+			return;
+		}
+		IntPtr hwnd;
+		try
+		{
+			hwnd = new WindowInteropHelper(this).Handle;
+		}
+		catch (InvalidOperationException)
+		{
+			return;
+		}
+		if (!Native.GetWindowRect(hwnd, out Native.RECT rect) || rect.Right - rect.Left < 56 || rect.Bottom - rect.Top < 56)
+		{
+			return;
+		}
+		int dpi = Native.DpiOf(hwnd);
+		System.Windows.Thickness margin = Root.Margin;
+		bool light = LightTheme;
+		double blur = MaterialBlur;
+		double saturation = CurrentMaterial.Saturation;
+		long area = (long)(rect.Right - rect.Left) * (rect.Bottom - rect.Top);
+		// 自动降级：超大表面（≥3MP，如 4K 屏的大面板/跨屏 Dock）或软件渲染 →
+		// 静态式烘焙（Bake 1/8 单模糊、无折射三件套）+ 5fps，CPU 开销降一个数量级。
+		bool degraded = area >= 3000000L || SlowRender;
+		if (degraded != liveDegraded)
+		{
+			liveDegraded = degraded;
+			Store.Trace("LIVE tier cls=" + GetType().Name + " degraded=" + degraded + " area=" + area);
+		}
+		liveBlurTimer.Interval = TimeSpan.FromMilliseconds(degraded ? 200.0 : 100.0);
+		liveBlurBusy = true;
+		int gen = ++liveBlurGen;
+		Task.Run(delegate
+		{
+			System.Windows.Media.Imaging.BitmapImage baked = LiveBlurBake(rect, dpi, margin, blur, saturation, degraded);
+			try
+			{
+				Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(delegate
+				{
+					liveBlurBusy = false;
+					if (gen != liveBlurGen || baked == null || !CurrentMaterial.LiveBlur || !IsVisible)
+					{
+						return;
+					}
+					cachedBackdrop = baked;
+					backdropKey = BackdropKeyOfRect(rect, dpi, light, blur, saturation, live: true);
+					AddBackdrop(baked);
+				}));
+			}
+			catch (InvalidOperationException)
+			{
+				// 窗口已关闭、Dispatcher 停机：放弃本帧结果。
+				liveBlurBusy = false;
+			}
+		});
+	}
+
+	// 后台烘焙（线程池执行，不碰任何 UI 对象）：捕获 + 烘焙 → 冻结的 BitmapImage。
+	private System.Windows.Media.Imaging.BitmapImage LiveBlurBake(Native.RECT rect, int dpi, System.Windows.Thickness margin, double blur, double saturation, bool degraded)
+	{
+		long bakeStart = Environment.TickCount;
+		try
+		{
+			// 与 CaptureRegion 同源的 Root.Margin 换算（灵动岛吸附模式 Margin=(14,0,14,14)）。
+			int ml = (int)Math.Round(margin.Left * dpi / 96.0);
+			int mt = (int)Math.Round(margin.Top * dpi / 96.0);
+			int mr = (int)Math.Round(margin.Right * dpi / 96.0);
+			int mb = (int)Math.Round(margin.Bottom * dpi / 96.0);
+			int num = Math.Max(1, rect.Right - rect.Left - ml - mr);
+			int num2 = Math.Max(1, rect.Bottom - rect.Top - mt - mb);
+			Native.RECT src = new Native.RECT
+			{
+				Left = rect.Left + ml,
+				Top = rect.Top + mt,
+				Right = rect.Left + ml + num,
+				Bottom = rect.Top + mt + num2
+			};
+			Bitmap bitmap = GlassCapture.Acquire(src, out bool fromFile);
+			if (bitmap == null)
+			{
+				return null;
+			}
+			using (bitmap)
+			{
+				System.Windows.Media.Imaging.BitmapImage baked = degraded ? GlassMaterials.Bake(bitmap, blur, blur / 8.0, saturation) : GlassMaterials.BakeLive(bitmap, blur, blur / 4.0, saturation);
+				if (RenderDiagnostics.Verbose)
+				{
+					Store.Trace("LIVE bake cls=" + GetType().Name + " " + num + "x" + num2 + " dg=" + degraded + " ms=" + (Environment.TickCount - bakeStart));
+				}
+				return baked;
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+			return null;
 		}
 	}
 

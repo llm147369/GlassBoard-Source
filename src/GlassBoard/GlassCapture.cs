@@ -143,6 +143,21 @@ internal static class GlassCapture
 	// 打印单个 WorkerW 自身窗口矩形（不依赖虚拟屏尺寸）并裁出目标矩形。
 	// 目标矩形必须完全落在该 WorkerW 内，否则跳过：多显示器下壁纸层可能只覆盖
 	// 主屏，按虚拟屏打印会被拉伸、裁切错位，把别的屏幕内容当壁纸裁进来。
+	// LiveBlur 降本：同一个 tick 波内（约 160ms）多个玻璃窗口共享同一张整层快照，
+	// 只做一次 PrintWindow，其余窗口 1:1 裁切。PrintWindow 输出归缓存持有，
+	// 缓存替换与裁切都在锁内串行，杜绝跨线程共享 GDI+ 对象的并发读写。
+	private static readonly object snapshotLock = new object();
+
+	private static IntPtr snapshotHwnd;
+
+	private static Native.RECT snapshotWinRect;
+
+	private static Bitmap snapshotFull;
+
+	private static long snapshotTick;
+
+	private const long SNAPSHOT_TTL = 160L;
+
 	private static Bitmap CaptureRegion(IntPtr hwnd, Native.RECT rect)
 	{
 		int w = rect.Right - rect.Left;
@@ -165,26 +180,49 @@ internal static class GlassCapture
 		{
 			return null;
 		}
-		using (Bitmap full = new Bitmap(ww, wh, PixelFormat.Format24bppRgb))
+		lock (snapshotLock)
 		{
-			bool ok;
-			using (Graphics g = Graphics.FromImage(full))
+			long age = Environment.TickCount - snapshotTick;
+			if (age >= 0 && age < SNAPSHOT_TTL && snapshotFull != null && snapshotHwnd == hwnd && snapshotWinRect.Left == wr.Left && snapshotWinRect.Top == wr.Top && snapshotWinRect.Right == wr.Right && snapshotWinRect.Bottom == wr.Bottom)
 			{
-				IntPtr hdc = g.GetHdc();
-				ok = PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT);
-				g.ReleaseHdc(hdc);
+				return CropFromSnapshot(wr, rect);
 			}
-			if (!ok)
-			{
-				return null;
-			}
-			Bitmap crop = new Bitmap(w, h, PixelFormat.Format24bppRgb);
-			using (Graphics g = Graphics.FromImage(crop))
-			{
-				g.DrawImage(full, new Rectangle(0, 0, w, h), new Rectangle(rect.Left - wr.Left, rect.Top - wr.Top, w, h), GraphicsUnit.Pixel);
-			}
-			return crop;
 		}
+		Bitmap full = new Bitmap(ww, wh, PixelFormat.Format24bppRgb);
+		bool ok;
+		using (Graphics g = Graphics.FromImage(full))
+		{
+			IntPtr hdc = g.GetHdc();
+			ok = PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT);
+			g.ReleaseHdc(hdc);
+		}
+		if (!ok)
+		{
+			full.Dispose();
+			return null;
+		}
+		lock (snapshotLock)
+		{
+			snapshotFull?.Dispose();
+			snapshotFull = full;
+			snapshotHwnd = hwnd;
+			snapshotWinRect = wr;
+			snapshotTick = Environment.TickCount;
+			return CropFromSnapshot(wr, rect);
+		}
+	}
+
+	// 从共享整层快照 1:1 裁出目标矩形（必须在 snapshotLock 内调用）。
+	private static Bitmap CropFromSnapshot(Native.RECT wr, Native.RECT rect)
+	{
+		int w = rect.Right - rect.Left;
+		int h = rect.Bottom - rect.Top;
+		Bitmap crop = new Bitmap(w, h, PixelFormat.Format24bppRgb);
+		using (Graphics g = Graphics.FromImage(crop))
+		{
+			g.DrawImage(snapshotFull, new Rectangle(0, 0, w, h), new Rectangle(rect.Left - wr.Left, rect.Top - wr.Top, w, h), GraphicsUnit.Pixel);
+		}
+		return crop;
 	}
 
 	// 均匀采样判定近黑帧（与 GlassWindow.IsBlackFrame 同参数：阈值 4、8×8 网格）
