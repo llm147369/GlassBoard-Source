@@ -475,17 +475,23 @@ public static class OnlineUpdate
 			"  timeout /t 1 /nobreak >nul",
 			"  goto wait",
 			")",
-			"robocopy \"" + extractedDir + "\" \"" + appDir + "\" /E /IS /IT /R:1 /W:1 /NFL /NDL /NJH /NJS >nul",
-			"start \"\" \"" + Path.Combine(appDir, "GlassBoard.exe") + "\"",
-			"rmdir /S /Q \"" + extractedDir + "\"",
+			"robocopy \"%GB_EXTRACT%\" \"%GB_APPDIR%\" /E /IS /IT /R:1 /W:1 /NFL /NDL /NJH /NJS >nul",
+			"start \"\" \"%GB_APPDIR%\\GlassBoard.exe\"",
+			"rmdir /S /Q \"%GB_EXTRACT%\"",
 			"del \"%~f0\""
 		};
+		// 脚本保持纯 ASCII；路径（可能含中文，如 D:\软件\...）经环境变量以 Unicode 传入，
+		// 避免 WriteAllLines 按 ASCII 落盘时把非 ASCII 字符替换成 ??，导致 robocopy 静默失败、
+		// 重启报「Windows 找不到文件」。
 		File.WriteAllLines(script, lines, Encoding.ASCII);
-		Process.Start(new ProcessStartInfo(script)
+		ProcessStartInfo psi = new ProcessStartInfo(script)
 		{
 			UseShellExecute = false,
 			CreateNoWindow = true
-		});
+		};
+		psi.EnvironmentVariables["GB_EXTRACT"] = extractedDir;
+		psi.EnvironmentVariables["GB_APPDIR"] = appDir;
+		Process.Start(psi);
 		// 更新重启属于正常退出：先标记会话结束，否则组件窗口的 Closed 事件会把每个
 		// 组件当作"用户主动关闭"而全部禁用并保存——每次在线更新后组件配置全部丢失。
 		foreach (Window window in Application.Current.Windows)
