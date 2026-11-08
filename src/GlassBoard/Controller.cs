@@ -1295,9 +1295,9 @@ public class Controller
 
 	public void Pin(Entry a)
 	{
-		if (!a.Pinned && Prefs.Apps.Count((Entry x) => x.Pinned) >= 20)
+		if (!a.Pinned && Prefs.Apps.Count((Entry x) => x.Pinned) >= 30)
 		{
-			System.Windows.MessageBox.Show("最多固定 20 个入口。请先取消一个固定。", "GlassBoard-Source");
+			System.Windows.MessageBox.Show("最多固定 30 个入口。请先取消一个固定。", "GlassBoard-Source");
 			return;
 		}
 		BoardEditState before = BeginBoardEdit();
@@ -2706,7 +2706,7 @@ public class Controller
 			unifyBox.Checked += delegate { setUnifiedSliders(obj: true); };
 			unifyBox.Unchecked += delegate { setUnifiedSliders(obj: false); };
 			setUnifiedSliders(g.Unify);
-			Slider zoom = func2(stackPanel3, "悬停放大", 1.0, 1.6, draft.Zoom, 0.05, " 倍", (double zoom2) =>
+			Slider zoom = func2(stackPanel3, "悬停放大", 1.0, 2.0, draft.Zoom, 0.05, " 倍", (double zoom2) =>
 			{
 				draft.Zoom = zoom2;
 				live();
@@ -2852,14 +2852,14 @@ public class Controller
 				Dock.ResetSettledTop();
 				live();
 			});
-			func2(stackPanel3, "固定应用显示数量", 3.0, 20.0, draft.MaxPinned, 1.0, " 个", (double num3) =>
+			func2(stackPanel3, "固定应用显示数量", 3.0, 30.0, draft.MaxPinned, 1.0, " 个", (double num3) =>
 			{
 				draft.MaxPinned = (int)num3;
 				live();
 			});
 			stackPanel3.Children.Add(new TextBlock
 			{
-				Text = "可固定 20 个入口。数量超限或屏幕放不下时，其余入口收进「更多」。",
+				Text = "可固定 30 个入口。数量超限或屏幕放不下时，其余入口收进「更多」。",
 				TextWrapping = TextWrapping.Wrap,
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				Margin = new Thickness(0.0, 12.0, 0.0, 0.0)
@@ -4344,7 +4344,7 @@ public class Controller
 			foreach (string path in fileNames)
 			{
 				Entry entry = Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, EntryPathRules.Normalize(path), StringComparison.OrdinalIgnoreCase));
-				if (entry != null && !entry.Pinned && Prefs.Apps.Count((Entry a) => a.Pinned) < 20)
+				if (entry != null && !entry.Pinned && Prefs.Apps.Count((Entry a) => a.Pinned) < 30)
 				{
 					entry.Pinned = true;
 				}
@@ -4372,7 +4372,7 @@ public class Controller
 			Add(new string[1] { text }, manual: true);
 			BoardEditState before = BeginBoardEdit();
 			Entry entry = Prefs.Apps.FirstOrDefault((Entry a) => string.Equals(a.Path, EntryPathRules.Normalize(text), StringComparison.OrdinalIgnoreCase));
-			if (entry != null && !entry.Pinned && Prefs.Apps.Count((Entry a) => a.Pinned) < 20)
+			if (entry != null && !entry.Pinned && Prefs.Apps.Count((Entry a) => a.Pinned) < 30)
 			{
 				entry.Pinned = true;
 			}

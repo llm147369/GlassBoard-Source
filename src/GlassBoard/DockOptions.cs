@@ -195,7 +195,7 @@ public class DockOptions
 		Padding = LayoutRules.Clamp(Padding, 8.0, 28.0, 16.0);
 		Radius = LayoutRules.Clamp(Radius, 0.0, 48.0, 28.0);
 		OpacityPercent = LayoutRules.GlassOpacity(OpacityPercent);
-		Zoom = LayoutRules.Clamp(Zoom, 1.0, 1.6, 1.2);
+		Zoom = LayoutRules.Clamp(Zoom, 1.0, 2.0, 1.2);
 		Offset = LayoutRules.Clamp(Offset, -500.0, 500.0, 0.0);
 		MotionLevel = LayoutRules.Clamp(MotionLevel, 0.5, 1.5, 1.0);
 		HideDelay = LayoutRules.Clamp(HideDelay, 200.0, 3000.0, 900.0);
@@ -205,7 +205,7 @@ public class DockOptions
 		Alignment = Math.Max(0, Math.Min(2, Alignment));
 		Accent = Math.Max(0, Math.Min(5, Accent));
 		IconPack = Math.Max(0, Math.Min(IconPacks.Names.Length - 1, IconPack));
-		MaxPinned = Math.Max(3, Math.Min(20, MaxPinned));
+		MaxPinned = Math.Max(3, Math.Min(30, MaxPinned));
 		ComputerStyle = Math.Max(0, Math.Min(1, ComputerStyle));
 	}
 

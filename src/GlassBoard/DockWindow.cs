@@ -86,6 +86,44 @@ public class DockWindow : GlassWindow
 
 	private DateTime lastRunningScan = DateTime.MinValue;
 
+	// —— 苹果式邻近放大（帧驱动引擎）——
+	// 设计要点（参考 macOS Dock 的丝滑实现）：
+	// 1) 输入与渲染解耦：MouseMove 只记录光标 X，不做任何布局/变换；
+	//    独立的 15ms 帧循环（Render 优先级）按 smoothstep 曲线计算目标缩放，
+	//    再用指数平滑（帧时间自适应）插值逼近——鼠标 125Hz 采样经过 60fps
+	//    插值后不再有台阶感，快速扫动也连贯。
+	// 2) 水平推开：放大图标按扩展量向两侧推开邻居（TranslateTransform），
+	//    高倍数下图标不再互相挤压；窗口左右各加透明延展区吸收推开量。
+	// 3) 收敛自停：所有图标稳定到目标后帧循环自动停止，零空闲开销。
+	private sealed class ZoomNode
+	{
+		public System.Windows.Controls.Button Button;
+		public ScaleTransform Scale;
+		public TranslateTransform Shift;
+		public double BaseCenter = double.NaN;
+		public double Current = 1.0;
+		public double Target = 1.0;
+	}
+	private readonly List<ZoomNode> zoomNodes = new List<ZoomNode>();
+	private System.Windows.Threading.DispatcherTimer zoomLeaveTimer;
+	private System.Windows.Threading.DispatcherTimer zoomFrameTimer;
+	private bool zoomHoverActive;
+	private double zoomMouseX = double.NaN;
+	// 帧计时用 Stopwatch（QueryPerformanceCounter）：DateTime.UtcNow 分辨率只有
+	// ~15.6ms，帧间隔被量化成 0/15.6/31.2ms → 平滑系数 k 跟着跳台阶，慢速移动时
+	// 每帧增量小看不出来，快速移动时大增量被量化成“要么不动、要么猛跳一步”，
+	// 就是慢→快的瞬间卡顿的来源。
+	private readonly System.Diagnostics.Stopwatch zoomClock = new System.Diagnostics.Stopwatch();
+	private double zoomLastSec;
+	private bool zoomReorderPending;
+	// —— 悬停放大诊断（默认关闭，零开销路径只是一个 0.5s 一次的 File.Exists）——
+	// zoom-test.ps1 创建 zoom-diag.on 后，帧循环把每帧状态追加到 zoom-diag.csv：
+	// 帧时刻ms|帧间隔ms|鼠标X|节点Current@按钮屏幕中心X...（分号分隔）。
+	private static readonly string zoomDiagFlag = System.IO.Path.Combine(Store.Folder, "zoom-diag.on");
+	private static readonly string zoomDiagCsv = System.IO.Path.Combine(Store.Folder, "zoom-diag.csv");
+	private bool zoomDiagOn;
+	private double zoomDiagCheckedSec = -1.0;
+
 	// —— 运行状态指示器（macOS 风格）：尺寸/圆角集中管理 ——
 	// 运行中 = 图标下方小圆点；活动窗口 = 稍长的胶囊形指示条（覆盖圆点显示）。
 	// 指示器放在图标内容块正下方，与内容块留出 RunMarkerGap 间距；
@@ -113,7 +151,7 @@ public class DockWindow : GlassWindow
 	// 运行期记忆的"贴底"位置：任务栏隐藏/显示会改变 WorkingArea 高度，
 	// 默认贴底的 Dock 每次 Refresh 都会跟着漂移；首次定位后固定住，
 	// 只有显示设置变化或用户主动"重置位置/改 DockGap"才重新贴底。
-	private double? settledTop;
+	private double? settledBottom;
 
 	private Rect dockWorkingArea;
 
@@ -246,6 +284,8 @@ public class DockWindow : GlassWindow
 			ApplyTopmost();
 		});
 		ContentGrid.Children.Add(Items);
+		MouseMove += OnDockZoomMove;
+		MouseLeave += OnDockZoomLeave;
 		InitDockPointer();
 		InitializeBackgroundMove();
 		InitTaskDock();
@@ -541,7 +581,7 @@ public class DockWindow : GlassWindow
 		Dispatcher.BeginInvoke((Action)(() =>
 		{
 			C.Board.HideWithConsent();
-			settledTop = null;
+			settledBottom = null;
 			Refresh();
 		}));
 	}
@@ -549,7 +589,7 @@ public class DockWindow : GlassWindow
 	// 主动要求下次刷新重新贴底：设置里「重置 Dock 位置」与调整「距工作区底边」时调用。
 	public void ResetSettledTop()
 	{
-		settledTop = null;
+		settledBottom = null;
 	}
 
 	public bool ApplyHotkeys(List<HotkeySetting> candidate, out string error)
@@ -785,7 +825,12 @@ public class DockWindow : GlassWindow
 		// 重建图标的同时清空徽标注册表：DockButton 会重新注册并恢复通知状态
 		notifyBadges.Clear();
 		notifyIcons.Clear();
-		Items.Margin = new Thickness(dock.HoverPadding(), 0.0, dock.HoverPadding(), 0.0);
+		// 按钮重建后缩放注册表同样重新注册（苹果式邻近放大）；
+		// ArrangeDockItems 会按用户布局重排视觉顺序，注册顺序失效，
+		// 帧循环捕获 BaseCenter 后按视觉 X 重排一次（见 OnZoomFrameTick）。
+		zoomNodes.Clear();
+		zoomReorderPending = true;
+		Items.Margin = new Thickness(dock.HoverPadding());
 		Surface.CornerRadius = new CornerRadius(dock.Radius);
 		Rect rect = (dockWorkingArea = DesktopWindowPolicy.WorkArea(this));
 		dockScreenArea = DesktopWindowPolicy.WorkArea(this, pointer: false, fullScreen: true);
@@ -951,11 +996,19 @@ public class DockWindow : GlassWindow
 			AddRunningButton();
 		}
 		ArrangeDockItems();
-		Width = Math.Min(rect.Width - 20.0, dock.WidthFor((num == 0) ? 1 : num2));
 		double num4 = dock.IconSize + 16.0 + (double)(dock.ShowLabels ? 18 : 0);
-		// 高度固定：不随悬停放大倍数（Zoom）变化——放大以图标下缘为锚点向下扩展，
-		// 顶部只需固定 6px 安全区，dock 调多大放大都不会变高。
-		Height = 28.0 + num4 + dock.Spacing * 2.0 + 6.0;
+		// 悬停放大需要的顶部空间由窗口上方的透明延展区提供：窗口高度 = 玻璃高度 + zoomExtra，
+		// 玻璃与图标位置完全不动，只有悬停图标放大时伸入透明带。dock 的视觉位置永远不受 Zoom 影响。
+		double zoomS = Math.Min(2.0, 1.0 + (dock.Zoom - 1.0) * MotionLevel);
+		// 注意：基线必须是常数 14.0（GlassWindow 构造时 Root.Margin=14），不能读 Root.Margin.Top——
+		// Refresh 每轮会把它改成 14+zoomExtra，下次 Refresh 就会把 zoomExtra 递归算塌成 0。
+		double zoomExtra = Math.Max(0.0, Math.Min(40.0, Math.Ceiling((0.8 * num4 - (num4 - dock.IconSize) * 0.5) * (zoomS - 1.0) - (14.0 + (num4 - dock.IconSize) * 0.5)) + 2.0));
+		// 水平方向同理：放大图标把邻居向两侧推开，推开量由窗口左右对称的透明延展区吸收，
+		// 玻璃条宽度与位置不受 Zoom 影响。局部推开最大约每侧 20px，40 的延展上限足够。
+		double hExtra = Math.Max(0.0, Math.Min(40.0, Math.Ceiling((zoomS - 1.0) * (dock.IconSize + 16.0) * 0.9)));
+		Root.Margin = new Thickness(14.0 + hExtra * 0.5, 14.0 + zoomExtra, 14.0 + hExtra * 0.5, Root.Margin.Bottom);
+		Width = Math.Min(rect.Width - 20.0, dock.WidthFor((num == 0) ? 1 : num2) + hExtra);
+		Height = 28.0 + num4 + dock.Spacing * 2.0 + 6.0 + zoomExtra;
 		double num6;
 		if (dock.Alignment != 0)
 		{
@@ -971,11 +1024,13 @@ public class DockWindow : GlassWindow
 			placement.DockCenter = placement.DockLeft.Value + Width / 2.0;
 		}
 		Left = DockAnchorRules.Left(placement.DockLeft.HasValue ? placement.DockCenter : ((double?)null), Width, num6 + dock.Offset, rect.Left, rect.Width);
-		// 未手动拖过 Dock 时贴工作区底边；settledTop 锁定首次贴底结果，
+		// 未手动拖过 Dock 时贴工作区底边；settledBottom 锁定首次贴底结果，
 		// 避免任务栏隐藏/显示引起的工作区变化让 Dock 上下漂移。
-		double defaultTop = settledTop ?? (rect.Bottom - Height - C.Prefs.DockGap);
+		// 窗口高度随 zoomExtra 变化时锚定底边，玻璃底边与图标位置完全不动，
+		// 放大空间由窗口上方的透明延展区吸收。
+		double defaultTop = (settledBottom.HasValue ? (settledBottom.Value - Height) : (rect.Bottom - Height - C.Prefs.DockGap));
 		Top = FeatureRules.Position(C.Prefs.Placement.DockTop ?? defaultTop, rect.Top, rect.Height, Height);
-		settledTop = Top;
+		settledBottom = Top + Height;
 		shownTop = Top;
 		if (dock.AutoHide)
 		{
@@ -1022,7 +1077,7 @@ public class DockWindow : GlassWindow
 		MotionLevel = dock.MotionLevel;
 		ConfigureGlass(dock);
 		ApplyTopmost();
-		Items.Margin = new Thickness(dock.HoverPadding(), 0.0, dock.HoverPadding(), 0.0);
+		Items.Margin = new Thickness(dock.HoverPadding());
 		Surface.CornerRadius = new CornerRadius(dock.Radius);
 		dockWorkingArea = DesktopWindowPolicy.WorkArea(this);
 		// 预览期间不重算窗口宽高：拖“图标尺寸/间距”滑杆时若窗口尺寸连续变化
@@ -1327,6 +1382,12 @@ public class DockWindow : GlassWindow
 		label.SetValue(TextBlock.TextProperty, text);
 		label.SetValue(TextBlock.FontSizeProperty, 12.5);
 		label.SetValue(TextBlock.ForegroundProperty, Polish.Ink(C.Prefs.Light));
+		// 圆角胶囊底板：半透明深浅色按主题自适应，无底板纯文字在壁纸/毛玻璃上可读性差
+		FrameworkElementFactory pill = new FrameworkElementFactory(typeof(Border));
+		pill.SetValue(Border.CornerRadiusProperty, new CornerRadius(8.0));
+		pill.SetValue(Border.PaddingProperty, new Thickness(11.0, 6.0, 11.0, 6.0));
+		pill.SetValue(Border.BackgroundProperty, new SolidColorBrush(C.Prefs.Light ? System.Windows.Media.Color.FromArgb(240, byte.MaxValue, byte.MaxValue, byte.MaxValue) : System.Windows.Media.Color.FromArgb(215, 22, 22, 28)));
+		pill.AppendChild(label);
 		return new System.Windows.Controls.ToolTip
 		{
 			PlacementTarget = null,
@@ -1341,10 +1402,10 @@ public class DockWindow : GlassWindow
 					new CustomPopupPlacement(new System.Windows.Point(x, targetSize.Height + 4.0), PopupPrimaryAxis.Vertical)
 				};
 			},
-			HasDropShadow = false,
+			HasDropShadow = true,
 			Template = new ControlTemplate(typeof(System.Windows.Controls.ToolTip))
 			{
-				VisualTree = label
+				VisualTree = pill
 			}
 		};
 	}
@@ -1820,49 +1881,24 @@ public class DockWindow : GlassWindow
 		ScaleTransform scale = new ScaleTransform(1.0, 1.0);
 		// 悬停只放大、不上浮：上浮会把按钮移离光标，光标停在图标下方（标签下缘）时
 		// MouseEnter/MouseLeave 互相触发形成死循环，图标会不停跳动。
-		// 放大锚点偏下（0.8）：放大主要向下展开，顶部溢出极小，
-		// 窗口高度固定也能容纳，dock 不会因放大倍数调整而变高。
-		button.RenderTransform = scale;
+		// 放大锚点偏下（0.8）：顶部溢出由窗口上方的透明延展区（zoomExtra）吸收。
+		// 变换组 = 先缩放（绕自身锚点）后水平推开（Shift），推开量不受缩放影响。
+		TranslateTransform shift = new TranslateTransform(0.0, 0.0);
+		TransformGroup zoomTf = new TransformGroup();
+		zoomTf.Children.Add(scale);
+		zoomTf.Children.Add(shift);
+		button.RenderTransform = zoomTf;
 		button.RenderTransformOrigin = new System.Windows.Point(0.5, 0.8);
 		button.UseLayoutRounding = true;
-		double zoomTarget = 1.0;
-		Action<bool> animate = (bool hover) =>
+		// 位图缓存：图标纹理交 GPU 缩放，RenderTransform 动画不再逐帧 CPU 光栅化
+		button.CacheMode = new BitmapCache(2.0);
+		// 苹果式邻近放大：注册进帧驱动引擎（OnDockZoomMove 记录光标，OnZoomFrameTick 统一驱动）
+		zoomNodes.Add(new ZoomNode
 		{
-			if (dockPressActive)
-			{
-				// 按下/点击期间冻结悬停动画，点击图标不再“跳动”
-				return;
-			}
-			zoomTarget = (hover ? Math.Min(1.45, 1.0 + (o.Zoom - 1.0) * MotionLevel) : 1.0);
-			if (MotionEnabled)
-			{
-				CubicEase easingFunction = new CubicEase
-				{
-					EasingMode = EasingMode.EaseOut
-				};
-				scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(zoomTarget, TimeSpan.FromMilliseconds(150.0))
-				{
-					EasingFunction = easingFunction
-				});
-				scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(zoomTarget, TimeSpan.FromMilliseconds(150.0))
-				{
-					EasingFunction = easingFunction
-				});
-			}
-		};
-		button.MouseEnter += (object s, System.Windows.Input.MouseEventArgs e) =>
-		{
-			if (!DockInputBusy)
-			{
-				animate(obj: true);
-			}
-		};
-		button.MouseLeave += (object s, System.Windows.Input.MouseEventArgs e) =>
-		{
-			animate(obj: false);
-			// 鼠标离开后恢复文字气泡（点击时被禁用防常驻）。
-			ToolTipService.SetIsEnabled(button, true);
-		};
+			Button = button,
+			Scale = scale,
+			Shift = shift
+		});
 		if (entry != null)
 		{
 			// 悬浮预览：仅应用图标注册——悬停 450ms 后在图标上方弹出窗口标题列表；
@@ -2238,6 +2274,229 @@ public class DockWindow : GlassWindow
 		{
 			Left = left;
 		}
+	}
+
+	// —— 苹果式邻近放大：帧驱动引擎 ——
+	// MouseMove 只负责记录光标 X 并唤醒帧循环；所有缩放计算、平滑插值、
+	// 水平推开与赋值都在 15ms 帧循环里批量完成（与渲染节奏同步）。
+	private void OnDockZoomMove(object s, System.Windows.Input.MouseEventArgs e)
+	{
+		if (!MotionEnabled || DockInputBusy || dockPressActive || dragging || dockIconDragging || externalDockDrag)
+		{
+			return;
+		}
+		double amp = Math.Min(1.0, (C.Prefs.Dock.Zoom - 1.0) * MotionLevel);
+		if (amp <= 0.001)
+		{
+			return;
+		}
+		if (zoomLeaveTimer != null)
+		{
+			zoomLeaveTimer.Stop();
+		}
+		zoomHoverActive = true;
+		zoomMouseX = e.GetPosition(Items).X;
+		EnsureZoomFrame();
+	}
+
+	private void EnsureZoomFrame()
+	{
+		if (zoomFrameTimer == null)
+		{
+			zoomFrameTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Render, Dispatcher)
+			{
+				Interval = TimeSpan.FromMilliseconds(15.0)
+			};
+			zoomFrameTimer.Tick += OnZoomFrameTick;
+		}
+		if (!zoomFrameTimer.IsEnabled)
+		{
+			zoomClock.Restart();
+			zoomLastSec = 0.0;
+			zoomFrameTimer.Start();
+		}
+	}
+
+	// 帧循环：smoothstep 计算目标 → 指数平滑插值 → 缩放 + 水平推开 → 收敛自停。
+	private void OnZoomFrameTick(object sender, EventArgs e)
+	{
+		double now = zoomClock.Elapsed.TotalSeconds;
+		double dt = Math.Min(0.05, Math.Max(0.001, now - zoomLastSec));
+		zoomLastSec = now;
+		if (!MotionEnabled || zoomNodes.Count == 0)
+		{
+			zoomFrameTimer.Stop();
+			return;
+		}
+		if (DockInputBusy || dockPressActive || dragging || dockIconDragging || externalDockDrag)
+		{
+			return;
+		}
+		double amp = Math.Min(1.0, (C.Prefs.Dock.Zoom - 1.0) * MotionLevel);
+		double radius = Math.Max(40.0, C.Prefs.Dock.IconSize * 1.6);
+		// 1) 目标缩放：smoothstep（s²(3-2s)）曲线——macOS Dock 同款手感，比余弦更自然
+		// 每帧重捕获 BaseCenter：按钮位置在窗口宽度动画/布局未稳时会漂移，
+		// 一次性捕获会把瞬态坐标当永久锚点（悬停左边缘空白却放大第一个图标）。
+		// TranslatePoint 开销可忽略，自愈一切瞬态位置问题。
+		foreach (ZoomNode n in zoomNodes)
+		{
+			double w = n.Button.ActualWidth;
+			if (w <= 0.0)
+			{
+				continue;
+			}
+			n.BaseCenter = n.Button.TranslatePoint(new System.Windows.Point(w * 0.5, 0.0), Items).X - n.Shift.X;
+			double t = 1.0;
+			if (zoomHoverActive && !double.IsNaN(zoomMouseX) && amp > 0.001)
+			{
+				double dx = Math.Abs(zoomMouseX - n.BaseCenter);
+				double u = Math.Max(0.0, 1.0 - dx / radius);
+				double fall = u * u * (3.0 - 2.0 * u);
+				t = 1.0 + amp * fall;
+			}
+			n.Target = t;
+		}
+		// 2) 指数平滑 + 速度上限：k 随真实帧间隔自适应（时间常数约 30ms——跟手且无台阶）。
+		// 只钳制“放大”方向（8 倍/秒）：鼠标瞬间快速移动时，图标以恒定速度平滑升起，
+		// 而不是指数猛冲形成“甩鞭”式的突然快跳。
+		// “缩小”方向不钳制：指数衰减本身就是平滑的（时间连续、无台阶），快速落下
+		// 是自然的重力感——鼠标快速滑过后图标立即回落，而不是悬空一会儿再慢慢降。
+		double k = 1.0 - Math.Exp(-dt / 0.030);
+		double maxD = dt * 8.0;
+		foreach (ZoomNode n in zoomNodes)
+		{
+			double d = (n.Target - n.Current) * k;
+			if (d > 0.0 && d > maxD)
+			{
+				d = maxD;
+			}
+			n.Current += d;
+		}
+		// 2.5) 视觉顺序校正：Refresh 重建按钮时按构建顺序注册，而 ArrangeDockItems
+		// 随后按用户布局重排 Items 子元素——注册顺序 ≠ 视觉顺序，按注册序推邻居
+		// 会推到视觉上不相邻的图标（悬浮最左会推开最右的图标，反之亦然）。
+		// 所有节点捕获完 BaseCenter（视觉 X 坐标）后按它重排一次，邻接即真实邻接。
+		if (zoomReorderPending)
+		{
+			bool ready = true;
+			foreach (ZoomNode n in zoomNodes)
+			{
+				if (double.IsNaN(n.BaseCenter))
+				{
+					ready = false;
+					break;
+				}
+			}
+			if (ready)
+			{
+				zoomNodes.Sort((ZoomNode a, ZoomNode b) => a.BaseCenter.CompareTo(b.BaseCenter));
+				zoomReorderPending = false;
+			}
+		}
+		// 3) 局部推开：放大图标只把左右直接邻居推开（各让一半扩展量），邻居再把
+		// 自己的微小扩展传给更外圈——推移量随距离几何衰减，远处图标纹丝不动。
+		// 不再出现“整个 dock 一起移位、两翼反向漂移”的刚性推开。
+		double slotW = C.Prefs.Dock.IconSize + 16.0;
+		foreach (ZoomNode n in zoomNodes)
+		{
+			n.Shift.X = 0.0;
+		}
+		for (int i = 0; i < zoomNodes.Count; i++)
+		{
+			double ext = Math.Max(0.0, zoomNodes[i].Current - 1.0) * slotW * 0.55;
+			if (ext <= 0.0001)
+			{
+				continue;
+			}
+			if (i > 0)
+			{
+				zoomNodes[i - 1].Shift.X -= ext * 0.5;
+			}
+			if (i < zoomNodes.Count - 1)
+			{
+				zoomNodes[i + 1].Shift.X += ext * 0.5;
+			}
+		}
+		bool settle = true;
+		foreach (ZoomNode n in zoomNodes)
+		{
+			if (Math.Abs(n.Target - n.Current) > 0.0015)
+			{
+				settle = false;
+			}
+			if (Math.Abs(n.Scale.ScaleX - n.Current) > 0.0005)
+			{
+				n.Scale.ScaleX = n.Current;
+				n.Scale.ScaleY = n.Current;
+			}
+		}
+		// 4) 全部稳定 → 停表，零空闲开销；下次 MouseMove 自动唤醒
+		if (settle)
+		{
+			zoomFrameTimer.Stop();
+			zoomHoverActive = false;
+		}
+		// —— 诊断落盘（默认关闭）：zoom-diag.on 存在时每帧写一行 ——
+		if (now - zoomDiagCheckedSec > 0.5)
+		{
+			zoomDiagCheckedSec = now;
+			zoomDiagOn = System.IO.File.Exists(zoomDiagFlag);
+		}
+		if (zoomDiagOn)
+		{
+			try
+			{
+				System.Text.StringBuilder sb = new System.Text.StringBuilder();
+				sb.Append((int)Math.Round(now * 1000.0)).Append('|').Append((int)Math.Round(dt * 1000.0)).Append('|').Append((int)Math.Round(zoomMouseX));
+				foreach (ZoomNode n in zoomNodes)
+				{
+					sb.Append('|').Append(n.Current.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)).Append('@');
+					System.Windows.Point sc = n.Button.PointToScreen(new System.Windows.Point(n.Button.ActualWidth * 0.5, n.Button.ActualHeight * 0.5));
+					sb.Append((int)Math.Round(sc.X));
+				}
+				System.IO.File.AppendAllText(zoomDiagCsv, sb.AppendLine().ToString());
+			}
+			catch (System.Exception ex)
+			{
+				zoomDiagOn = false;
+				Store.Trace("ZM diag FAIL " + ex.Message);
+			}
+		}
+	}
+
+	// 光标离开 Dock：120ms 宽限后仍不在窗口内才收回（吸收视觉树刷新造成的伪离场）。
+	private void OnDockZoomLeave(object s, System.Windows.Input.MouseEventArgs e)
+	{
+		if (!MotionEnabled)
+		{
+			return;
+		}
+		if (zoomLeaveTimer == null)
+		{
+			zoomLeaveTimer = new System.Windows.Threading.DispatcherTimer
+			{
+				// 60ms：只吸收视觉树刷新造成的伪离场（真离场时 IsMouseOver 检查兜底），
+				// 不再用 120ms——真离开时图标会“悬空”太久才落下，观感是卡。
+				Interval = TimeSpan.FromMilliseconds(60.0)
+			};
+			zoomLeaveTimer.Tick += (object s2, EventArgs e2) =>
+			{
+				zoomLeaveTimer.Stop();
+				if (IsMouseOver || Items.IsMouseOver)
+				{
+					return;
+				}
+				zoomHoverActive = false;
+				foreach (ZoomNode n in zoomNodes)
+				{
+					// 鼠标离开后恢复文字气泡（点击时被禁用防常驻）。
+					ToolTipService.SetIsEnabled(n.Button, true);
+				}
+				EnsureZoomFrame();
+			};
+		}
+		zoomLeaveTimer.Stop();
+		zoomLeaveTimer.Start();
 	}
 
 	private void AnimateDockLayout(double oldLeft, double oldWidth)

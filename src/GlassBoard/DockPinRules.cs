@@ -21,7 +21,7 @@ public static class DockPinRules
 			{
 				continue;
 			}
-			if (!entry.Pinned && prefs.Apps.Count((Entry a) => a.Pinned) >= 20)
+			if (!entry.Pinned && prefs.Apps.Count((Entry a) => a.Pinned) >= 30)
 			{
 				dockPinResult.Skipped++;
 				continue;

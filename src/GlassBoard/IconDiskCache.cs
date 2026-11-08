@@ -31,9 +31,9 @@ internal static class IconDiskCache
 
 	internal static ImageSource Load(string cacheName)
 	{
+		string file = Path.Combine(Dir, cacheName + ".png");
 		try
 		{
-			string file = Path.Combine(Dir, cacheName + ".png");
 			if (File.Exists(file))
 			{
 				BitmapImage bitmap = new BitmapImage();
@@ -47,6 +47,15 @@ internal static class IconDiskCache
 		}
 		catch
 		{
+			// 缓存文件损坏（典型：写入途中进程被强制结束，留下半截 PNG）：
+			// 直接删除，让提取管线下次重新生成，而不是每次启动都解码失败
+			try
+			{
+				File.Delete(file);
+			}
+			catch
+			{
+			}
 		}
 		return null;
 	}
@@ -57,13 +66,22 @@ internal static class IconDiskCache
 		{
 			Directory.CreateDirectory(Dir);
 			string file = Path.Combine(Dir, cacheName + ".png");
+			// 原子写入：先写同目录临时文件再替换。FileMode.Create 直接截断原文件，
+			// 进程中途被杀/断电会留下半截 PNG，下次启动全部图标解码失败。
+			string tmp = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
 			PngBitmapEncoder encoder = new PngBitmapEncoder();
 			encoder.Frames.Add(BitmapFrame.Create(bitmap));
-			// FileShare.Read：后台提取线程与 UI 线程偶发写同一缓存文件时，
-			// 另一方仍可读取（File.Create 的独占锁会让并行解码失败）
-			using (FileStream stream = new FileStream(file, FileMode.Create, FileAccess.Write, FileShare.Read))
+			using (FileStream stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
 			{
 				encoder.Save(stream);
+			}
+			if (File.Exists(file))
+			{
+				File.Replace(tmp, file, null);
+			}
+			else
+			{
+				File.Move(tmp, file);
 			}
 		}
 		catch
