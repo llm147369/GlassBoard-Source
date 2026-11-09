@@ -160,7 +160,7 @@ public class Controller
 		{
 			if (!settingsOpen)
 			{
-				return Board.ModalBusy;
+				return Board != null && Board.ModalBusy;
 			}
 			return true;
 		}
@@ -170,7 +170,7 @@ public class Controller
 	{
 		get
 		{
-			if (!Board.IsVisible)
+			if (Board == null || !Board.IsVisible)
 			{
 				return Dock;
 			}
@@ -227,7 +227,8 @@ public class Controller
 		{
 			MigrateRemovalIdentities();
 		}
-		Board = new BoardWindow(this);
+		// Board（应用面板）延迟到 Dispatcher 空闲后创建：开机首帧只需要 Dock，
+		// 面板窗口构造（模板/材质/图标面板，~100-150ms）不必压在启动关键路径上。
 		Dock = new DockWindow(this);
 		Store.Trace("START phase=windows ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		try
@@ -239,8 +240,8 @@ public class Controller
 		{
 			Store.Log(ex);
 		}
-		DesktopWatcher.Start(this);
-		Store.Trace("START phase=watcher ms=" + (Environment.TickCount - Program.ProcessStartTick));
+		// 桌面文件监听延后到 CompleteDeferredStartup（Board 面板就绪后）再启动，
+		// 其回调会刷新面板，不能在面板创建前触发。见 CompleteDeferredStartup。
 		EnsureSystemEntries();
 		ApplyShellPreferences();
 		try
@@ -280,7 +281,7 @@ public class Controller
 				{
 					Prefs.HideDesktopIcons = hidden;
 					Save();
-					Board.SetStatus(hidden ? "已同步：桌面图标在右键菜单中被隐藏" : "已同步：桌面图标在右键菜单中被显示");
+					Board?.SetStatus(hidden ? "已同步：桌面图标在右键菜单中被隐藏" : "已同步：桌面图标在右键菜单中被显示");
 				}
 			}
 			catch (Exception ex)
@@ -319,9 +320,41 @@ public class Controller
 		Tray = new NotifyIcon
 		{
 			Text = "GlassBoard-Source v" + CurrentVersion + " · 玻璃启动台",
-			Icon = (Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Application),
+			Icon = SystemIcons.Application,
 			Visible = true
 		};
+		// 托盘图标提取（Icon.ExtractAssociatedIcon 冷提取 ~200ms）移出启动关键路径：
+		// 先挂系统默认图标，后台提取完成后回 UI 线程替换。
+		Task.Run(delegate
+		{
+			try
+			{
+				Icon ico = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location);
+				if (ico != null)
+				{
+					Dock.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+					{
+						try
+						{
+							Icon old = Tray.Icon;
+							Tray.Icon = ico;
+							if (old != null && old != SystemIcons.Application)
+							{
+								old.Dispose();
+							}
+						}
+						catch (Exception ex)
+						{
+							Store.Log(ex);
+						}
+					}));
+				}
+			}
+			catch (Exception ex)
+			{
+				Store.Log(ex);
+			}
+		});
 		RefreshTrayMenu();
 		Store.Trace("START phase=tray ms=" + (Environment.TickCount - Program.ProcessStartTick));
 		Tray.DoubleClick += (object s, EventArgs e) =>
@@ -339,6 +372,47 @@ public class Controller
 	}
 
 	private void CompleteDeferredStartup()
+	{
+		try
+		{
+			// 面板窗口在空闲期创建（启动关键路径已省去它的构造开销）。
+			Board = new BoardWindow(this);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+		try
+		{
+			// 桌面监听同样后置：其回调会刷新面板，必须等 Board 就绪。
+			DesktopWatcher.Start(this);
+			Store.Trace("START phase=watcher ms=" + (Environment.TickCount - Program.ProcessStartTick));
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+		if (Program.StartupMode)
+		{
+			// 开机自启：非关键服务（更新检查/通知监听/组件/灵动岛/桌面同步/图标预热）
+			// 缓冲 2 秒再启动。开机登录风暴里 CPU/磁盘都在争抢，把这些后段初始化
+			// 让出首帧窗口，Dock 出现和悬停交互的体感差距非常明显。
+			DispatcherTimer bootBuffer = new DispatcherTimer
+			{
+				Interval = TimeSpan.FromSeconds(2.0)
+			};
+			bootBuffer.Tick += delegate
+			{
+				bootBuffer.Stop();
+				CompleteDeferredServices();
+			};
+			bootBuffer.Start();
+			return;
+		}
+		CompleteDeferredServices();
+	}
+
+	private void CompleteDeferredServices()
 	{
 		try
 		{
@@ -404,8 +478,9 @@ public class Controller
 		}
 		else
 		{
-			// 已导入过的老用户：每次启动补收桌面新增的文件夹/图片/文档（已存在的跳过，已移除的不再加回）
-			SyncDesktop();
+			// 已导入过的老用户：每次启动补收桌面新增的文件夹/图片/文档（已存在的跳过，已移除的不再加回）。
+			// 桌面枚举是 UI 线程上的毫秒级重活，开机时降到 Background 优先级执行，让 Dock 交互先就绪。
+			Dock.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(SyncDesktop));
 		}
 		ApplyGameMode();
 		WarmIconCache();

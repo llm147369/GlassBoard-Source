@@ -379,7 +379,80 @@ public class GlassWindow : Window
 			AddBackdrop(cachedBackdrop);
 			return;
 		}
-		CaptureRegion(rect, Native.DpiOf(hwnd));
+		// 首启（窗口尚未显示）的重捕+烘焙移出 UI 线程：PrintWindow/BoxBlur 都是毫秒级
+		// 重活，同步执行会把开机启动的首个可见画面拖慢 300ms+。参数就地快照，
+		// 烘焙完成后回 UI 线程挂底图（代际校验防止过期结果错贴）。
+		int dpi = Native.DpiOf(hwnd);
+		System.Windows.Thickness margin = Root.Margin;
+		bool lightSnap = LightTheme;
+		double blurSnap = MaterialBlur;
+		double satSnap = CurrentMaterial.Saturation;
+		bool liveSnap = CurrentMaterial.LiveBlur;
+		CaptureBackdropAsync(rect, dpi, margin, lightSnap, blurSnap, satSnap, liveSnap);
+	}
+
+	// 首启后台烘焙管线：worker 在线程池执行捕获+烘焙（不碰任何 UI 对象），
+	// 完成后 Dispatcher 回 UI 线程换底图。与 LiveBlur 管线同款代际作废机制。
+	private int backdropBakeGen;
+
+	private void CaptureBackdropAsync(Native.RECT rect, int dpi, System.Windows.Thickness margin, bool light, double blur, double saturation, bool live)
+	{
+		int gen = ++backdropBakeGen;
+		Task.Run(delegate
+		{
+			System.Windows.Media.Imaging.BitmapImage baked = BakeBackdropWorker(rect, dpi, margin, blur, saturation, live);
+			try
+			{
+				Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(delegate
+				{
+					if (gen != backdropBakeGen || baked == null)
+					{
+						return;
+					}
+					cachedBackdrop = baked;
+					backdropKey = BackdropKeyOfRect(rect, dpi, light, blur, saturation, live);
+					AddBackdrop(baked);
+				}));
+			}
+			catch (InvalidOperationException)
+			{
+				// 窗口已关闭、Dispatcher 停机：放弃本次结果。
+			}
+		});
+	}
+
+	private System.Windows.Media.Imaging.BitmapImage BakeBackdropWorker(Native.RECT rect, int dpi, System.Windows.Thickness margin, double blur, double saturation, bool live)
+	{
+		try
+		{
+			int ml = (int)Math.Round(margin.Left * dpi / 96.0);
+			int mt = (int)Math.Round(margin.Top * dpi / 96.0);
+			int mr = (int)Math.Round(margin.Right * dpi / 96.0);
+			int mb = (int)Math.Round(margin.Bottom * dpi / 96.0);
+			int num = Math.Max(1, rect.Right - rect.Left - ml - mr);
+			int num2 = Math.Max(1, rect.Bottom - rect.Top - mt - mb);
+			Native.RECT src = new Native.RECT
+			{
+				Left = rect.Left + ml,
+				Top = rect.Top + mt,
+				Right = rect.Left + ml + num,
+				Bottom = rect.Top + mt + num2
+			};
+			Bitmap bitmap = GlassCapture.Acquire(src, out bool fromFile);
+			if (bitmap == null)
+			{
+				return null;
+			}
+			using (bitmap)
+			{
+				return live ? GlassMaterials.BakeLive(bitmap, blur, blur / 4.0, saturation) : GlassMaterials.Bake(bitmap, blur, blur / 8.0, saturation);
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+			return null;
+		}
 	}
 
 	// 缓存键：物理矩形 + DPI + 主题 + 烘焙模糊半径 + 饱和度 + 实时/静态（模糊度/饱和度/烘焙方式变化必须重烘底图）。

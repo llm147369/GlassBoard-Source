@@ -34,76 +34,76 @@ public static class IslandIcons
 		return new Viewbox { Width = size, Height = size, Child = p };
 	}
 
-	// level: null=不绘制（无数据）；0..1 填充比例；charging 画闪电
+	// level: null=不绘制（无数据）；0..1 填充比例；charging 画绿色闪电。
+	// 重画版：外壳圆角饱满居中、闪电收进电池内部，不再横跨整个画布。
 	public static FrameworkElement Battery(double? level, bool charging, Brush brush, Brush trackBrush, double size)
 	{
 		Canvas c = new Canvas { Width = 24, Height = 24 };
-		// 外壳
+		Brush boltBrush = charging ? trackBrush : brush;
+		// 外壳（圆角矩形，居中饱满）
 		Path shell = new Path
 		{
-			Data = Geometry.Parse("M2.5 8.5 H16 A2.5 2.5 0 0 1 18.5 11 V13 A2.5 2.5 0 0 1 16 15.5 H2.5 A2.5 2.5 0 0 1 0 13 V11 A2.5 2.5 0 0 1 2.5 8.5 Z"),
+			Data = Geometry.Parse("M4 7.5 H15 A2.5 2.5 0 0 1 17.5 10 V14 A2.5 2.5 0 0 1 15 16.5 H4 A2.5 2.5 0 0 1 1.5 14 V10 A2.5 2.5 0 0 1 4 7.5 Z"),
 			Fill = null,
 			Stroke = brush,
-			StrokeThickness = 1.4
+			StrokeThickness = 1.5,
+			StrokeStartLineCap = PenLineCap.Round,
+			StrokeEndLineCap = PenLineCap.Round,
+			StrokeLineJoin = PenLineJoin.Round
 		};
 		c.Children.Add(shell);
-		// 正极触点
+		// 正极触点（圆角小块）
 		Path tip = new Path
 		{
-			Data = Geometry.Parse("M20.5 10.5 H22.5 V13.5 H20.5 Z"),
-			Fill = brush
+			Data = Geometry.Parse("M18.8 10 H20.9 A1.4 1.4 0 0 1 22.3 11.4 V12.6 A1.4 1.4 0 0 1 20.9 14 H18.8 Z"),
+			Fill = brush,
+			Stroke = brush,
+			StrokeLineJoin = PenLineJoin.Round
 		};
 		c.Children.Add(tip);
 		if (level.HasValue)
 		{
-			double lv = Math.Max(0.04, Math.Min(1.0, level.Value));
-			double w = 12.6 * lv; // 内部宽度 16-3.4 留边
+			double lv = Math.Max(0.05, Math.Min(1.0, level.Value));
+			double w = 10.6 * lv; // 内部可用宽度 13.6-3 留边
 			System.Windows.Shapes.Rectangle fill = new System.Windows.Shapes.Rectangle
 			{
-				Width = w,
-				Height = 1.6,
-				RadiusX = 0.6,
-				RadiusY = 0.6,
-				Fill = charging ? brush : (level.Value <= 0.2 ? trackBrush : brush)
+				Width = Math.Max(1.6, w),
+				Height = charging ? 4.2 : 4.6,
+				RadiusX = 1.2,
+				RadiusY = 1.2,
+				Fill = brush
 			};
-			Canvas.SetLeft(fill, 3.2);
-			Canvas.SetTop(fill, 11.2);
-			// 低电量用警示色（trackBrush 由调用方传红色系）
-			if (!charging && level.Value <= 0.2 && trackBrush == null)
-			{
-				fill.Fill = brush;
-			}
+			Canvas.SetLeft(fill, 3.4);
+			Canvas.SetTop(fill, charging ? 9.9 : 9.7);
 			c.Children.Add(fill);
-			// 电量分格
-			Path ticks = new Path
-			{
-				Data = Geometry.Parse("M8.7 10.2 V13.8 M12.9 10.2 V13.8"),
-				Stroke = Brushes.Transparent
-			};
-			c.Children.Add(ticks);
 		}
 		else
 		{
-			// 无数据：只画一个问号点阵，调用方一般不会走这里
+			// 无数据：问号
 			Path q = new Path
 			{
-				Data = Geometry.Parse("M9 9 A3.2 3.2 0 1 1 12.4 13.8 V15.5"),
+				Data = Geometry.Parse("M9 8.5 A3.2 3.2 0 1 1 12.4 13.2 V15"),
 				Stroke = brush,
 				StrokeThickness = 1.6,
-				Fill = null
+				Fill = null,
+				StrokeStartLineCap = PenLineCap.Round,
+				StrokeEndLineCap = PenLineCap.Round
 			};
 			c.Children.Add(q);
-			Ellipse dot = new Ellipse { Width = 1.6, Height = 1.6, Fill = brush };
-			Canvas.SetLeft(dot, 11.2);
-			Canvas.SetTop(dot, 18);
+			Ellipse dot = new Ellipse { Width = 1.7, Height = 1.7, Fill = brush };
+			Canvas.SetLeft(dot, 11.15);
+			Canvas.SetTop(dot, 17.4);
 			c.Children.Add(dot);
 		}
 		if (charging)
 		{
+			// 闪电收进电池内部：上端 8.2 下端 15.8，与外壳圆角同呼吸
 			Path bolt = new Path
 			{
-				Data = Geometry.Parse("M11.2 4.5 L6.8 12 H9.4 L8.6 19.5 L13.4 11.2 H10.8 Z"),
-				Fill = brush,
+				Data = Geometry.Parse("M10.6 8.2 L7.2 13.1 H9.6 L8.9 15.8 L12.4 10.8 H10 Z"),
+				Fill = boltBrush,
+				Stroke = boltBrush,
+				StrokeLineJoin = PenLineJoin.Round,
 				Stretch = Stretch.Uniform
 			};
 			c.Children.Add(bolt);

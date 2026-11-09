@@ -11,6 +11,10 @@ public static class Program
 {
 	// 进程启动时刻（Environment.TickCount）：窗口初始化/背景捕获等诊断日志用它换算相对耗时。
 	internal static readonly long ProcessStartTick = Environment.TickCount;
+
+	// 开机自启（Run 键带 --startup）：非关键服务错峰缓冲，让 Dock 首帧与交互先就绪。
+	internal static bool StartupMode;
+
 	private static void CleanLegacyUpdater()
 	{
 		try
@@ -87,6 +91,10 @@ public static class Program
 		// GlassBoard.Updater.exe）。旧版卸载只删安装目录，更新器缓存里的旧版程序会在
 		// 重启后被旧计划任务恢复出来——"装了新版、重启又变回 0.9.17"的元凶。
 		CleanLegacyUpdater();
+		if (args.Length != 0 && Array.Exists(args, (string a) => a == "--startup"))
+		{
+			StartupMode = true;
+		}
 		bool createdNew;
 		using (new Mutex(initiallyOwned: true, "Local\\GlassBoard.Desktop.v1", out createdNew))
 		{

@@ -54,7 +54,6 @@ private Grid collapsedRoot;
 	private Border coverBox;
 	private TextBlock collapsedTitle;
 	private Border bellBadge;
-	private Ellipse bellDot;
 	private FrameworkElement equalizerBars;
 	// 跳动条自愈看护：条被"点开→关闭"竞态弄丢或采集死亡时防抖重建；
 	// sizeAnimStart 记录主过渡动画起始时刻，防动画令牌作废后 sizeAnimating 卡死（跳动条永久冻结）。
@@ -80,6 +79,43 @@ private Grid collapsedRoot;
 	private int suggestionIdx;
 	private string[] suggestionPool = new string[0];
 	private bool suggestTraced;
+	// —— 灵动岛升级：收起态三段分区 / 铃铛徽标 / HUD / Toast 操作 / 番茄钟 ——
+	private Ellipse bellDot;
+	private Border toastReadBtn, toastMuteBtn;
+	private Border hudBar;
+	private TextBlock hudTitle, hudValue;
+	private System.Windows.Controls.ProgressBar hudFill;
+	private DispatcherTimer hudTimer;
+	private double hudVolumeLast = -1.0;
+	private DispatcherTimer focusTimer;
+	private double focusRemainingSec;
+	private string focusPreset = "专注";
+	private DispatcherTimer hudPollTimer;
+	private Border focusTile;
+	private TextBlock focusStatus, focusName;
+	private bool focusIsBreak;
+	private System.Windows.Controls.Primitives.Popup focusPanel;
+	private System.Windows.Controls.Slider focusSlider;
+	private TextBlock focusPanelStatus;
+	private Border bellShell;
+	private TextBlock focusChipText;
+	private Canvas eyeLeft, eyeRight;
+	private System.Windows.Shapes.Ellipse eyePupilL, eyePupilR;
+	private DispatcherTimer eyeTimer;
+	private System.Windows.Controls.TextBox clipSearchBox;
+	private string clipFilter = "";
+	private HashSet<string> pinnedClips;
+	private Border favBtn, sourceSwitchBtn;
+	private List<string> musicFavs;
+	private System.Windows.Controls.TextBox launcherBox;
+	private Grid homePage;
+	private TextBlock homeGreeting, homeMusicTitle, homeMusicArtist;
+	private Border homePlayBtn;
+	private Border homeMusicCard;
+	private System.Windows.Controls.Image homeMusicCover;
+	private Border homePrevBtn, homeNextBtn;
+	private TextBlock homeWifiStatus, homeBtStatus, homeVolumeText, homeBrightnessText, homeFocusText;
+	private StackPanel homeNotifStack, homeClipStack;
 
 // —�?事件�?—�?
 private Border toastCard;
@@ -202,6 +238,10 @@ toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
 			CheckFullscreen();
 			CheckForegroundCleanup();
 		};
+		// 音量 HUD 轮询：系统音量变化（键盘媒体键/其他软件）→ 弹出 HUD（2s 一次，开销可忽略）
+		hudPollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+		hudPollTimer.Tick += (object s, EventArgs e) => HudPollVolume();
+		hudPollTimer.Start();
 		BuildUi();
 		SourceInitialized += OnSourceInitialized;
 		SizeChanged += (object s, SizeChangedEventArgs e) => RefreshClip();
@@ -238,6 +278,18 @@ IslandAudio.AudioLevels += OnAudioLevels;
 			toastTimer.Stop();
 			progressTimer.Stop();
 			fullscreenTimer.Stop();
+			if (hudTimer != null)
+			{
+				hudTimer.Stop();
+			}
+			if (hudPollTimer != null)
+			{
+				hudPollTimer.Stop();
+			}
+			if (focusTimer != null)
+			{
+				focusTimer.Stop();
+			}
 			IslandAudio.AudioLevels -= OnAudioLevels;
 			StopEqualizer();
 			_isClosed = true;
@@ -283,6 +335,7 @@ collapsedRoot = new Grid { Background = Brushes.Transparent };
 		Grid.SetRow(pageHost, 1);
 		expandedRoot.Children.Add(pageHost);
 
+		homePage = BuildHomePage();
 		musicPage = BuildMusicPage();
 		notificationsPage = BuildNotificationsPage();
 		clipboardPage = BuildClipboardPage();
@@ -292,7 +345,7 @@ collapsedRoot = new Grid { Background = Brushes.Transparent };
 		notesPage = BuildNotesPage();
 		noteEditPage = BuildNoteEditPage();
 		noteViewPage = BuildNoteViewPage();
-		foreach (Grid page in new[] { musicPage, notificationsPage, clipboardPage, controlPage, wifiPage, btPage, notesPage, noteEditPage, noteViewPage })
+		foreach (Grid page in new[] { homePage, musicPage, notificationsPage, clipboardPage, controlPage, wifiPage, btPage, notesPage, noteEditPage, noteViewPage })
 		{
 			page.Visibility = Visibility.Collapsed;
 			pageHost.Children.Add(page);
@@ -317,14 +370,14 @@ toastCard = new Border();
 		toastGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 		toastGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 		toastGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-		toastIcon = new Border { Width = 36, Height = 36, CornerRadius = new CornerRadius(10), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 10, 0) };
+		toastIcon = new Border { Width = 36, Height = 36, CornerRadius = new CornerRadius(18), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 10, 0) };
 		toastIconText = new TextBlock { FontSize = 16, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
 		toastIcon.Child = toastIconText;
 		toastGrid.Children.Add(toastIcon);
 		StackPanel toastTextStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
-		toastApp = new TextBlock { FontSize = 11, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Center };
-		toastTitle = new TextBlock { FontSize = 13.5, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 1, 0, 0) };
-		toastBody = new TextBlock { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Center, MaxHeight = 20, Margin = new Thickness(0, 1, 0, 0) };
+		toastApp = new TextBlock { FontSize = 11, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Left };
+		toastTitle = new TextBlock { FontSize = 13.5, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Left, Margin = new Thickness(0, 1, 0, 0) };
+		toastBody = new TextBlock { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Left, MaxHeight = 20, Margin = new Thickness(0, 1, 0, 0) };
 		toastTextStack.Children.Add(toastApp);
 		toastTextStack.Children.Add(toastTitle);
 		toastTextStack.Children.Add(toastBody);
@@ -333,13 +386,67 @@ toastCard = new Border();
 		toastViewBtn = TextButton("查看", delegate
 		{
 			toastTimer.Stop();
+			// 「查看」直达来源应用：激活已运行窗口（或启动应用）→ 清掉该应用通知并收起；
+			// 目标应用不可达时才回退到通知筛选页。
+			string key = toastFilterKey;
+			string aumid = key.StartsWith("name:", StringComparison.Ordinal) ? null : key;
+			if (NotificationCenter.ActivateApp(aumid, toastApp.Text))
+			{
+				IslandNotifications.RemoveMatching(delegate (IslandNotification nn)
+				{
+					if (key.StartsWith("name:", StringComparison.Ordinal))
+					{
+						string name = key.Substring(5);
+						return string.Equals(nn.AppName ?? "", name, StringComparison.OrdinalIgnoreCase);
+					}
+					return string.Equals(nn.Aumid ?? "", key, StringComparison.OrdinalIgnoreCase);
+				});
+				ShowCollapsed();
+				return;
+			}
 			notifFilter = toastFilterKey;
 			Expand(1);
 		});
 		toastViewBtn.VerticalAlignment = VerticalAlignment.Center;
-		toastViewBtn.Margin = new Thickness(0, 0, 14, 0);
+		toastViewBtn.Margin = new Thickness(0, 0, 10, 0);
 		Grid.SetColumn(toastViewBtn, 2);
 		toastGrid.Children.Add(toastViewBtn);
+		// 通知快捷操作（已读/静默该应用）——ToastActions 关闭时隐藏
+		StackPanel toastActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+		toastReadBtn = TextButton("已读", delegate
+		{
+			toastTimer.Stop();
+			string key = toastFilterKey;
+			IslandNotifications.RemoveMatching(delegate (IslandNotification nn)
+			{
+				if (key.StartsWith("name:", StringComparison.Ordinal))
+				{
+					string name = key.Substring(5);
+					return string.Equals(nn.AppName ?? "", name, StringComparison.OrdinalIgnoreCase);
+				}
+				return string.Equals(nn.Aumid ?? "", key, StringComparison.OrdinalIgnoreCase);
+			});
+			ShowCollapsed();
+		});
+		toastReadBtn.VerticalAlignment = VerticalAlignment.Center;
+		toastActions.Children.Add(toastReadBtn);
+		toastMuteBtn = TextButton("静默", delegate
+		{
+			toastTimer.Stop();
+			string key = toastFilterKey;
+			if (!O.MutedApps.Contains(key, StringComparer.OrdinalIgnoreCase))
+			{
+				O.MutedApps.Add(key.ToLowerInvariant());
+				IslandSettings.Set(O);
+			}
+			ShowCollapsed();
+		});
+		toastMuteBtn.VerticalAlignment = VerticalAlignment.Center;
+		toastMuteBtn.Margin = new Thickness(6, 0, 0, 0);
+		toastActions.Children.Add(toastMuteBtn);
+		toastGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		Grid.SetColumn(toastActions, 3);
+		toastGrid.Children.Add(toastActions);
 		toastCard.Child = toastGrid;
 		toastCard.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
 		{
@@ -350,6 +457,27 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 };
 		toastCard.Cursor = Cursors.Hand;
 		toastCard.Visibility = Visibility.Collapsed;
+
+		// 音量/亮度 HUD：窗口内底部弹出的小条（HudEnabled 时可用，初始隐藏）
+		hudBar = new Border
+		{
+			CornerRadius = new CornerRadius(14),
+			Background = ChipBrush(),
+			Padding = new Thickness(12, 6, 12, 6),
+			HorizontalAlignment = HorizontalAlignment.Center,
+			VerticalAlignment = VerticalAlignment.Bottom,
+			Margin = new Thickness(0, 0, 0, 8),
+			Visibility = Visibility.Collapsed
+		};
+		StackPanel hudRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+		hudTitle = new TextBlock { FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = TextBrush, VerticalAlignment = VerticalAlignment.Center };
+		hudRow.Children.Add(hudTitle);
+		hudFill = new System.Windows.Controls.ProgressBar { Width = 88, Height = 4, Minimum = 0, Maximum = 100, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Foreground = IconBrush() };
+		hudRow.Children.Add(hudFill);
+		hudValue = new TextBlock { FontSize = 11, Foreground = MutedBrush, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+		hudRow.Children.Add(hudValue);
+		hudBar.Child = hudRow;
+		ContentGrid.Children.Add(hudBar);
 
 		ContentGrid.Children.Add(collapsedRoot);
 		ContentGrid.Children.Add(toastCard);
@@ -367,117 +495,177 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 		refreshText = null;
 		bellBadge = null;
 		bellDot = null;
+		bellShell = null;
+		focusChipText = null;
+		eyeLeft = null;
+		eyeRight = null;
 		bool light = LightTheme;
 		Brush text = TextBrush;
 		Brush muted = MutedBrush;
 		double iconSize = O.IconSize;
 		double gap = O.ItemGap;
+		int layout = Math.Max(0, Math.Min(2, O.CollapsedLayout));
+		bool playing = M != null && M.Playing;
+		bool focusing = !playing && focusTimer != null && focusTimer.IsEnabled && focusRemainingSec > 0;
 
-// 音乐（封面靠左，标题最后添加→填充中间全部剩余宽度，不再居中留大空隙）�?
-
-// 收起态内容开关已从设置移除：正在播放音乐就直接显示音乐内容（封面/跳动�?曲名），
-// 通知不受影响（事件卡照常弹出、通知页照常记录）；不播放时显示时�?刷新�?天气布局�?
-
-bool playing = M != null && M.Playing;
+		// 三段分区胶囊（布局 0）：封面 | 主信息 ┊ 时钟/天气/电量芯片（细分隔线 + 独立底衬）；
+		// 布局 1=极简；布局 2=信息优先（旧形态）。
 		if (playing)
 		{
-			// 封面随收起高度联动缩放（内容区高 = CollapsedHeight - 28 根边�?- 8 上下边距）；
-// 吸附顶部时窗口已补偿 -14px，封面基数同样扣�?14，保证与浮动模式完全一致�?
-
-
-// 正方形封面永远完整显示、不会被裁成长方形；圆角跟随“形状与布局”的圆角设置�?
-
-
-double coverBase = SnapTop() ? O.CollapsedHeight - 14.0 : O.CollapsedHeight;
-			double coverSize = Math.Min(96.0, Math.Max(28.0, coverBase - 36.0));
-			double coverRadius = Math.Min(O.CornerRadius, coverSize / 2.0);
-			coverBox = new Border
+			if (layout != 2)
 			{
-				Width = coverSize,
-				Height = coverSize,
-				CornerRadius = new CornerRadius(coverRadius),
-				Margin = new Thickness(0, 0, 2, 0),
-				VerticalAlignment = VerticalAlignment.Center,
-				ClipToBounds = true
-			};
-			if (M.Artwork != null)
+				double coverBase = SnapTop() ? O.CollapsedHeight - 14.0 : O.CollapsedHeight;
+				double coverSize = Math.Min(96.0, Math.Max(28.0, coverBase - 36.0));
+				double coverRadius = Math.Min(O.CornerRadius, coverSize / 2.0);
+				coverBox = new Border
+				{
+					Width = coverSize,
+					Height = coverSize,
+					CornerRadius = new CornerRadius(coverRadius),
+					Margin = new Thickness(0, 0, 2, 0),
+					VerticalAlignment = VerticalAlignment.Center,
+					ClipToBounds = true
+				};
+				if (M.Artwork != null)
+				{
+					Image img = new Image { Source = M.Artwork, Stretch = Stretch.UniformToFill, Width = coverSize, Height = coverSize };
+					img.Clip = new RectangleGeometry(new Rect(0, 0, coverSize, coverSize), coverRadius, coverRadius);
+					coverBox.Child = img;
+				}
+				else
+				{
+					coverBox.Child = IslandIcons.MusicPlaceholder(text, ChipBrush(), coverSize, coverRadius);
+				}
+				DockPanel.SetDock(coverBox, Dock.Left);
+				collapsedStack.Children.Add(coverBox);
+			}
+
+			// 播放模式右端：跳动条（布局 0/1）+ 时钟/电量迷你芯片（仅布局 0）
+			StackPanel rightChips = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) };
+			if (layout != 2 && O.EqualizerEnabled)
 			{
-				Image img = new Image { Source = M.Artwork, Stretch = Stretch.UniformToFill, Width = coverSize, Height = coverSize };
-				img.Clip = new RectangleGeometry(new Rect(0, 0, coverSize, coverSize), coverRadius, coverRadius);
-				coverBox.Child = img;
+				equalizerBars = BuildEqualizer();
+				rightChips.Children.Add(equalizerBars);
+				if (mode == Mode.Collapsed)
+				{
+					StartEqualizer();
+				}
+			}
+			if (layout == 0)
+			{
+				// 播放模式右侧只保留频谱跳动条：三段式把宽度让给中部歌词行。
+				// 时钟/电量芯片会占 200px+，384px 宽下中部被压到 ~40px，
+				// 歌词与曲名被 CharacterEllipsis 裁成两三个字（观感=歌词没显示）。
+				// 时钟/电量在非播放收起态与展开首页照常显示。
+			}
+			if (rightChips.Children.Count > 0)
+			{
+				DockPanel.SetDock(rightChips, Dock.Right);
+				collapsedStack.Children.Add(rightChips);
+			}
+		}
+		else
+		{
+			StopEqualizer();
+			if (layout == 0)
+			{
+				// 三段：时间块 ┊ 眼睛 ┊ 天气 电量 铃铛
+				StackPanel timeStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+				collapsedTime = new TextBlock { Text = DateTime.Now.ToString("HH:mm"), FontSize = O.FontSize + 1.0, FontWeight = FontWeights.SemiBold, Foreground = text };
+				collapsedDate = new TextBlock { Text = DateTime.Now.ToString("M月d日 ddd"), FontSize = Math.Max(10.0, O.FontSize - 3.0), Foreground = muted, Margin = new Thickness(0, 1, 0, 0) };
+				timeStack.Children.Add(collapsedTime);
+				timeStack.Children.Add(collapsedDate);
+				if (focusing && layout != 0)
+				{
+					focusChipText = new TextBlock { Text = FormatFocusRemain(), FontSize = Math.Max(10.0, O.FontSize - 1.5), Foreground = text, Margin = new Thickness(0, 1, 0, 0) };
+					timeStack.Children.Add(focusChipText);
+				}
+				DockPanel.SetDock(timeStack, Dock.Left);
+				collapsedStack.Children.Add(timeStack);
+				// 眼睛紧贴时间右侧
+				if (O.EyesEnabled && !focusing && SafeUnread() <= 0)
+				{
+					FrameworkElement eyes = BuildEyes();
+					DockPanel.SetDock(eyes, Dock.Left);
+					collapsedStack.Children.Add(eyes);
+				}
+
+				StackPanel right = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+				bool first = true;
+				if (focusing)
+				{
+					AddChipTo(right, ref first, FocusChip(gap));
+				}
+				if (O.ShowWeatherChip && SafeWeather() != null && SafeWeather().Current != null)
+				{
+					AddChipTo(right, ref first, CollapsedWeatherChip(gap));
+				}
+				if (O.ShowBatteryChip)
+				{
+					AddChipTo(right, ref first, CollapsedBatteryChip(iconSize, gap, muted));
+				}
+				AddChipTo(right, ref first, BellChip(iconSize, gap));
+				DockPanel.SetDock(right, Dock.Right);
+				collapsedStack.Children.Add(right);
+			}
+			else if (layout == 1)
+			{
+				// 极简：仅时间+日期（眼睛在时间右侧）
+				StackPanel timeStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+				collapsedTime = new TextBlock { Text = DateTime.Now.ToString("HH:mm"), FontSize = O.FontSize + 1.0, FontWeight = FontWeights.SemiBold, Foreground = text };
+				collapsedDate = new TextBlock { Text = DateTime.Now.ToString("M月d日 ddd"), FontSize = Math.Max(10.0, O.FontSize - 3.0), Foreground = muted, Margin = new Thickness(0, 1, 0, 0) };
+				timeStack.Children.Add(collapsedTime);
+				timeStack.Children.Add(collapsedDate);
+				if (focusing && layout != 0)
+				{
+					focusChipText = new TextBlock { Text = FormatFocusRemain(), FontSize = Math.Max(10.0, O.FontSize - 1.5), Foreground = text, Margin = new Thickness(0, 1, 0, 0) };
+					timeStack.Children.Add(focusChipText);
+				}
+				DockPanel.SetDock(timeStack, Dock.Left);
+				collapsedStack.Children.Add(timeStack);
+				if (O.EyesEnabled && !focusing && SafeUnread() <= 0)
+				{
+					FrameworkElement eyes = BuildEyes();
+					DockPanel.SetDock(eyes, Dock.Left);
+					collapsedStack.Children.Add(eyes);
+				}
 			}
 			else
 			{
-				coverBox.Child = IslandIcons.MusicPlaceholder(text, ChipBrush(), coverSize, coverRadius);
-			}
-			DockPanel.SetDock(coverBox, Dock.Left);
-			collapsedStack.Children.Add(coverBox);
-		}
+				// 信息优先（旧形态）：时间块 + 天气文本（眼睛在时间右侧）
+				StackPanel timeStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+				collapsedTime = new TextBlock { Text = DateTime.Now.ToString("HH:mm"), FontSize = O.FontSize + 1.0, FontWeight = FontWeights.SemiBold, Foreground = text };
+				collapsedDate = new TextBlock { Text = DateTime.Now.ToString("M月d日 ddd"), FontSize = Math.Max(10.0, O.FontSize - 3.0), Foreground = muted, Margin = new Thickness(0, 1, 0, 0) };
+				timeStack.Children.Add(collapsedTime);
+				timeStack.Children.Add(collapsedDate);
+				if (focusing && layout != 0)
+				{
+					focusChipText = new TextBlock { Text = FormatFocusRemain(), FontSize = Math.Max(10.0, O.FontSize - 1.5), Foreground = text, Margin = new Thickness(0, 1, 0, 0) };
+					timeStack.Children.Add(focusChipText);
+				}
+				DockPanel.SetDock(timeStack, Dock.Left);
+				collapsedStack.Children.Add(timeStack);
+				if (O.EyesEnabled && !focusing && SafeUnread() <= 0)
+				{
+					FrameworkElement eyes = BuildEyes();
+					DockPanel.SetDock(eyes, Dock.Left);
+					collapsedStack.Children.Add(eyes);
+				}
 
-// 播放中：收起态进入“播放模式”——只显示 封面 + 跳动�?+ 标题�?
-
-// 电量、通知铃铛、展开把手全部隐藏（用户要求）；不播放时恢复完整收起布局�?
-
-if (!playing)
-		{
-			StopEqualizer();
-
-			// 无音乐可显示时的默认布局：左�?当前时间/日期，右�?天气（最右，先于电量添加），
-// 中部=实时屏幕刷新率（计时器驱动刷新）。全部不新增设置项�?
-
-
-StackPanel timeStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-			collapsedTime = new TextBlock { Text = DateTime.Now.ToString("HH:mm"), FontSize = O.FontSize + 1.0, FontWeight = FontWeights.SemiBold, Foreground = text };
-			collapsedDate = new TextBlock { Text = DateTime.Now.ToString("M月d日 ddd"), FontSize = Math.Max(10.0, O.FontSize - 3.0), Foreground = muted, Margin = new Thickness(0, 1, 0, 0) };
-			timeStack.Children.Add(collapsedTime);
-			timeStack.Children.Add(collapsedDate);
-			DockPanel.SetDock(timeStack, Dock.Left);
-			collapsedStack.Children.Add(timeStack);
-
-			WeatherSnapshot ws = null;
-			try
-			{
-				ws = C.Weather?.Snapshot;
-			}
-			catch
-			{
-			}
-			if (ws != null && ws.Current != null)
-			{
-				string desc = WeatherPresentation.Description(ws.Current.Code, ws.Current.Description);
-				string wtext = ws.Current.Temperature.ToString("0") + "° " + desc;
-				weatherText = new TextBlock { Text = wtext, FontSize = Math.Max(10.0, O.FontSize - 1.5), Foreground = text, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(gap, 0, 0, 0), MaxWidth = 132, TextTrimming = TextTrimming.CharacterEllipsis };
-				DockPanel.SetDock(weatherText, Dock.Right);
-				collapsedStack.Children.Add(weatherText);
-			}
-// 收起态已按用户要求精简：电量、通知铃铛、展开把手全部移除�?
-
-
-// 点击小岛本体即可展开；电量低仍会弹事件卡；通知仍会弹事件卡并进通知页�?
-
-}
-		else
-		{
-			// 跳动条（音乐均衡器）：WASAPI 回环采集 + FFT 五档能量驱动五根圆角柱，
-// 真实跟随系统正在播放的音乐节奏，放在收起条最右侧；整体不参与命中测试�?
-
-
-// 点击照常冒泡到收起根节点打开展开面板。只有收起态可见时才开采集�?
-
-
-equalizerBars = BuildEqualizer();
-			DockPanel.SetDock(equalizerBars, Dock.Right);
-			collapsedStack.Children.Add(equalizerBars);
-			if (mode == Mode.Collapsed)
-			{
-				StartEqualizer();
+				WeatherSnapshot ws = SafeWeather();
+				if (ws != null && ws.Current != null)
+				{
+					string desc = WeatherPresentation.Description(ws.Current.Code, ws.Current.Description);
+					string wtext = ws.Current.Temperature.ToString("0") + "° " + desc;
+					weatherText = new TextBlock { Text = wtext, FontSize = Math.Max(10.0, O.FontSize - 1.5), Foreground = text, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(gap, 0, 0, 0), MaxWidth = 132, TextTrimming = TextTrimming.CharacterEllipsis };
+					DockPanel.SetDock(weatherText, Dock.Right);
+					collapsedStack.Children.Add(weatherText);
+				}
 			}
 		}
 
-		// 中部：曲�?+ 实时歌词（无歌词时显示歌手），最后添加作�?DockPanel 填充项，
-// 占满封面与跳动条之间的全部剩余宽度，消除中间大空档�?
-
-bool haveTitle = playing;
+		// 中部填充
+		bool haveTitle = playing;
 		if (haveTitle)
 		{
 			string sub = IslandLyrics.ActiveText;
@@ -512,10 +700,9 @@ bool haveTitle = playing;
 			mid.Children.Add(collapsedSub);
 			collapsedStack.Children.Add(mid);
 		}
-		else
+		else if (O.SuggestionEnabled)
 		{
-			// 中部填充：动态建议轮播（时间问候 + 天气建议 + 屏幕刷新率 + 今日随手记），
-			// 由 500ms 计时器每 8 秒淡入淡出切换；无音乐时始终有内容，不占空白。
+			// 中部填充：动态建议轮播（时间问候 + 天气建议 + 屏幕刷新率 + 今日随手记）
 			suggestionPool = IslandSuggestions.Build(SafeWeather(), CurrentRefreshRate(), SafeNotes(), SafeUnread());
 			lastSuggestionPoolAt = DateTime.Now;
 			lastSuggestionAt = DateTime.Now;
@@ -526,13 +713,722 @@ bool haveTitle = playing;
 		}
 		collapsedStack.LastChildFill = haveTitle || refreshText != null;
 
-// 全部内容开关关闭或都没有有效数据：显示最小占位图标，避免出现空白胶囊�?
+		// 眼睛跟踪：收起态且眼睛在视觉树上才跑；其余状态停表（瞳孔复位）
+		if (mode == Mode.Collapsed && eyeLeft != null)
+		{
+			StartEyeTracking();
+		}
+		else
+		{
+			StopEyeTracking();
+		}
 
-if (collapsedStack.Children.Count == 0)
+		// 全部内容开关关闭或都没有有效数据：显示最小占位图标，避免出现空白胶囊
+		if (collapsedStack.Children.Count == 0)
 		{
 			collapsedStack.Children.Add(IslandIcons.Gear(muted, iconSize));
 			collapsedStack.LastChildFill = false;
 		}
+		AdaptiveCollapsedWidth();
+	}
+
+	// 收起态宽度自适应：以设置宽度为基准，内容（角标数字/天气文本/专注倒计时）变多时
+	// 自动加宽，上限 +160px；内容变少收回。轻量直接落位，不走长缩放动画。
+	private void AdaptiveCollapsedWidth()
+	{
+		// 播放态由音乐卡布局决定宽度，不参与自适应（歌词/曲目长度波动大）
+		if (mode != Mode.Collapsed || sizeAnimating || collapsedStack == null || _isClosed || (M != null && M.Playing))
+		{
+			return;
+		}
+		try
+		{
+			double minW = O.CollapsedWidth;
+			Rect wa = MonitorWorkArea();
+			double maxW = Math.Min(Math.Max(minW + 1.0, wa.Width - 24.0), minW + 160.0);
+			collapsedStack.Measure(new Size(double.PositiveInfinity, O.CollapsedHeight));
+			double need = collapsedStack.DesiredSize.Width + 28.0; // Root 左右阴影边距
+			double target = Math.Max(minW, Math.Min(maxW, need));
+			if (Math.Abs(target - ActualWidth) < 2.0)
+			{
+				return;
+			}
+			BeginAnimation(WidthProperty, null);
+			Width = target;
+			Left = wa.Left + (wa.Width - target) / 2.0;
+			RefreshClip();
+		}
+		catch
+		{
+		}
+	}
+
+	// —— 三段分区芯片构建 ——
+	// 芯片底衬：圆角半透明底 + hover 亮起（纯视觉，不拦截收起态点击展开）
+	private Border ChipShell(Thickness margin)
+	{
+		Border b = new Border
+		{
+			CornerRadius = new CornerRadius(Math.Min(O.CornerRadius, 14.0)),
+			Background = ChipBrush(),
+			Padding = new Thickness(9, 3, 9, 3),
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = margin
+		};
+		b.MouseEnter += delegate
+		{
+			b.Background = new SolidColorBrush(textLight ? Color.FromArgb(64, 0, 0, 0) : Color.FromArgb(82, 255, 255, 255));
+		};
+		b.MouseLeave += delegate
+		{
+			b.Background = ChipBrush();
+		};
+		return b;
+	}
+
+	// 专注芯片（收起态无音乐时显示专注倒计时；图标由 FormatFocusRemain 自带 🍅/☕）
+	private FrameworkElement FocusChip(double gap)
+	{
+		Border shell = ChipShell(new Thickness(gap, 0, 0, 0));
+		StackPanel row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+		focusChipText = new TextBlock { Text = FormatFocusRemain(), FontSize = Math.Max(10.0, O.FontSize - 1.5), Foreground = TextBrush, VerticalAlignment = VerticalAlignment.Center };
+		row.Children.Add(focusChipText);
+		shell.Child = row;
+		return shell;
+	}
+
+	private string FormatFocusRemain()
+	{
+		int m = (int)(Math.Max(0, focusRemainingSec) / 60.0);
+		int s = (int)(Math.Max(0, focusRemainingSec) % 60.0);
+		return (focusIsBreak ? "☕ " : "🍅 ") + m.ToString("00") + ":" + s.ToString("00");
+	}
+
+	// —— 岛眼睛：两只卡通眼睛跟随鼠标 ——
+	private FrameworkElement BuildEyes()
+	{
+		StackPanel pair = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+		Border left = EyeBall();
+		Border right = EyeBall();
+		right.Margin = new Thickness(5, 0, 0, 0);
+		pair.Children.Add(left);
+		pair.Children.Add(right);
+		return pair;
+	}
+
+	private Border EyeBall()
+	{
+		Border host = new Border { VerticalAlignment = VerticalAlignment.Center };
+		Canvas c = new Canvas { Width = 24, Height = 16 };
+		Brush eyeWhite = textLight ? (Brush)new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)) : (Brush)new SolidColorBrush(Color.FromArgb(235, 240, 240, 245));
+		System.Windows.Shapes.Ellipse white = new System.Windows.Shapes.Ellipse
+		{
+			Width = 24,
+			Height = 16,
+			Fill = eyeWhite,
+			Stroke = textLight ? (Brush)new SolidColorBrush(Color.FromArgb(70, 0, 0, 0)) : (Brush)new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
+			StrokeThickness = 1.0
+		};
+		c.Children.Add(white);
+		System.Windows.Shapes.Ellipse pupil = new System.Windows.Shapes.Ellipse
+		{
+			Width = 7.5,
+			Height = 7.5,
+			Fill = new SolidColorBrush(textLight ? Color.FromArgb(235, 30, 30, 38) : Color.FromArgb(240, 22, 22, 30))
+		};
+		Canvas.SetLeft(pupil, 8.25);
+		Canvas.SetTop(pupil, 4.25);
+		c.Children.Add(pupil);
+		host.Child = c;
+		if (eyeLeft == null)
+		{
+			eyeLeft = c;
+			eyePupilL = pupil;
+		}
+		else
+		{
+			eyeRight = c;
+			eyePupilR = pupil;
+		}
+		return host;
+	}
+
+	// 30fps 全局光标跟踪：瞳孔朝鼠标方向偏移（±2.6px），只在收起态且眼睛可见时运行
+	private void StartEyeTracking()
+	{
+		if (eyeTimer == null)
+		{
+			eyeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+			eyeTimer.Tick += delegate
+			{
+				try
+				{
+					if (mode != Mode.Collapsed || eyeLeft == null || !eyeLeft.IsVisible)
+					{
+						StopEyeTracking();
+						return;
+					}
+					System.Drawing.Point p = System.Windows.Forms.Cursor.Position;
+					MovePupil(eyeLeft, eyePupilL, p);
+					MovePupil(eyeRight, eyePupilR, p);
+				}
+				catch
+				{
+				}
+			};
+		}
+		eyeTimer.Start();
+	}
+
+	private void StopEyeTracking()
+	{
+		if (eyeTimer != null)
+		{
+			eyeTimer.Stop();
+		}
+		if (eyePupilL != null)
+		{
+			Canvas.SetLeft(eyePupilL, 8.25);
+			Canvas.SetTop(eyePupilL, 4.25);
+		}
+		if (eyePupilR != null)
+		{
+			Canvas.SetLeft(eyePupilR, 8.25);
+			Canvas.SetTop(eyePupilR, 4.25);
+		}
+	}
+
+	private void MovePupil(Canvas eye, System.Windows.Shapes.Ellipse pupil, System.Drawing.Point cursor)
+	{
+		if (eye == null || pupil == null || !eye.IsVisible)
+		{
+			return;
+		}
+		try
+		{
+			Point center = eye.PointToScreen(new Point(12.0, 8.0));
+			double dx = cursor.X - center.X;
+			double dy = cursor.Y - center.Y;
+			double len = Math.Sqrt(dx * dx + dy * dy);
+			if (len < 30.0)
+			{
+				Canvas.SetLeft(pupil, 8.25);
+				Canvas.SetTop(pupil, 4.25);
+				return;
+			}
+			double off = 2.6;
+			Canvas.SetLeft(pupil, 8.25 + dx / len * off);
+			Canvas.SetTop(pupil, 4.25 + dy / len * off);
+		}
+		catch
+		{
+		}
+	}
+
+	// 段间细分隔线
+	private FrameworkElement SegmentDivider()
+	{
+		Border d = new Border { Width = 1.0, Height = 18.0, Margin = new Thickness(7, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
+		d.Background = textLight ? (Brush)new SolidColorBrush(Color.FromArgb(46, 0, 0, 0)) : (Brush)new SolidColorBrush(Color.FromArgb(54, 255, 255, 255));
+		return d;
+	}
+
+	private void AddChipTo(StackPanel host, ref bool first, FrameworkElement chip)
+	{
+		// 隐藏的芯片（如无通知时的铃铛）不占位、不加分割线、不消费 first——
+		// 否则可见芯片前会残留一根“孤儿”分割线。
+		if (chip.Visibility == Visibility.Collapsed)
+		{
+			return;
+		}
+		if (!first)
+		{
+			host.Children.Add(SegmentDivider());
+		}
+		first = false;
+		host.Children.Add(chip);
+	}
+
+	private FrameworkElement CollapsedTimeChip(double gap)
+	{
+		Border shell = ChipShell(new Thickness(gap, 0, 0, 0));
+		StackPanel row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+		collapsedTime = new TextBlock { Text = DateTime.Now.ToString("HH:mm"), FontSize = O.FontSize + 1.0, FontWeight = FontWeights.SemiBold, Foreground = TextBrush };
+		collapsedDate = new TextBlock { Text = DateTime.Now.ToString("M月d日 ddd"), FontSize = Math.Max(10.0, O.FontSize - 3.0), Foreground = MutedBrush, Margin = new Thickness(5, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+		row.Children.Add(collapsedTime);
+		row.Children.Add(collapsedDate);
+		shell.Child = row;
+		return shell;
+	}
+
+	private FrameworkElement CollapsedWeatherChip(double gap)
+	{
+		WeatherSnapshot ws = SafeWeather();
+		string desc = WeatherPresentation.Description(ws.Current.Code, ws.Current.Description);
+		string wtext = ws.Current.Temperature.ToString("0") + "° " + desc;
+		Border shell = ChipShell(new Thickness(gap, 0, 0, 0));
+		StackPanel row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+		weatherText = new TextBlock { Text = wtext, FontSize = Math.Max(10.0, O.FontSize - 1.5), Foreground = TextBrush, Margin = new Thickness(2, 0, 0, 0), MaxWidth = 132, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+		row.Children.Add(weatherText);
+		shell.Child = row;
+		return shell;
+	}
+
+	private FrameworkElement CollapsedBatteryChip(double iconSize, double gap, Brush muted)
+	{
+		Border shell = ChipShell(new Thickness(gap, 0, 0, 0));
+		StackPanel row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+		BatteryCore.BatteryState s = BatteryCore.Current;
+		double level = s.PcLevel.HasValue ? s.PcLevel.Value : -1.0;
+		bool charging = s.PcCharging == true;
+		bool low = level >= 0 && !charging && level <= O.LowBatteryThreshold;
+		// 充电：外壳/填充绿色、闪电用对比色；低电量：橙色。常态跟随主题前景色。
+		Brush batteryBrush = charging ? new SolidColorBrush(Color.FromRgb(64, 200, 120)) : (low ? new SolidColorBrush(Color.FromRgb(255, 150, 60)) : IconBrush());
+		Brush boltBrush = charging ? (textLight ? (Brush)new SolidColorBrush(Color.FromArgb(220, 30, 40, 34)) : (Brush)new SolidColorBrush(Color.FromArgb(235, 255, 255, 255))) : muted;
+		row.Children.Add(IslandIcons.Battery(level >= 0 ? level : (double?)null, charging, batteryBrush, boltBrush, Math.Max(12.0, O.FontSize + 1)));
+		TextBlock t = new TextBlock { Text = level >= 0 ? ((int)Math.Round(level) + "%") : "", FontSize = Math.Max(10.0, O.FontSize - 1.5), Foreground = batteryBrush, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+		row.Children.Add(t);
+		shell.Child = row;
+		// 电源动效（ChargeAnim）：仅电池图标柔和呼吸，不闪烁整个芯片底衬
+		if (O.ChargeAnim && charging)
+		{
+			FrameworkElement iconEl = row.Children[0] as FrameworkElement;
+			if (iconEl != null)
+			{
+				DoubleAnimation pulse = new DoubleAnimation(0.72, 1.0, TimeSpan.FromMilliseconds(1300)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
+				iconEl.BeginAnimation(OpacityProperty, pulse);
+			}
+		}
+		return shell;
+	}
+
+	private FrameworkElement BellChip(double iconSize, double gap)
+	{
+		Border shell = ChipShell(new Thickness(gap, 0, 0, 0));
+		bellShell = shell;
+		Grid g = new Grid();
+		StackPanel row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+		// 通知图标：圆形底衬 + 铃铛居中；未读数字叠在图标右上角（红点已删除，只保留数字）
+		Grid badgeGrid = new Grid { VerticalAlignment = VerticalAlignment.Center };
+		bellBadge = new Border
+		{
+			Width = 28,
+			Height = 28,
+			CornerRadius = new CornerRadius(14),
+			Background = ChipBrush()
+		};
+		badgeGrid.Children.Add(bellBadge);
+		// 未读红点：叠在圆形背景内部右上角（在圆内，不再显示数字）
+		bellDot = new Ellipse
+		{
+			Width = 7,
+			Height = 7,
+			Fill = new SolidColorBrush(Color.FromRgb(230, 70, 70)),
+			HorizontalAlignment = HorizontalAlignment.Right,
+			VerticalAlignment = VerticalAlignment.Top,
+			Margin = new Thickness(0, 4, 4, 0),
+			Visibility = Visibility.Collapsed
+		};
+		Grid bellInner = new Grid();
+		bellInner.Children.Add(IslandIcons.Bell(IconBrush(), 14.0));
+		bellInner.Children.Add(bellDot);
+		bellBadge.Child = bellInner;
+		row.Children.Add(badgeGrid);
+		g.Children.Add(row);
+		shell.Child = g;
+		UpdateBellBadge();
+		return shell;
+	}
+
+	private void UpdateBellBadge()
+	{
+		int unread = SafeUnread();
+		// 无通知时整个铃铛芯片隐藏（用户要求：没有通知就不要显示通知图标）
+		if (bellShell != null)
+		{
+			bellShell.Visibility = unread > 0 ? Visibility.Visible : Visibility.Collapsed;
+		}
+		if (bellDot != null)
+		{
+			bellDot.Visibility = (O.NotifyArrivalStyle != 2 && unread > 0) ? Visibility.Visible : Visibility.Collapsed;
+		}
+		AdaptiveCollapsedWidth();
+	}
+
+	// —— 音量/亮度 HUD ——
+	// 岛内弹出小条：HudEnabled 关闭时不显示；重复调用刷新倒计时；HudDurationSec 后淡出。
+	private void ShowHud(string title, double pct, string value)
+	{
+		try
+		{
+			if (!O.HudEnabled || _isClosed || hudBar == null)
+			{
+				return;
+			}
+			hudTitle.Text = title;
+			hudValue.Text = value;
+			hudFill.Value = Math.Max(0, Math.Min(100, pct));
+			hudBar.BeginAnimation(OpacityProperty, null);
+			hudBar.Opacity = 1.0;
+			hudBar.Visibility = Visibility.Visible;
+			if (hudTimer == null)
+			{
+				hudTimer = new DispatcherTimer();
+				hudTimer.Tick += delegate
+				{
+					hudTimer.Stop();
+					DoubleAnimation fade = new DoubleAnimation(hudBar.Opacity, 0.0, TimeSpan.FromMilliseconds(280));
+					fade.Completed += delegate
+					{
+						if (hudBar != null)
+						{
+							hudBar.Visibility = Visibility.Collapsed;
+						}
+					};
+					hudBar.BeginAnimation(OpacityProperty, fade);
+				};
+			}
+			hudTimer.Stop();
+			hudTimer.Interval = TimeSpan.FromSeconds(O.HudDurationSec);
+			hudTimer.Start();
+		}
+		catch
+		{
+		}
+	}
+
+	// 系统音量轮询：与滑杆拖动互不干扰（拖动期间由滑杆自己弹 HUD）
+	private void HudPollVolume()
+	{
+		try
+		{
+			if (!O.HudEnabled)
+			{
+				return;
+			}
+			if (volumeSlider != null && (volumeSlider.IsMouseCaptureWithin || volumeSlider.IsKeyboardFocusWithin))
+			{
+				hudVolumeLast = -1.0;
+				return;
+			}
+			if (!AudioCore.TryGetVolume(out float v, out bool muted))
+			{
+				return;
+			}
+			double cur = muted ? -1.0 : Math.Round(v * 100.0);
+			if (hudVolumeLast >= 0.0 && Math.Abs(cur - hudVolumeLast) > 0.6)
+			{
+				ShowHud("🔊 音量", cur, muted ? "静音" : ((int)cur).ToString());
+			}
+			hudVolumeLast = cur;
+		}
+		catch
+		{
+		}
+	}
+
+	// —— 番茄钟 ——
+	// 专注面板：从首页专注磁贴弹出（不再藏在设置里）——选时长后开始/停止，一键直达。
+	private void OpenFocusPanel()
+	{
+		if (focusPanel == null)
+		{
+			focusPanel = new System.Windows.Controls.Primitives.Popup
+			{
+				PlacementTarget = this,
+				Placement = System.Windows.Controls.Primitives.PlacementMode.Center,
+				StaysOpen = false,
+				AllowsTransparency = true,
+				PopupAnimation = System.Windows.Controls.Primitives.PopupAnimation.Fade
+			};
+			Border panel = new Border
+			{
+				CornerRadius = new CornerRadius(16),
+				Background = CardBrush(),
+				Padding = new Thickness(16, 14, 16, 12),
+				MinWidth = 240,
+				Effect = IslandChrome.Shadow(O)
+			};
+			StackPanel sp = new StackPanel();
+			TextBlock title = new TextBlock { Text = "🍅 专注", FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = TextBrush };
+			sp.Children.Add(title);
+			focusPanelStatus = new TextBlock { Text = "", FontSize = 11, Foreground = MutedBrush, Margin = new Thickness(0, 4, 0, 2) };
+			sp.Children.Add(focusPanelStatus);
+			TextBlock lenLabel = new TextBlock { FontSize = 11, Foreground = TextBrush, Margin = new Thickness(0, 6, 0, 0) };
+			sp.Children.Add(lenLabel);
+			focusSlider = new System.Windows.Controls.Slider
+			{
+				Minimum = 5,
+				Maximum = 90,
+				TickFrequency = 5,
+				IsSnapToTickEnabled = true,
+				Value = Math.Max(5, Math.Min(90, O.FocusMinutes)),
+				Margin = new Thickness(0, 2, 0, 8)
+			};
+			focusSlider.ValueChanged += delegate
+			{
+				lenLabel.Text = "时长：" + (int)focusSlider.Value + " 分钟";
+			};
+			lenLabel.Text = "时长：" + (int)focusSlider.Value + " 分钟";
+			sp.Children.Add(focusSlider);
+			// 休息时长（专注结束后自动休息倒计时）
+			TextBlock breakLabel = new TextBlock { FontSize = 11, Foreground = TextBrush, Margin = new Thickness(0, 4, 0, 0) };
+			sp.Children.Add(breakLabel);
+			System.Windows.Controls.Slider breakSlider = new System.Windows.Controls.Slider
+			{
+				Minimum = 1,
+				Maximum = 30,
+				TickFrequency = 1,
+				IsSnapToTickEnabled = true,
+				Value = Math.Max(1, Math.Min(30, O.BreakMinutes)),
+				Margin = new Thickness(0, 2, 0, 6)
+			};
+			breakSlider.ValueChanged += delegate
+			{
+				breakLabel.Text = "休息时长：" + (int)breakSlider.Value + " 分钟";
+			};
+			breakLabel.Text = "休息时长：" + (int)breakSlider.Value + " 分钟";
+			sp.Children.Add(breakSlider);
+			// 结束提醒方式：一行小按钮切换（Popup 内不用 ComboBox，避免下拉与 StaysOpen 冲突）
+			StackPanel alertRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, 8) };
+			TextBlock alertLabel = new TextBlock { Text = "结束提醒：", FontSize = 11, Foreground = TextBrush, VerticalAlignment = VerticalAlignment.Center };
+			alertRow.Children.Add(alertLabel);
+			int[] alertSel = { Math.Max(0, Math.Min(3, O.FocusEndAlert)) };
+			string[] alertNames = { "通知", "声音", "两者", "不提醒" };
+			Border[] alertBtns = new Border[4];
+			for (int ai = 0; ai < alertNames.Length; ai++)
+			{
+				int idx = ai;
+				TextBlock atb = new TextBlock { Text = alertNames[ai], FontSize = 11, Foreground = TextBrush, VerticalAlignment = VerticalAlignment.Center };
+				Border ab = new Border
+				{
+					Child = atb,
+					Padding = new Thickness(4, 2, 4, 2),
+					CornerRadius = new CornerRadius(4)
+				};
+				ab.MouseLeftButtonUp += delegate
+				{
+					alertSel[0] = idx;
+					for (int j = 0; j < 4; j++)
+					{
+						TextBlock jtb = (TextBlock)alertBtns[j].Child;
+						jtb.FontWeight = alertSel[0] == j ? FontWeights.Bold : FontWeights.Normal;
+						jtb.TextDecorations = alertSel[0] == j ? TextDecorations.Underline : null;
+					}
+				};
+				ab.Margin = new Thickness(8, 0, 0, 0);
+				alertBtns[ai] = ab;
+				if (alertSel[0] == ai)
+				{
+					atb.FontWeight = FontWeights.Bold;
+					atb.TextDecorations = TextDecorations.Underline;
+				}
+				alertRow.Children.Add(ab);
+			}
+			sp.Children.Add(alertRow);
+			StackPanel btns = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+			Border cancelBtn = TextButton("取消", delegate
+			{
+				if (focusPanel != null)
+				{
+					focusPanel.IsOpen = false;
+				}
+			});
+			Border startBtn = TextButton("开始专注", delegate
+			{
+				try
+				{
+					O.FocusMinutes = (int)focusSlider.Value;
+					O.BreakMinutes = (int)breakSlider.Value;
+					O.FocusEndAlert = alertSel[0];
+					IslandSettings.Set(O);
+				}
+				catch
+				{
+				}
+				if (focusPanel != null)
+				{
+					focusPanel.IsOpen = false;
+				}
+				ToggleFocus();
+			});
+			Border stopBtn = TextButton("停止", delegate
+			{
+				if (focusPanel != null)
+				{
+					focusPanel.IsOpen = false;
+				}
+				StopFocus();
+			});
+			btns.Children.Add(cancelBtn);
+			btns.Children.Add(startBtn);
+			btns.Children.Add(stopBtn);
+			sp.Children.Add(btns);
+			panel.Child = sp;
+			focusPanel.Child = panel;
+		}
+		bool running = focusTimer != null && focusTimer.IsEnabled;
+		if (running)
+		{
+			int m = (int)(focusRemainingSec / 60.0);
+			int s = (int)(focusRemainingSec % 60.0);
+			focusPanelStatus.Text = focusPreset + "进行中，剩余 " + m.ToString("00") + ":" + s.ToString("00");
+		}
+		else
+		{
+			focusPanelStatus.Text = "选择时长，开始一段专注";
+		}
+		focusPanel.IsOpen = true;
+	}
+
+	// 控制页瓦片开关：专注倒计时结束→按 FocusEndAlert 提醒→自动进入休息；休息结束→提醒→停止。
+	private void ToggleFocus()
+	{
+		if (focusTimer != null && focusTimer.IsEnabled)
+		{
+			StopFocus();
+			return;
+		}
+		focusIsBreak = false;
+		focusPreset = "专注";
+		focusRemainingSec = O.FocusMinutes * 60.0;
+		if (focusTimer == null)
+		{
+			focusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+			focusTimer.Tick += delegate { FocusTick(); };
+		}
+		focusTimer.Start();
+		try
+		{
+			O.FocusMode = true;
+			IslandSettings.Set(O);
+		}
+		catch
+		{
+		}
+		UpdateFocusTile();
+	}
+
+	private void StopFocus()
+	{
+		if (focusTimer != null)
+		{
+			focusTimer.Stop();
+		}
+		focusRemainingSec = 0;
+		focusIsBreak = false;
+		focusPreset = "专注";
+		try
+		{
+			O.FocusMode = false;
+			IslandSettings.Set(O);
+		}
+		catch
+		{
+		}
+		UpdateFocusTile();
+	}
+
+	private void FocusTick()
+	{
+		focusRemainingSec -= 1.0;
+		if (focusRemainingSec <= 0)
+		{
+			if (!focusIsBreak)
+			{
+				// 专注结束：提醒 + 进入休息
+				FocusAlert("🍅 专注结束", focusPreset + "完成，休息一下吧");
+				focusIsBreak = true;
+				focusPreset = "休息";
+				focusRemainingSec = O.BreakMinutes * 60.0;
+			}
+			else
+			{
+				// 休息结束：提醒 + 停止
+				FocusAlert("☕ 休息结束", "准备开始下一轮专注吧");
+				if (focusTimer != null)
+				{
+					focusTimer.Stop();
+				}
+				focusRemainingSec = 0;
+				focusIsBreak = false;
+				focusPreset = "专注";
+				try
+				{
+					O.FocusMode = false;
+					IslandSettings.Set(O);
+				}
+				catch
+				{
+				}
+			}
+		}
+		UpdateFocusTile();
+	}
+
+	// FocusEndAlert：0=通知 1=声音 2=两者 3=无
+	private void FocusAlert(string title, string body)
+	{
+		if (O.FocusEndAlert == 0 || O.FocusEndAlert == 2)
+		{
+			try
+			{
+				ShowToast(title, body, null);
+			}
+			catch
+			{
+			}
+		}
+		if (O.FocusEndAlert == 1 || O.FocusEndAlert == 2)
+		{
+			try
+			{
+				System.Media.SystemSounds.Asterisk.Play();
+			}
+			catch
+			{
+			}
+		}
+	}
+
+	private void UpdateFocusTile()
+	{
+		// 收起态专注芯片（每秒由 FocusTick 驱动）：直接更新文本，无需重建收起条
+		if (focusChipText != null)
+		{
+			focusChipText.Text = FormatFocusRemain();
+		}
+		if (homeFocusText != null)
+		{
+			if (focusTimer != null && focusTimer.IsEnabled)
+			{
+				int hm = (int)(focusRemainingSec / 60.0);
+				int hs = (int)(focusRemainingSec % 60.0);
+				homeFocusText.Text = hm.ToString("00") + ":" + hs.ToString("00");
+			}
+			else
+			{
+				homeFocusText.Text = "点击开始";
+			}
+		}
+		if (focusStatus == null)
+		{
+			AdaptiveCollapsedWidth();
+			return;
+		}
+		if (focusTimer != null && focusTimer.IsEnabled)
+		{
+			int m = (int)(focusRemainingSec / 60.0);
+			int s = (int)(focusRemainingSec % 60.0);
+			focusStatus.Text = focusPreset + " " + m.ToString("00") + ":" + s.ToString("00");
+			focusName.Text = focusIsBreak ? "休息中" : "专注中";
+		}
+		else
+		{
+			focusStatus.Text = "点击开始 " + O.FocusMinutes + " 分钟";
+			focusName.Text = "专注";
+		}
+		AdaptiveCollapsedWidth();
 	}
 
 	private bool AnyPageEnabled() => O.ShowMusicPage || O.ShowNotificationsPage || O.ShowControlPage;
@@ -799,7 +1695,9 @@ private void OnAudioLevels(double[] levels)
 				// 或动画令牌作废让 sizeAnimating 卡死。音频回调约每 100ms 一次，防抖 2s 重建一次；
 				// RebuildCollapsed 会重建跳动条并重新 StartEqualizer 复活采集。 ——
 				long nowTicks = Environment.TickCount;
-				bool barsAttached = equalizerBars != null && collapsedStack.Children.Contains(equalizerBars);
+				// 跳动条嵌在右侧芯片组（rightChips）内，不是 collapsedStack 直接子元素：
+				// 用 IsAncestorOf 判定是否仍在可视树中（Contains 只查直接子级，重构后恒 false 会导致动画永不更新）
+				bool barsAttached = equalizerBars != null && (collapsedStack.Children.Contains(equalizerBars) || collapsedStack.IsAncestorOf(equalizerBars));
 				if (sizeAnimating && nowTicks - sizeAnimStart > 1500)
 				{
 					sizeAnimating = false; // 主过渡最长 600ms；超时说明完成回调被令牌作废，强制复位防永久冻结
@@ -983,6 +1881,7 @@ private void UpdateSpectrumPath(double[] levels)
 		Grid head = new Grid();
 		head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 		head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
 		Border coverShadow = new Border
 		{
@@ -1031,6 +1930,52 @@ private void UpdateSpectrumPath(double[] levels)
 		info.Children.Add(musicStatus);
 		Grid.SetColumn(info, 1);
 		head.Children.Add(info);
+
+		// 右列：收藏（MusicFavorite）+ 媒体源切换（MusicSourceSwitch）
+		StackPanel side = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10, 0, 0, 0) };
+		favBtn = new Border
+		{
+			Width = 34,
+			Height = 34,
+			CornerRadius = new CornerRadius(17),
+			Background = ChipBrush(),
+			Cursor = Cursors.Hand,
+			Visibility = O.MusicFavorite ? Visibility.Visible : Visibility.Collapsed,
+			ToolTip = "收藏",
+			Child = new TextBlock { Text = "♡", FontSize = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+		};
+		favBtn.MouseLeftButtonUp += delegate
+		{
+			ToggleMusicFavorite();
+		};
+		side.Children.Add(favBtn);
+		sourceSwitchBtn = new Border
+		{
+			MinWidth = 34,
+			Height = 28,
+			CornerRadius = new CornerRadius(14),
+			Background = ChipBrush(),
+			Cursor = Cursors.Hand,
+			Margin = new Thickness(0, 8, 0, 0),
+			Padding = new Thickness(10, 0, 10, 0),
+			Visibility = O.MusicSourceSwitch ? Visibility.Visible : Visibility.Collapsed,
+			ToolTip = "切换音乐来源（本地 / 系统媒体会话）",
+			Child = new TextBlock { Text = "本地", FontSize = 11, Foreground = TextBrush, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+		};
+		sourceSwitchBtn.MouseLeftButtonUp += delegate
+		{
+			try
+			{
+				M?.Mode(!M.Local);
+				RefreshMusicPage();
+			}
+			catch
+			{
+			}
+		};
+		side.Children.Add(sourceSwitchBtn);
+		Grid.SetColumn(side, 2);
+		head.Children.Add(side);
 		root.Children.Add(head);
 
 // 进度行：横跨内容区，两端时间 + 大厂风细进度条（小圆点，悬停/拖动放大�?
@@ -1045,6 +1990,25 @@ Grid progressRow = new Grid { Margin = new Thickness(0, 18, 0, 0) };
 		progressSlider.PreviewMouseLeftButtonDown += (object s, MouseButtonEventArgs e) => { draggingProgress = true; };
 		progressSlider.PreviewMouseLeftButtonUp += (object s, MouseButtonEventArgs e) => { draggingProgress = false; SeekProgress(); };
 		progressSlider.LostMouseCapture += (object s, MouseEventArgs e) => { if (draggingProgress) { draggingProgress = false; SeekProgress(); } };
+		// 进度悬停预览（MusicProgressPeek）：悬停位置即时显示对应时间
+		progressSlider.MouseMove += delegate (object s, MouseEventArgs e)
+		{
+			try
+			{
+				if (!O.MusicProgressPeek || progressSlider.Maximum <= 1 || progressSlider.ActualWidth <= 0)
+				{
+					progressSlider.ToolTip = null;
+					return;
+				}
+				Point p = e.GetPosition(progressSlider);
+				double ratio = Math.Max(0, Math.Min(1, (p.X - 4) / (progressSlider.ActualWidth - 8)));
+				TimeSpan t = TimeSpan.FromSeconds(ratio * progressSlider.Maximum);
+				progressSlider.ToolTip = FormatTime(t.TotalSeconds);
+			}
+			catch
+			{
+			}
+		};
 		Grid.SetColumn(positionText, 0);
 		Grid.SetColumn(progressSlider, 1);
 		Grid.SetColumn(durationText, 2);
@@ -1087,6 +2051,33 @@ StackPanel buttons = new StackPanel { Orientation = Orientation.Horizontal, Hori
 		buttons.Children.Add(nextBtn);
 		musicButtonsRow = buttons;
 		root.Children.Add(buttons);
+		// 滚轮音量（MusicWheelVolume）：在音乐页滚动滚轮调节系统音量并弹 HUD
+		g.MouseWheel += delegate (object s, MouseWheelEventArgs e)
+		{
+			try
+			{
+				if (!O.MusicWheelVolume)
+				{
+					return;
+				}
+				if (!AudioCore.TryGetVolume(out float vol, out bool muted))
+				{
+					return;
+				}
+				double delta = e.Delta > 0 ? 4.0 : -4.0;
+				double target = Math.Max(0, Math.Min(100, Math.Round(vol * 100.0) + delta));
+				AudioCore.TrySetVolume((float)(target / 100.0));
+				if (muted && target > 0)
+				{
+					AudioCore.TrySetMute(false);
+				}
+				ShowHud("🔊 音量", target, ((int)target).ToString());
+				RefreshControlQuick();
+			}
+			catch
+			{
+			}
+		};
 		return g;
 	}
 
@@ -1240,20 +2231,72 @@ private Style BuildProgressSliderStyle()
 		return g;
 	}
 
+	// 输入框模板：纯底衬 + PART_ContentHost，不带任何状态触发器（聚焦/悬停不变背景）
+	private Style SearchBoxStyle()
+	{
+		Style st = new Style(typeof(System.Windows.Controls.TextBox));
+		st.Setters.Add(new Setter(System.Windows.Controls.Control.BackgroundProperty, InputBrush()));
+		st.Setters.Add(new Setter(System.Windows.Controls.Control.ForegroundProperty, TextBrush));
+		st.Setters.Add(new Setter(System.Windows.Controls.TextBox.CaretBrushProperty, TextBrush));
+		st.Setters.Add(new Setter(System.Windows.Controls.Control.BorderThicknessProperty, new Thickness(0)));
+		FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));
+		border.SetValue(Border.BackgroundProperty, InputBrush());
+		border.SetValue(Border.PaddingProperty, new Thickness(8, 6, 8, 6));
+		border.SetValue(Border.CornerRadiusProperty, new CornerRadius(8.0));
+		border.SetValue(Border.SnapsToDevicePixelsProperty, true);
+		FrameworkElementFactory content = new FrameworkElementFactory(typeof(ScrollViewer));
+		content.SetValue(ScrollViewer.NameProperty, "PART_ContentHost");
+		content.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+		content.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Hidden);
+		content.SetValue(ScrollViewer.CanContentScrollProperty, true);
+		border.AppendChild(content);
+		ControlTemplate tpl = new ControlTemplate(typeof(System.Windows.Controls.TextBox));
+		tpl.VisualTree = border;
+		st.Setters.Add(new Setter(System.Windows.Controls.Control.TemplateProperty, tpl));
+		return st;
+	}
+
 	private Grid BuildClipboardPage()
 	{
 		Grid g = new Grid();
 		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 		g.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-		StackPanel head = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 0, 6) };
+		Grid head = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+		head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		// 搜索框（ClipSearch 开启时显示）：按文本过滤，输入即时刷新列表。
+		// 用自绘模板（无状态触发器）：WPF 默认 TextBox 模板在悬停/聚焦时会把背景强制置白，
+		// 深色面板下白底+浅字导致输入文字完全看不清。
+		clipSearchBox = new System.Windows.Controls.TextBox
+		{
+			VerticalAlignment = VerticalAlignment.Center,
+			MinHeight = 26,
+			FontSize = 12,
+			Background = InputBrush(),
+			Foreground = TextBrush,
+			CaretBrush = TextBrush,
+			Style = SearchBoxStyle(),
+			BorderThickness = new Thickness(0),
+			Padding = new Thickness(8, 3, 8, 3),
+			Visibility = O.ClipSearch ? Visibility.Visible : Visibility.Collapsed,
+			ToolTip = "搜索剪贴板（回车/输入即时过滤）"
+		};
+		clipSearchBox.TextChanged += delegate
+		{
+			clipFilter = clipSearchBox.Text ?? "";
+			RefreshClipboardPage();
+		};
+		Grid.SetColumn(clipSearchBox, 0);
+		head.Children.Add(clipSearchBox);
+		StackPanel right = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
 		Border pauseBtn = TextButton(IslandClipboard.IsPaused ? "继续" : "暂停", delegate
 		{
 			IslandClipboard.SetPaused(!IslandClipboard.IsPaused);
-			(head.Children[0] as Border).Child = new TextBlock { Text = IslandClipboard.IsPaused ? "继续" : "暂停", FontSize = 12, Foreground = TextBrush, Margin = new Thickness(10, 4, 10, 4) };
+			(right.Children[0] as Border).Child = new TextBlock { Text = IslandClipboard.IsPaused ? "继续" : "暂停", FontSize = 12, Foreground = TextBrush, Margin = new Thickness(10, 4, 10, 4) };
 		});
 		Border clearBtn = TextButton("清空", delegate { IslandClipboard.Clear(); RefreshClipboardPage(); });
-		head.Children.Add(pauseBtn);
-		head.Children.Add(clearBtn);
+		right.Children.Add(pauseBtn);
+		right.Children.Add(clearBtn);
 		clipToast = new Border
 		{
 			CornerRadius = new CornerRadius(7),
@@ -1264,7 +2307,9 @@ private Style BuildProgressSliderStyle()
 			Visibility = Visibility.Collapsed,
 			Child = new TextBlock { Text = "复制成功 ✓", FontSize = 11, Foreground = TextBrush }
 		};
-		head.Children.Add(clipToast);
+		right.Children.Add(clipToast);
+		Grid.SetColumn(right, 1);
+		head.Children.Add(right);
 		Grid.SetRow(head, 0);
 		g.Children.Add(head);
 		ScrollViewer sv = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = 320 };
@@ -1442,6 +2487,361 @@ private Style BuildProgressSliderStyle()
 		}
 		return t.ToString("MM-dd HH:mm");
 	}
+
+	// —— 展开态聚合首页（卡片化布局，ClassicLayout=false 默认）——
+	// 结构：问候头 → 正在播放卡 → 快捷开关 3×2 网格 → 通知预览卡 → 剪贴板预览卡
+	private Grid BuildHomePage()
+	{
+		Grid g = new Grid();
+		StackPanel root = new StackPanel
+		{
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Top,
+			Margin = new Thickness(0, 6, 0, 0)
+		};
+		g.Children.Add(root);
+
+		// 问候头：日期 + 问候语
+		homeGreeting = new TextBlock
+		{
+			FontSize = 14,
+			FontWeight = FontWeights.SemiBold,
+			Foreground = TextBrush,
+			Margin = new Thickness(0, 0, 0, 10)
+		};
+		root.Children.Add(homeGreeting);
+
+		// 正在播放卡（首页唯一音乐入口：封面 + 曲目 + 上一首/播放暂停/下一首；无会话时整卡隐藏）
+		homeMusicCard = new Border { CornerRadius = new CornerRadius(14), Background = CardBrush(), Padding = new Thickness(12, 10, 12, 10), Margin = new Thickness(0, 0, 0, 10), Visibility = Visibility.Collapsed };
+		Grid mc = new Grid();
+		mc.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		mc.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		mc.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		homeMusicCover = new System.Windows.Controls.Image
+		{
+			Width = 46,
+			Height = 46,
+			Stretch = Stretch.UniformToFill,
+			Margin = new Thickness(0, 0, 10, 0),
+			VerticalAlignment = VerticalAlignment.Center,
+			Clip = new RectangleGeometry(new Rect(0, 0, 46, 46), 10, 10)
+		};
+		Grid.SetColumn(homeMusicCover, 0);
+		mc.Children.Add(homeMusicCover);
+		StackPanel mt = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+		TextBlock mtLabel = new TextBlock { Text = "正在播放", FontSize = 10.5, Foreground = MutedBrush };
+		homeMusicTitle = new TextBlock { Text = "未在播放", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = TextBrush, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 200, Margin = new Thickness(0, 2, 0, 0) };
+		homeMusicArtist = new TextBlock { Text = "", FontSize = 11, Foreground = MutedBrush, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 200 };
+		mt.Children.Add(mtLabel);
+		mt.Children.Add(homeMusicTitle);
+		mt.Children.Add(homeMusicArtist);
+		Grid.SetColumn(mt, 1);
+		mc.Children.Add(mt);
+		StackPanel btnRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+		homePrevBtn = new Border
+		{
+			Width = 26,
+			Height = 26,
+			CornerRadius = new CornerRadius(13),
+			Background = Brushes.Transparent,
+			Cursor = Cursors.Hand,
+			VerticalAlignment = VerticalAlignment.Center,
+			Child = IslandIcons.Previous(IconBrush(), 13)
+		};
+		homePrevBtn.MouseLeftButtonUp += delegate
+		{
+			try
+			{
+				if (M != null)
+				{
+					M.Action("previous");
+				}
+			}
+			catch
+			{
+			}
+		};
+		btnRow.Children.Add(homePrevBtn);
+		homePlayBtn = new Border
+		{
+			Width = 34,
+			Height = 34,
+			CornerRadius = new CornerRadius(17),
+			Background = PlayButtonBrush(),
+			Cursor = Cursors.Hand,
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(4, 0, 4, 0),
+			Child = IslandIcons.Play(PlayIconBrush(), 18)
+		};
+		homePlayBtn.MouseLeftButtonUp += delegate
+		{
+			try
+			{
+				if (M == null)
+				{
+					return;
+				}
+				if (M.Local && !M.Session.Available && !M.Playing)
+				{
+					M.Pick(this);
+				}
+				M.Action("toggle");
+			}
+			catch
+			{
+			}
+		};
+		btnRow.Children.Add(homePlayBtn);
+		homeNextBtn = new Border
+		{
+			Width = 26,
+			Height = 26,
+			CornerRadius = new CornerRadius(13),
+			Background = Brushes.Transparent,
+			Cursor = Cursors.Hand,
+			VerticalAlignment = VerticalAlignment.Center,
+			Child = IslandIcons.Next(IconBrush(), 13)
+		};
+		homeNextBtn.MouseLeftButtonUp += delegate
+		{
+			try
+			{
+				if (M != null)
+				{
+					M.Action("next");
+				}
+			}
+			catch
+			{
+			}
+		};
+		btnRow.Children.Add(homeNextBtn);
+		Grid.SetColumn(btnRow, 2);
+		mc.Children.Add(btnRow);
+		homeMusicCard.Child = mc;
+		root.Children.Add(homeMusicCard);
+
+		// 快捷开关：3×2 网格（WiFi/蓝牙/专注/音量/亮度/输出）。
+		// WiFi/蓝牙磁贴点击只进对应列表页（开关在列表页内操作），不再“一点就关”造成误触。
+		UniformGrid tiles = new UniformGrid { Columns = 3, Margin = new Thickness(0, 0, 0, 10) };
+		Border hWifi = HomeTile("Wi-Fi", IslandIcons.PathIcon("M11.8 20 h0.4 M2 8.82 a15 15 0 0 1 20 0 M5 12.86 a10 10 0 0 1 14 0 M8.5 16.43 a5 5 0 0 1 7 0", IconBrush(), 16, fill: false, strokeWidth: 2.0), homeWifiStatus = new TextBlock { Text = "--", FontSize = 10, Foreground = MutedBrush }, delegate { SetPage(10); });
+		Border hBt = HomeTile("蓝牙", IslandIcons.PathIcon("m7 7 l10 10 l-5 5 V2 l5 5 L7 17", IconBrush(), 16, fill: false, strokeWidth: 2.0), homeBtStatus = new TextBlock { Text = "--", FontSize = 10, Foreground = MutedBrush }, delegate { SetPage(11); });
+		Border hFocus = HomeTile("专注", new TextBlock { Text = "🍅", FontSize = 14 }, homeFocusText = new TextBlock { Text = "点击开始", FontSize = 10, Foreground = MutedBrush }, delegate { OpenFocusPanel(); });
+		Border hVol = HomeTile("音量", IslandIcons.Speaker(IconBrush(), 16), homeVolumeText = new TextBlock { Text = "--", FontSize = 10, Foreground = MutedBrush }, delegate { SetPage(3); });
+		Border hBri = HomeTile("亮度", IslandIcons.PathIcon("M8 12 a4 4 0 1 1 8 0 a4 4 0 1 1 -8 0 M12 2 v2 M12 20 v2 M4.93 4.93 l1.41 1.41 M17.66 17.66 l1.41 1.41 M2 12 h2 M20 12 h2 M6.34 17.66 l-1.41 1.41 M19.07 4.93 l-1.41 1.41", IconBrush(), 16, fill: false, strokeWidth: 1.6), homeBrightnessText = new TextBlock { Text = "--", FontSize = 10, Foreground = MutedBrush }, delegate { SetPage(3); });
+		Border hOut = HomeTile("输出", IslandIcons.PathIcon("M4 9.5 V14.5 H7.5 L12.5 19 V5 L7.5 9.5 Z M15.5 8.8 A3.8 3.8 0 0 1 15.5 15.2", IconBrush(), 16, fill: false, strokeWidth: 1.6), new TextBlock { Text = "设备", FontSize = 10, Foreground = MutedBrush }, delegate { SetPage(3); });
+		tiles.Children.Add(hWifi);
+		tiles.Children.Add(hBt);
+		tiles.Children.Add(hFocus);
+		tiles.Children.Add(hVol);
+		tiles.Children.Add(hBri);
+		tiles.Children.Add(hOut);
+		root.Children.Add(tiles);
+
+		// 通知预览卡
+		Border notifCard = new Border { CornerRadius = new CornerRadius(14), Background = CardBrush(), Padding = new Thickness(12, 8, 12, 8), Margin = new Thickness(0, 0, 0, 10), Cursor = Cursors.Hand };
+		StackPanel np = new StackPanel();
+		Grid nh = new Grid();
+		nh.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		nh.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		TextBlock nhTitle = new TextBlock { Text = "最近通知", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = TextBrush };
+		Border moreNotif = TextButton("查看全部", delegate { SetPage(1); });
+		Grid.SetColumn(moreNotif, 1);
+		nh.Children.Add(nhTitle);
+		nh.Children.Add(moreNotif);
+		np.Children.Add(nh);
+		homeNotifStack = new StackPanel();
+		np.Children.Add(homeNotifStack);
+		notifCard.Child = np;
+		notifCard.MouseLeftButtonUp += delegate { SetPage(1); };
+		root.Children.Add(notifCard);
+
+		// 剪贴板预览卡
+		Border clipCard = new Border { CornerRadius = new CornerRadius(14), Background = CardBrush(), Padding = new Thickness(12, 8, 12, 8), Cursor = Cursors.Hand };
+		StackPanel cp = new StackPanel();
+		Grid ch = new Grid();
+		ch.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		ch.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		TextBlock chTitle = new TextBlock { Text = "剪贴板", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = TextBrush };
+		Border moreClip = TextButton("查看全部", delegate { SetPage(2); });
+		Grid.SetColumn(moreClip, 1);
+		ch.Children.Add(chTitle);
+		ch.Children.Add(moreClip);
+		cp.Children.Add(ch);
+		homeClipStack = new StackPanel();
+		cp.Children.Add(homeClipStack);
+		clipCard.Child = cp;
+		clipCard.MouseLeftButtonUp += delegate { SetPage(2); };
+		root.Children.Add(clipCard);
+
+		return g;
+	}
+
+	private Border HomeTile(string title, FrameworkElement icon, TextBlock value, MouseButtonEventHandler click)
+	{
+		Border tile = new Border
+		{
+			CornerRadius = new CornerRadius(12),
+			Background = CardBrush(),
+			Cursor = Cursors.Hand,
+			Padding = new Thickness(10, 8, 10, 8),
+			Margin = new Thickness(3),
+			ToolTip = title
+		};
+		StackPanel sp = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+		icon.HorizontalAlignment = HorizontalAlignment.Center;
+		icon.VerticalAlignment = VerticalAlignment.Center;
+		sp.Children.Add(icon);
+		TextBlock name = new TextBlock { Text = title, FontSize = 10.5, Foreground = MutedBrush, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 3, 0, 0) };
+		sp.Children.Add(name);
+		value.HorizontalAlignment = HorizontalAlignment.Center;
+		sp.Children.Add(value);
+		tile.Child = sp;
+		tile.MouseLeftButtonUp += delegate (object s, MouseButtonEventArgs e)
+		{
+			click(s, e);
+			Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(RefreshHomePage));
+		};
+		return tile;
+	}
+
+	public void RefreshHomePage()
+	{
+		try
+		{
+			if (homeGreeting == null)
+			{
+				return;
+			}
+			DateTime now = DateTime.Now;
+			string greet = now.Hour < 6 ? "夜深了" : now.Hour < 12 ? "早上好" : now.Hour < 18 ? "下午好" : "晚上好";
+			homeGreeting.Text = now.ToString("M月d日 dddd") + " · " + greet;
+			// 正在播放卡：有媒体会话（音乐程序在运行）或本地播放器才显示，否则整卡隐藏
+			bool musicVisible = M != null && (M.Session.Available || M.Local);
+			homeMusicCard.Visibility = musicVisible ? Visibility.Visible : Visibility.Collapsed;
+			if (musicVisible)
+			{
+				bool hasTrack = !string.IsNullOrEmpty(M.Title);
+				homeMusicTitle.Text = hasTrack ? M.Title : "未在播放";
+				homeMusicArtist.Text = hasTrack && !string.IsNullOrEmpty(M.Artist) ? M.Artist : "开始播放后这里会显示曲目";
+				homePlayBtn.Child = M.Playing ? IslandIcons.Pause(PlayIconBrush(), 18) : IslandIcons.Play(PlayIconBrush(), 18);
+				homeMusicCover.Source = M.Artwork;
+			}
+			// 音量/亮度
+			try
+			{
+				AudioCore.TryGetVolume(out float vol, out bool muted);
+				homeVolumeText.Text = muted ? "静音" : ((int)Math.Round(vol * 100.0)).ToString();
+			}
+			catch
+			{
+				homeVolumeText.Text = "--";
+			}
+			try
+			{
+				int? b = BrightnessCore.TryGet();
+				homeBrightnessText.Text = b.HasValue ? b.Value.ToString() : "--";
+			}
+			catch
+			{
+				homeBrightnessText.Text = "--";
+			}
+			// 专注
+			if (focusTimer != null && focusTimer.IsEnabled)
+			{
+				int m = (int)(focusRemainingSec / 60.0);
+				int s = (int)(focusRemainingSec % 60.0);
+				homeFocusText.Text = m.ToString("00") + ":" + s.ToString("00");
+			}
+			else
+			{
+				homeFocusText.Text = "点击开始";
+			}
+			// WiFi/蓝牙（异步）
+			Task.Run(delegate
+			{
+				try
+				{
+					CcReply reply = Bridge.State();
+					bool wifi = false, bt = false;
+					string v = reply.Value ?? "";
+					foreach (string part in v.Split('|'))
+					{
+						if (part.StartsWith("wifi:", StringComparison.OrdinalIgnoreCase))
+						{
+							wifi = part.EndsWith("on", StringComparison.OrdinalIgnoreCase);
+						}
+						else if (part.StartsWith("bt:", StringComparison.OrdinalIgnoreCase))
+						{
+							bt = part.EndsWith("on", StringComparison.OrdinalIgnoreCase);
+						}
+					}
+					Dispatcher.BeginInvoke(new Action(delegate
+					{
+						homeWifiStatus.Text = wifi ? "已开启" : "已关闭";
+						homeBtStatus.Text = bt ? "已开启" : "已关闭";
+					}));
+				}
+				catch
+				{
+				}
+			});
+			// 通知预览（最多 3 条）
+			homeNotifStack.Children.Clear();
+			List<IslandNotification> notifs = IslandNotifications.Recent();
+			if (notifs.Count == 0)
+			{
+				homeNotifStack.Children.Add(new TextBlock { Text = "暂无通知", FontSize = 11, Foreground = MutedBrush, Margin = new Thickness(0, 4, 0, 0) });
+			}
+			else
+			{
+				bool hideBody = O.HideNotifyBody || IslandClipboard.PrivacyActive;
+				foreach (IslandNotification n in notifs.Take(3))
+				{
+					Grid rg = new Grid();
+					rg.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+					rg.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+					TextBlock dot = new TextBlock { Text = "•", FontSize = 12, Foreground = IconBrush(), VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 0, 6, 0) };
+					Grid.SetColumn(dot, 0);
+					rg.Children.Add(dot);
+					string app = string.IsNullOrEmpty(n.AppName) ? "新通知" : n.AppName;
+					string body = hideBody ? "" : ((n.Body ?? "").Replace("\r", " ").Replace("\n", " "));
+					if (body.Length > 60)
+					{
+						body = body.Substring(0, 60) + "…";
+					}
+					TextBlock line = new TextBlock { Text = app + (body.Length > 0 ? " · " + body : ""), FontSize = 11, Foreground = TextBrush, TextTrimming = TextTrimming.CharacterEllipsis };
+					Grid.SetColumn(line, 1);
+					rg.Children.Add(line);
+					rg.Margin = new Thickness(0, 4, 0, 0);
+					homeNotifStack.Children.Add(rg);
+				}
+			}
+			// 剪贴板预览（最多 3 条）
+			homeClipStack.Children.Clear();
+			List<IslandClipboard.ClipItem> clips = IslandClipboard.Items();
+			if (clips.Count == 0)
+			{
+				homeClipStack.Children.Add(new TextBlock { Text = "剪贴板为空", FontSize = 11, Foreground = MutedBrush, Margin = new Thickness(0, 4, 0, 0) });
+			}
+			else
+			{
+				foreach (IslandClipboard.ClipItem ci in clips.Take(3))
+				{
+					string preview = ci.Kind == "image" ? "🖼️ 图片" : (ci.Text ?? "").Replace("\r", " ").Replace("\n", " ");
+					if (preview.Length > 60)
+					{
+						preview = preview.Substring(0, 60) + "…";
+					}
+					homeClipStack.Children.Add(new TextBlock { Text = preview, FontSize = 11, Foreground = TextBrush, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 4, 0, 0) });
+				}
+			}
+		}
+		catch
+		{
+		}
+	}
+	// —— 展开态聚合首页（完）——
 
 	// 查看页（sub page 13）：点列表项先看标题与内容，右上角"编辑"才进编辑页。
 	private Grid BuildNoteViewPage()
@@ -1898,18 +3298,59 @@ private Style BuildProgressSliderStyle()
 		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+		// 快捷启动器（QuickLauncher）：回车呼出 GlassBoard 应用面板
+		launcherBox = new System.Windows.Controls.TextBox
+		{
+			Margin = new Thickness(0, 0, 0, 0),
+			MinHeight = 30,
+			FontSize = 12,
+			Background = ChipBrush(),
+			Foreground = TextBrush,
+			BorderThickness = new Thickness(0),
+			CaretBrush = TextBrush,
+			Padding = new Thickness(8, 4, 8, 4),
+			Visibility = O.QuickLauncher ? Visibility.Visible : Visibility.Collapsed,
+			ToolTip = "快捷启动器：输入应用名，回车打开 GlassBoard 应用面板"
+		};
+		launcherBox.KeyDown += delegate (object s, KeyEventArgs e)
+		{
+			if (e.Key != Key.Enter)
+			{
+				return;
+			}
+			e.Handled = true;
+			try
+			{
+				C?.Toggle(true);
+			}
+			catch
+			{
+			}
+			launcherBox.Clear();
+			Collapse();
+		};
+		Grid.SetRow(launcherBox, 6);
+		g.Children.Add(launcherBox);
 
 		Grid tiles = new Grid();
 		tiles.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 		tiles.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		tiles.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 		wifiTile = SmallTile("Wi-Fi", b => IslandIcons.PathIcon("M11.8 20 h0.4 M2 8.82 a15 15 0 0 1 20 0 M5 12.86 a10 10 0 0 1 14 0 M8.5 16.43 a5 5 0 0 1 7 0", b, 18, fill: false, strokeWidth: 2.0), out wifiStatus, out wifiTileName, delegate { ToggleRadio("wifi"); }, delegate { SetPage(10); });
 		btTile = SmallTile("蓝牙", b => IslandIcons.PathIcon("m7 7 l10 10 l-5 5 V2 l5 5 L7 17", b, 18, fill: false, strokeWidth: 2.0), out btStatus, out btTileName, delegate { ToggleRadio("bt"); }, delegate { SetPage(11); });
+		// 番茄钟瓦片：点击开始/停止专注倒计时（FocusMode 设置持久化）
+		focusTile = SmallTile("专注", b => new TextBlock { Text = "🍅", FontSize = 16, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center }, out focusStatus, out focusName, delegate { ToggleFocus(); });
 		Grid.SetColumn(wifiTile, 0);
 		Grid.SetColumn(btTile, 1);
+		Grid.SetColumn(focusTile, 2);
 		wifiTile.Margin = new Thickness(0, 0, 5, 0);
-		btTile.Margin = new Thickness(5, 0, 0, 0);
+		btTile.Margin = new Thickness(5, 0, 5, 0);
+		focusTile.Margin = new Thickness(5, 0, 0, 0);
 		tiles.Children.Add(wifiTile);
 		tiles.Children.Add(btTile);
+		tiles.Children.Add(focusTile);
 		Grid.SetRow(tiles, 0);
 		g.Children.Add(tiles);
 
@@ -1945,6 +3386,7 @@ private Style BuildProgressSliderStyle()
 			// 修正音量刻度：滑杆 0-100，WASAPI 接口收 0-1
 			AudioCore.TrySetVolume((float)(volumeSlider.Value / 100.0));
 			volumeValue.Text = ((int)Math.Round(volumeSlider.Value)).ToString();
+			ShowHud("🔊 音量", volumeSlider.Value, volumeValue.Text);
 		};
 		Grid.SetColumn(volumeSlider, 1);
 		volumeRow.Children.Add(volumeSlider);
@@ -1995,6 +3437,7 @@ private Style BuildProgressSliderStyle()
 			}
 			BrightnessCore.TrySet((int)Math.Round(brightnessSlider.Value));
 			brightnessValue.Text = ((int)Math.Round(brightnessSlider.Value)).ToString();
+			ShowHud("🔆 亮度", brightnessSlider.Value, brightnessValue.Text);
 		};
 		Grid.SetColumn(brightnessSlider, 1);
 		brightnessRow.Children.Add(brightnessSlider);
@@ -2225,7 +3668,9 @@ private Style BuildProgressSliderStyle()
 	// —�?小部件构�?—�?
 	private Brush ChipBrush()
 	{
-		return new SolidColorBrush(textLight ? Color.FromArgb(26, 0, 0, 0) : Color.FromArgb(28, 255, 255, 255));
+		// 自适应对比度：开启时底衬加深（浅色壁纸上文字/底衬对比更强）
+		double strength = O.AdaptiveContrast ? 1.6 : 1.0;
+		return new SolidColorBrush(textLight ? Color.FromArgb((byte)Math.Min(255.0, 26.0 * strength), 0, 0, 0) : Color.FromArgb((byte)Math.Min(255.0, 28.0 * strength), 255, 255, 255));
 	}
 
 // 覆盖基类文字画刷：不再跟随主�?LightTheme，而是跟随“实际背景亮度”自适应对比度�?
@@ -2290,14 +3735,14 @@ private Brush LineBrush()
 		return new SolidColorBrush(textLight ? Color.FromArgb(30, 0, 0, 0) : Color.FromArgb(32, 255, 255, 255));
 	}
 
-// 文字颜色跟随系统明暗主题：深色模式→白色文字，浅色模式→深色文字�?
-// 用户已反馈“深色模式下文字还是黑色”即为旧逻辑（跟随岛�?Light 标记）所致；
-// 岛内 Light 只控制底色，文字按系统主题走，保证深浅两种系统模式下都清晰�?
+// 文字颜色跟随岛的实际底色模式：跟随系统主题时按系统明暗，手动模式按岛深浅设置。
+// 深色背景→白色文字，浅色背景→深色文字（不再按壁纸亮度判断）。
 private void UpdateTextContrast()
 	{
 		try
 		{
-			textLight = C.Prefs.Light;
+			bool sysLight = C.Prefs.Light;
+			textLight = O.FollowSystemTheme ? sysLight : O.Light;
 		}
 		catch
 		{
@@ -2515,6 +3960,14 @@ expandedRoot.Visibility = Visibility.Collapsed;
 		{
 			toastViewBtn.Visibility = Visibility.Visible; // 点击“查看”→ 跳转该应用的筛选页
 		}
+		if (toastReadBtn != null)
+		{
+			toastReadBtn.Visibility = O.ToastActions ? Visibility.Visible : Visibility.Collapsed;
+		}
+		if (toastMuteBtn != null)
+		{
+			toastMuteBtn.Visibility = O.ToastActions ? Visibility.Visible : Visibility.Collapsed;
+		}
 		toastCard.Visibility = Visibility.Visible;
 		FadeInContent(toastCard);
 		// 事件卡独占显示：收起条与展开面板隐藏，避免半透明卡片下透出文字重叠
@@ -2522,10 +3975,22 @@ expandedRoot.Visibility = Visibility.Collapsed;
 		expandedRoot.Visibility = Visibility.Collapsed;
 		mode = Mode.Toast;
 		SetNoActivate(true);
-// 事件卡就是小岛本身“变身”：尺寸与收起条完全一致，不放大成独立卡片�?
-
-double w = O.CollapsedWidth;
+		// 事件卡尺寸自适应：按三行文本（应用/昵称/内容）的实际高度加高窗口，
+		// 标题过长时适度加宽（上限 +160px）——修复 QQ 类通知内容被截半的问题。
+		double w = O.CollapsedWidth;
 		double h = O.CollapsedHeight;
+		try
+		{
+			toastCard.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+			double needW = toastCard.DesiredSize.Width + 28.0;
+			double maxW = Math.Min(MonitorWorkArea().Width - 24.0, w + 160.0);
+			w = Math.Max(w, Math.Min(maxW, needW));
+			double needH = toastCard.DesiredSize.Height + 28.0;
+			h = Math.Max(h, Math.Min(O.CollapsedHeight + 120.0, needH));
+		}
+		catch
+		{
+		}
 		PositionAnimated(w, h);
 		toastTimer.Interval = TimeSpan.FromSeconds(Math.Max(2, O.NotifyDurationSec));
 		toastTimer.Stop();
@@ -2593,6 +4058,17 @@ toastViewBtn.Visibility = Visibility.Collapsed; // 低电量卡无“查看”�
 		SetNoActivate(true);
 		double w = O.CollapsedWidth;
 		double h = O.CollapsedHeight;
+		// 事件卡宽度自适应：标题/正文长时适度加宽（上限 +160px），不挤省略号
+		try
+		{
+			toastCard.Measure(new Size(double.PositiveInfinity, h));
+			double need = toastCard.DesiredSize.Width + 28.0;
+			double maxW = Math.Min(MonitorWorkArea().Width - 24.0, w + 160.0);
+			w = Math.Max(w, Math.Min(maxW, need));
+		}
+		catch
+		{
+		}
 		PositionAnimated(w, h);
 		toastTimer.Interval = TimeSpan.FromSeconds(Math.Max(2, O.NotifyDurationSec));
 		toastTimer.Stop();
@@ -2609,6 +4085,7 @@ toastViewBtn.Visibility = Visibility.Collapsed; // 低电量卡无“查看”�
 		sizeAnimating = false; // 自愈：新过渡开始先复位动画态，防止卡帧
 		toastTimer.Stop();
 		StopEqualizer();
+		StopEyeTracking();
 		mode = Mode.Expanded;
 		Store.Trace("ISLAND anim expand");
 		// 先切到目标页再测尺寸：展开区域按目标页面的实际宽高截取，底图与面板 1:1 对应。
@@ -2624,10 +4101,6 @@ toastViewBtn.Visibility = Visibility.Collapsed; // 低电量卡无“查看”�
 		collapsedRoot.Visibility = Visibility.Collapsed;
 		toastCard.Visibility = Visibility.Collapsed;
 		expandedRoot.Visibility = Visibility.Visible;
-		if (bellDot != null)
-		{
-			bellDot.Visibility = Visibility.Collapsed;
-		}
 		RefreshMusicPage();
 		RefreshControlQuick();
 // 展开高度按当前页面内容自适应（SetPage 已先切换到目标页�?
@@ -2785,10 +4258,6 @@ private string lastFgProc;
 					toastTimer.Stop();
 					CollapseFromToast();
 				}
-				if (IslandNotifications.Recent().Count == 0)
-				{
-					bellDot.Visibility = Visibility.Collapsed;
-				}
 			}
 		}
 		catch
@@ -2890,9 +4359,22 @@ private string lastFgProc;
 
 	private int PickDefaultPage()
 	{
+		if (!O.ClassicLayout)
+		{
+			return -1; // 卡片化布局：默认进聚合首页
+		}
 		if (O.ShowMusicPage)
 		{
-			return 0;
+			// “正在播放”tab 已删除；ClassicLayout 回退到通知页（若无则控制中心）
+			if (O.ShowNotificationsPage)
+			{
+				return 1;
+			}
+			if (O.ShowControlPage)
+			{
+				return 3;
+			}
+			return 1;
 		}
 		if (O.ShowNotificationsPage)
 		{
@@ -2928,6 +4410,7 @@ private void SetPage(int page, bool syncSize = true)
 		};
 		Grid target = page switch
 		{
+			-1 => homePage,
 			0 => musicPage,
 			1 => notificationsPage,
 			2 => clipboardPage,
@@ -2939,7 +4422,7 @@ private void SetPage(int page, bool syncSize = true)
 			_ => controlPage
 		};
 		// 页切换直接瞬切（用户要求切页不要动画），切换后按新页面内容重测展开高度
-		foreach (Grid p in new[] { musicPage, notificationsPage, clipboardPage, controlPage, wifiPage, btPage, notesPage, noteEditPage, noteViewPage })
+		foreach (Grid p in new[] { homePage, musicPage, notificationsPage, clipboardPage, controlPage, wifiPage, btPage, notesPage, noteEditPage, noteViewPage })
 		{
 			p.Visibility = Visibility.Collapsed;
 		}
@@ -2958,6 +4441,10 @@ foreach (Border b in tabBar.Children.OfType<Border>())
 			int idx = (int)b.Tag;
 			bool active = idx == page || (sub && idx == 3);
 			b.Background = active ? ChipBrush() : Brushes.Transparent;
+		}
+		if (page == -1)
+		{
+			RefreshHomePage();
 		}
 		if (page == 1)
 		{
@@ -3103,13 +4590,112 @@ foreach (Border b in tabBar.Children.OfType<Border>())
 		durationText.Text = duration > 0 ? FormatTime(duration) : "--:--";
 		positionText.Foreground = MutedBrush;
 		durationText.Foreground = MutedBrush;
+		// 收藏与媒体源状态
+		if (favBtn != null && favBtn.Child is TextBlock favTb)
+		{
+			bool fav = IsMusicFav(M.Title, M.Artist);
+			favTb.Text = fav ? "★" : "♡";
+			favTb.Foreground = fav ? new SolidColorBrush(Color.FromRgb(255, 196, 64)) : TextBrush;
+			favBtn.ToolTip = fav ? "取消收藏" : "收藏";
+		}
+		if (sourceSwitchBtn != null && sourceSwitchBtn.Child is TextBlock srcTb)
+		{
+			srcTb.Text = M.Local ? "本地" : "系统";
+		}
 		lastMusicTick = DateTime.Now;
+	}
+
+	// —— 音乐收藏（本地 JSON：标题|歌手，每行一条）——
+	private void LoadMusicFavs()
+	{
+		if (musicFavs != null)
+		{
+			return;
+		}
+		musicFavs = new List<string>();
+		try
+		{
+			string file = System.IO.Path.Combine(Store.Folder, "island-music-favs.json");
+			if (System.IO.File.Exists(file))
+			{
+				foreach (string line in System.IO.File.ReadAllLines(file))
+				{
+					if (!string.IsNullOrWhiteSpace(line))
+					{
+						musicFavs.Add(line);
+					}
+				}
+			}
+		}
+		catch
+		{
+		}
+	}
+
+	private bool IsMusicFav(string title, string artist)
+	{
+		LoadMusicFavs();
+		if (string.IsNullOrEmpty(title))
+		{
+			return false;
+		}
+		string key = (title ?? "") + "|" + (artist ?? "");
+		foreach (string line in musicFavs)
+		{
+			if (string.Equals(line, key, StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private void ToggleMusicFavorite()
+	{
+		try
+		{
+			if (M == null)
+			{
+				return;
+			}
+			LoadMusicFavs();
+			string key = (M.Title ?? "") + "|" + (M.Artist ?? "");
+			if (string.IsNullOrEmpty(M.Title))
+			{
+				return;
+			}
+			if (IsMusicFav(M.Title, M.Artist))
+			{
+				musicFavs.RemoveAll(delegate (string line)
+				{
+					return string.Equals(line, key, StringComparison.OrdinalIgnoreCase);
+				});
+			}
+			else
+			{
+				musicFavs.Insert(0, key);
+				if (musicFavs.Count > 500)
+				{
+					musicFavs.RemoveRange(500, musicFavs.Count - 500);
+				}
+			}
+			string file = System.IO.Path.Combine(Store.Folder, "island-music-favs.json");
+			System.IO.File.WriteAllLines(file, musicFavs.ToArray(), new System.Text.UTF8Encoding(false));
+			RefreshMusicPage();
+			ShowClipToast();
+			if (clipToast != null)
+			{
+				((TextBlock)clipToast.Child).Text = IsMusicFav(M.Title, M.Artist) ? "已收藏 ★" : "已取消收藏";
+			}
+		}
+		catch
+		{
+		}
 	}
 
 	private static void SetBtnEnabled(Border b, bool enabled)
 	{
-		b.Opacity = enabled ? 1.0 : 0.35;
-		b.IsHitTestVisible = enabled;
+		b.Opacity = enabled ? 1.0 : 0.35;		b.IsHitTestVisible = enabled;
 	}
 
 	// 切歌时文字/封面的柔和替换：快速淡出→替换内容→淡入。动画关闭或不可见时直接替换。
@@ -3319,11 +4905,67 @@ notifFilter = null; // 过滤键失效回退“全部�?
 			}
 		}
 		List<IslandNotification> shown = notifFilter == null ? items.Take(30).ToList() : groups[notifFilter].Take(30).ToList();
-		foreach (IslandNotification n in shown)
+		if (!O.NotifyGrouping || notifFilter != null)
 		{
-			notifList.Children.Add(NotificationCard(n, hideBody));
+			foreach (IslandNotification n in shown)
+			{
+				notifList.Children.Add(NotificationCard(n, hideBody));
+			}
+		}
+		else
+		{
+			// 按应用分组：组头（应用名+条数+清空该组）下挂组内卡片
+			foreach (string key in order)
+			{
+				List<IslandNotification> group = groups[key];
+				IslandNotification first = group[0];
+				string appName = string.IsNullOrEmpty(first.AppName) ? "新通知" : first.AppName;
+				notifList.Children.Add(NotificationGroupHeader(first, appName, group.Count, key));
+				foreach (IslandNotification n in group)
+				{
+					notifList.Children.Add(NotificationCard(n, hideBody));
+				}
+			}
 		}
 		SyncExpandedSize();
+	}
+
+	// 通知分组组头：应用图标+名称+条数+「清空该组」
+	private Border NotificationGroupHeader(IslandNotification sample, string appName, int count, string key)
+	{
+		Border head = new Border { Margin = new Thickness(0, 4, 0, 4) };
+		Grid g = new Grid();
+		g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		StackPanel left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+		ImageSource ic = AppIconResolver.Resolve(sample.Aumid, appName);
+		if (ic != null)
+		{
+			left.Children.Add(new Image { Source = ic, Width = 14, Height = 14, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center });
+		}
+		left.Children.Add(new TextBlock { Text = appName + " · " + count, FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = TextBrush, VerticalAlignment = VerticalAlignment.Center });
+		Grid.SetColumn(left, 0);
+		g.Children.Add(left);
+		Border clearGroup = TextButton("清空该组", delegate
+		{
+			try
+			{
+				string k = key;
+				IslandNotifications.RemoveMatching(delegate (IslandNotification n)
+				{
+					return KeyFor(n) == k;
+				});
+				RefreshNotificationsPage();
+			}
+			catch
+			{
+			}
+		});
+		Grid.SetColumn(clearGroup, 1);
+		g.Children.Add(clearGroup);
+		head.Child = g;
+		return head;
 	}
 
 	private static string KeyFor(IslandNotification n)
@@ -3453,14 +5095,40 @@ notifFilter = null; // 过滤键失效回退“全部�?
 			return;
 		}
 		bool hideBody = IslandClipboard.PrivacyActive;
-		foreach (IslandClipboard.ClipItem item in items.Take(50))
+		string filter = (clipFilter ?? "").Trim();
+		LoadClipPins();
+		IEnumerable<IslandClipboard.ClipItem> source = items.Take(50);
+		if (filter.Length > 0)
+		{
+			// 搜索：按文本内容匹配（图片按类型匹配）
+			source = source.Where(delegate (IslandClipboard.ClipItem ci)
+			{
+				return (ci.Kind == "text" && (ci.Text ?? "").IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0) || (ci.Kind == "image" && "图片".IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0);
+			}).ToList();
+		}
+		List<IslandClipboard.ClipItem> ordered = source.OrderByDescending(delegate (IslandClipboard.ClipItem ci)
+		{
+			return pinnedClips != null && pinnedClips.Contains(ClipPinKey(ci)) ? 1 : 0;
+		}).ThenByDescending(delegate (IslandClipboard.ClipItem ci)
+		{
+			return ci.Stamp;
+		}).ToList();
+		if (ordered.Count == 0)
+		{
+			clipList.Children.Add(EmptyHint("没有匹配的剪贴板条目"));
+			SyncExpandedSize();
+			return;
+		}
+		foreach (IslandClipboard.ClipItem item in ordered)
 		{
 			Border card = new Border { CornerRadius = new CornerRadius(12), Background = CardBrush(), Padding = new Thickness(10, 6, 6, 6), Margin = new Thickness(0, 0, 0, 6), Cursor = Cursors.Hand };
 			Grid g = new Grid();
 			g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 			g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 			int textCol = 0;
-// 图片项：左侧放图片本身的缩略图（是内容不是图标）；文本项不显示任何前置图标�?
+			bool isPinned = pinnedClips != null && pinnedClips.Contains(ClipPinKey(item));
+// 图片项：左侧放图片本身的缩略图（是内容不是图标）；文本项显示类型图标（ClipTypeIcons）�?
 
 
 if (item.Kind == "image" && System.IO.File.Exists(item.ImagePath))
@@ -3484,6 +5152,14 @@ if (item.Kind == "image" && System.IO.File.Exists(item.ImagePath))
 				{
 				}
 			}
+			else if (O.ClipTypeIcons && item.Kind == "text")
+			{
+				// 类型图标：文本条目左侧小图标（统一排版，不改变复制行为）
+				Border typeChip = new Border { Width = 34, Height = 34, CornerRadius = new CornerRadius(9), Background = ChipBrush(), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0), Child = new TextBlock { Text = "📄", FontSize = 15, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
+				Grid.SetColumn(typeChip, 0);
+				g.Children.Add(typeChip);
+				textCol = 1;
+			}
 			StackPanel textStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
 			if (hideBody)
 			{
@@ -3506,6 +5182,25 @@ if (item.Kind == "image" && System.IO.File.Exists(item.ImagePath))
 			}
 			Grid.SetColumn(textStack, textCol);
 			g.Children.Add(textStack);
+			// 置顶按钮：📌 切换；点击不触发卡片复制
+			Border pinBtn = new Border
+			{
+				Width = 26,
+				Height = 26,
+				CornerRadius = new CornerRadius(8),
+				VerticalAlignment = VerticalAlignment.Center,
+				Cursor = Cursors.Hand,
+				Tag = "noCopy",
+				ToolTip = isPinned ? "取消置顶" : "置顶",
+				Child = new TextBlock { Text = isPinned ? "📌" : "📍", FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Opacity = isPinned ? 1.0 : 0.55 }
+			};
+			IslandClipboard.ClipItem captured = item;
+			pinBtn.MouseLeftButtonUp += delegate
+			{
+				ToggleClipPin(captured);
+			};
+			Grid.SetColumn(pinBtn, 2);
+			g.Children.Add(pinBtn);
 			card.Child = g;
 // click card body copies to clipboard; per-item copy button removed
 card.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
@@ -3517,6 +5212,10 @@ card.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
 					{
 						return;
 					}
+					if (src is FrameworkElement fe && fe.Tag is string tg && tg == "noCopy")
+					{
+						return;
+					}
 					src = VisualTreeHelper.GetParent(src);
 				}
 				if (IslandClipboard.WriteBack(item))
@@ -3524,9 +5223,124 @@ card.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
 					ShowClipToast();
 				}
 			};
+			// 双击粘贴到前台窗口（ClipDoublePaste 开启时）：写回剪贴板后模拟 Ctrl+V
+			card.MouseLeftButtonDown += (object s, MouseButtonEventArgs e) =>
+			{
+				try
+				{
+					if (!O.ClipDoublePaste || e.ClickCount != 2)
+					{
+						return;
+					}
+					DependencyObject src = e.OriginalSource as DependencyObject;
+					while (src != null)
+					{
+						if (src is FrameworkElement fe && fe.Tag is string tg && tg == "noCopy")
+						{
+							return;
+						}
+						src = VisualTreeHelper.GetParent(src);
+					}
+					if (IslandClipboard.WriteBack(item))
+					{
+						ShowClipToast();
+						Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, new Action(delegate
+						{
+							try
+							{
+								SystemMedia.Shortcut(0x11, 0x56);
+							}
+							catch
+							{
+							}
+						}));
+					}
+				}
+				catch
+				{
+				}
+			};
 			clipList.Children.Add(card);
 		}
 		SyncExpandedSize();
+	}
+
+	// 剪贴板条目稳定键：图片=内容 SHA256，文本=SHA256(文本)
+	private static string ClipPinKey(IslandClipboard.ClipItem item)
+	{
+		try
+		{
+			string raw = item.Kind == "image" ? "img:" + item.Hash : "txt:" + item.Text;
+			using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+			{
+				byte[] bytes = System.Text.Encoding.UTF8.GetBytes(raw ?? "");
+				byte[] hash = sha.ComputeHash(bytes);
+				return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+			}
+		}
+		catch
+		{
+			return "";
+		}
+	}
+
+	private void LoadClipPins()
+	{
+		if (pinnedClips != null)
+		{
+			return;
+		}
+		pinnedClips = new HashSet<string>();
+		try
+		{
+			string file = System.IO.Path.Combine(Store.Folder, "island-clip-pins.json");
+			if (System.IO.File.Exists(file))
+			{
+				string txt = System.IO.File.ReadAllText(file);
+				if (!string.IsNullOrWhiteSpace(txt))
+				{
+					foreach (string part in txt.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+					{
+						pinnedClips.Add(part.Trim());
+					}
+				}
+			}
+		}
+		catch
+		{
+		}
+	}
+
+	private void ToggleClipPin(IslandClipboard.ClipItem item)
+	{
+		LoadClipPins();
+		string key = ClipPinKey(item);
+		if (key.Length == 0)
+		{
+			return;
+		}
+		if (pinnedClips.Contains(key))
+		{
+			pinnedClips.Remove(key);
+		}
+		else
+		{
+			pinnedClips.Add(key);
+		}
+		SaveClipPins();
+		RefreshClipboardPage();
+	}
+
+	private void SaveClipPins()
+	{
+		try
+		{
+			string file = System.IO.Path.Combine(Store.Folder, "island-clip-pins.json");
+			System.IO.File.WriteAllText(file, string.Join(",", pinnedClips.ToArray()), new System.Text.UTF8Encoding(false));
+		}
+		catch
+		{
+		}
 	}
 
 	private FrameworkElement EmptyHint(string text)
@@ -3611,6 +5425,7 @@ card.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
 		}
 		RefreshBatteryRow();
 		RefreshRadioTiles();
+		UpdateFocusTile();
 	}
 
 	private void RefreshRadioTiles()
@@ -4147,11 +5962,15 @@ private void SyncExpandedSize()
 				expandedRoot.CacheMode = new BitmapCache(1.0);
 				expandedRoot.RenderTransform = new TranslateTransform(0.0, -12.0);
 				expandedRoot.Opacity = 0.0;
-				expandedRoot.BeginAnimation(OpacityProperty, new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(Math.Max(160.0, Math.Min(320.0, 220.0 / O.ExpandSpeed)))) { From = 0.0, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
-				((TranslateTransform)expandedRoot.RenderTransform).BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-12.0, 0.0, TimeSpan.FromMilliseconds(Math.Max(200.0, Math.Min(420.0, 300.0 / O.ExpandSpeed)))) { From = -12.0, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+				expandedRoot.BeginAnimation(OpacityProperty, new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(Math.Max(140.0, Math.Min(260.0, 180.0 / O.ExpandSpeed)))) { From = 0.0, EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
+				((TranslateTransform)expandedRoot.RenderTransform).BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(-16.0, 0.0, TimeSpan.FromMilliseconds(Math.Max(160.0, Math.Min(320.0, 240.0 / O.ExpandSpeed)))) { From = -16.0, EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
 			}
 			TimeSpan dur = TimeSpan.FromMilliseconds(Math.Max(200.0, Math.Min(420.0, 300.0 / O.ExpandSpeed)));
-			DoubleAnimation aH = new DoubleAnimation(ch, h, dur) { From = ch, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+			// 窗口 Height 动画不用 BackEase：overshoot 会使每帧 WM_SIZE 回写时求值越界，
+			// 分层窗口下曾触发 "应用于 Height 属性的动画计算的当前值不是有效值" 崩溃。
+			// 弹性手感由展开 ScaleTransform 动画承担。
+			EasingFunctionBase hEase = new CubicEase { EasingMode = EasingMode.EaseOut };
+			DoubleAnimation aH = new DoubleAnimation(ch, h, dur) { From = ch, EasingFunction = hEase };
 			aH.Completed += delegate
 			{
 				// 无条件清理视觉层（透明度/位移/位图缓存）——即使本动画已被更新的动画替换
@@ -4224,6 +6043,24 @@ private void RunWhenIdle(Action work)
 
 	private void PositionAnimated(double width, double height, Action onDone = null)
 	{
+		// 有限性守卫：任何 NaN/Infinity 尺寸直接落位，绝不让无效值进入动画
+		// （WPF 对 Window.Height 动画求值出 NaN 会抛 InvalidOperationException）。
+		if (double.IsNaN(width) || double.IsInfinity(width) || double.IsNaN(height) || double.IsInfinity(height) || width <= 0 || height <= 0)
+		{
+			width = double.IsNaN(width) || width <= 0 ? O.CollapsedWidth : width;
+			height = double.IsNaN(height) || height <= 0 ? O.CollapsedHeight : height;
+			BeginAnimation(WidthProperty, null);
+			BeginAnimation(HeightProperty, null);
+			BeginAnimation(LeftProperty, null);
+			Width = width;
+			Height = height;
+			Left = MonitorWorkArea().Left + (MonitorWorkArea().Width - width) / 2.0;
+			Top = SnapTop() ? MonitorWorkArea().Top : MonitorWorkArea().Top + Math.Max(0, O.TopGap);
+			sizeAnimating = false;
+			animTargetW = animTargetH = animTargetL = double.NaN;
+			RefreshClip();
+			return;
+		}
 		Rect wa = MonitorWorkArea();
 		double left = wa.Left + (wa.Width - width) / 2.0;
 		double top = SnapTop() ? wa.Top : wa.Top + Math.Max(0, O.TopGap);
@@ -4362,7 +6199,9 @@ double fx = (fromW > 0.0 && width > 0.0) ? Math.Max(0.35, Math.Min(1.6, fromW / 
 		}
 		fx = s;
 		fy = s;
-		CubicEase ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+		EasingFunctionBase ease = O.SpringMotion
+			? (EasingFunctionBase)new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.5 }
+			: (EasingFunctionBase)new CubicEase { EasingMode = EasingMode.EaseOut };
 // DropShadowEffect 每帧都要把子树光栅化进中间缓冲再模糊，是 WPF 动画卡顿�?
 
 // 经典来源：过渡期间摘除阴影，结束再装回（IslandChrome.Shadow 复原）�?
@@ -4449,18 +6288,44 @@ if (shrinking)
 				{
 					BeginAnimation(LeftProperty, null);
 					Left = left;
+					// 收起态宽度自适应：动画期间被跳过的适配在落位后补一次，
+					// 通知铃铛/专注芯片显隐变化后宽度不再停留在旧值。
+					if (mode == Mode.Collapsed)
+					{
+						AdaptiveCollapsedWidth();
+					}
 				};
 				BeginAnimation(LeftProperty, aL2);
 			};
-			DoubleAnimation aH = new DoubleAnimation(fromH, height, TimeSpan.FromMilliseconds(duration))
+			// 窗口矩形动画（Width/Height）统一用无 overshoot 的 CubicEase：
+			// BackEase 回弹在分层窗口的 WM_SIZE 回写路径会算出无效动画值导致崩溃。
+			if (double.IsNaN(fromH) || double.IsInfinity(fromH) || double.IsNaN(fromW) || double.IsInfinity(fromW))
+			{
+				// 当前尺寸无效（窗口从未布局）：不做动画，直接落位
+				BeginAnimation(WidthProperty, null);
+				BeginAnimation(HeightProperty, null);
+				Width = width;
+				Height = height;
+				sizeAnimating = false;
+				animTargetW = animTargetH = animTargetL = double.NaN;
+				RefreshClip();
+				onDone?.Invoke();
+				return;
+			}
+			EasingFunctionBase rectEase = new CubicEase { EasingMode = EasingMode.EaseOut };
+			// 收缩卡顿优化：高度主动画（幕布收拢）+ 宽度 150ms 快速收窄。
+			// 分层窗口每帧 Width/Height 双属性动画要各触发一次 WM_SIZE 整窗合成，
+			// 双路并行 = 每帧两遍，帧率减半；宽度先到位后只剩单路高度动画，恢复满帧。
+			double shrinkDur = Math.Max(240.0, Math.Min(400.0, 340.0 / O.ExpandSpeed));
+			DoubleAnimation aH = new DoubleAnimation(fromH, height, TimeSpan.FromMilliseconds(shrinkDur))
 			{
 				From = fromH,
-				EasingFunction = ease
+				EasingFunction = rectEase
 			};
-			DoubleAnimation aW = new DoubleAnimation(fromW, width, TimeSpan.FromMilliseconds(duration))
+			DoubleAnimation aW = new DoubleAnimation(fromW, width, TimeSpan.FromMilliseconds(150.0))
 			{
 				From = fromW,
-				EasingFunction = ease
+				EasingFunction = rectEase
 			};
 			aH.Completed += done2;
 			// 收缩动画锚定左缘不动（Left 保持展开时的位置）：窗口原地变窄，避免
@@ -5128,6 +6993,19 @@ RefreshMusicPage();
 			m.Grain = 0.0;
 			SetMaterial(m);
 			SetGlassOpacity(O.OpacityPercent);
+			// 透明度变化会改变“实际背景亮度”判定（全透明时背景=壁纸），同步重估文字颜色。
+			bool before = textLight;
+			UpdateTextContrast();
+			if (before != textLight)
+			{
+				Foreground = TextBrush;
+				RecolorTree(ContentGrid);
+				RestyleStatic();
+				if (mode == Mode.Collapsed)
+				{
+					RebuildCollapsed();
+				}
+			}
 		}
 		catch (Exception ex)
 		{
@@ -5311,6 +7189,7 @@ private void RestyleToast()
 	{
 		tabIcons = new Dictionary<int, Func<Brush, FrameworkElement>>
 		{
+			{ -1, br => IslandIcons.PathIcon("M3 10.5 L12 3 L21 10.5 V20 A1 1 0 0 1 20 21 H4 A1 1 0 0 1 3 20 Z", br, 12, fill: false, strokeWidth: 1.6) },
 			{ 0, br => IslandIcons.TabMusic(br, 12) },
 			{ 1, br => IslandIcons.TabBell(br, 12) },
 			{ 2, br => IslandIcons.TabClipboard(br, 12) },
@@ -5318,10 +7197,11 @@ private void RestyleToast()
 			{ 4, br => IslandIcons.TabNote(br, 12) }
 		};
 		tabBar.Children.Clear();
-		if (O.ShowMusicPage)
+		if (!O.ClassicLayout)
 		{
-			tabBar.Children.Add(TabButton("正在播放", 0));
+			tabBar.Children.Add(TabButton("首页", -1));
 		}
+		// “正在播放”tab 已删除（用户要求）：音乐操控统一收进首页音乐卡。
 		if (O.ShowNotificationsPage)
 		{
 			tabBar.Children.Add(TabButton("通知", 1));
@@ -5337,7 +7217,7 @@ private void RestyleToast()
 		tabBar.Children.Add(TabButton("随手记", 4));
 		if (tabBar.Children.Count == 0)
 		{
-			tabBar.Children.Add(TabButton("正在播放", 0));
+			tabBar.Children.Add(TabButton("控制中心", 3));
 		}
 	}
 
@@ -5388,7 +7268,14 @@ private void RestyleToast()
 			{
 				RunWhenIdle(delegate
 				{
-					RefreshMusicPage(animate: false);
+					if (currentPage == -1)
+					{
+						RefreshHomePage();
+					}
+					else
+					{
+						RefreshMusicPage(animate: false);
+					}
 				});
 			}
 			return;
@@ -5457,7 +7344,15 @@ private void RestyleToast()
 		{
 			RunWhenIdle(delegate
 			{
-				RefreshMusicPage(trackSwitched);
+				// “正在播放”tab 已删除：在首页时刷新首页音乐卡，否则仍刷新音乐页（保底路径）。
+				if (currentPage == -1)
+				{
+					RefreshHomePage();
+				}
+				else
+				{
+					RefreshMusicPage(trackSwitched);
+				}
 			});
 		}
 		if (changed && coverBox != null && M.Artwork != null && O.AnimationEnabled)
@@ -5469,18 +7364,24 @@ private void RestyleToast()
 	public void NotifyArrived(IslandNotification n)
 	{
 		suggestionPool = new string[0]; // 未读数变化：建议池下轮立即重建
-		// 收起态铃铛红点恒显示（开关已移除）。
-		if (bellDot != null)
+		// 收起态铃铛数字徽标 + 通知到达动画（红点已删除，只保留数字）。
+		if (bellBadge != null)
 		{
 			RunWhenIdle(delegate
 			{
-				bellDot.Visibility = Visibility.Visible;
-				if (O.AnimationEnabled)
+				UpdateBellBadge();
+				// 通知到达动画：0=铃铛摇+数字徽标 1=仅徽标 2=无
+				if (O.AnimationEnabled && O.NotifyArrivalStyle == 0)
 				{
+					TransformGroup tg = new TransformGroup();
 					ScaleTransform scale = new ScaleTransform(1, 1);
-					bellBadge.RenderTransform = scale;
-					scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, 1.35, TimeSpan.FromMilliseconds(140)) { AutoReverse = true });
-					scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, 1.35, TimeSpan.FromMilliseconds(140)) { AutoReverse = true });
+					RotateTransform rot = new RotateTransform(0);
+					tg.Children.Add(scale);
+					tg.Children.Add(rot);
+					bellBadge.RenderTransform = tg;
+					scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1.0, 1.3, TimeSpan.FromMilliseconds(140)) { AutoReverse = true });
+					scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.0, 1.3, TimeSpan.FromMilliseconds(140)) { AutoReverse = true });
+					rot.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(-14.0, 14.0, TimeSpan.FromMilliseconds(140)) { AutoReverse = true });
 				}
 			});
 		}
@@ -5530,10 +7431,7 @@ if (O.HideNotifyBody || IslandClipboard.PrivacyActive)
 	public void NotifyCleared()
 	{
 		suggestionPool = new string[0]; // 未读数变化：建议池下轮立即重建
-		if (bellDot != null)
-		{
-			bellDot.Visibility = Visibility.Collapsed;
-		}
+		UpdateBellBadge();
 		if (mode == Mode.Expanded && currentPage == 1)
 		{
 			RefreshNotificationsPage();
@@ -5552,6 +7450,11 @@ public void RefreshWeather()
 
 	public void DisposeBridge()
 	{
+		StopEyeTracking();
+		if (focusPanel != null)
+		{
+			focusPanel.IsOpen = false;
+		}
 		try
 		{
 			bridge?.Dispose();

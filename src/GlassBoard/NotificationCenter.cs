@@ -942,6 +942,117 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 		}
 	}
 
+	// 通知「查看」直达来源应用：先按 Dock 入口激活已运行窗口（任务栏式切换，微信等
+	// 多窗口应用会激活到最近窗口）；未运行则启动应用。都失败返回 false（调用方回退
+	// 到通知筛选页）。
+	public static bool ActivateApp(string aumid, string appName)
+	{
+		string path = ResolvePath(aumid);
+		if (string.IsNullOrEmpty(path))
+		{
+			path = GuessExeFromAumid(aumid, appName);
+		}
+		if (string.IsNullOrEmpty(path))
+		{
+			Store.Trace("NOTIFY activate fail no-path aumid=" + (aumid ?? ""));
+			return false;
+		}
+		try
+		{
+			Entry entry = new Entry
+			{
+				Name = string.IsNullOrEmpty(appName) ? Path.GetFileNameWithoutExtension(path) : appName,
+				Path = path
+			};
+			if (RunningWindows.Activate(entry))
+			{
+				Store.Trace("NOTIFY activate ok path=" + path);
+				return true;
+			}
+			System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo
+			{
+				FileName = path,
+				UseShellExecute = true
+			};
+			System.Diagnostics.Process.Start(psi);
+			Store.Trace("NOTIFY activate launched path=" + path);
+			return true;
+		}
+		catch (Exception ex)
+		{
+			Store.Trace("NOTIFY activate error path=" + path + " err=" + ex.Message);
+			return false;
+		}
+	}
+
+	// aumid 无法归属到入口时：aumid 尾部段通常就是 exe 名（{GUID}\Tencent\Weixin\Weixin.exe），
+	// 先查 Dock 入口，再查运行中进程，把可执行路径找出来。
+	private static string GuessExeFromAumid(string aumid, string appName)
+	{
+		try
+		{
+			string tail = null;
+			if (!string.IsNullOrEmpty(aumid))
+			{
+				int i = aumid.LastIndexOf('\\');
+				tail = aumid.Substring(i + 1).Trim();
+			}
+			string exeName = null;
+			if (!string.IsNullOrEmpty(tail) && tail.Length >= 3)
+			{
+				exeName = tail;
+			}
+			if (string.IsNullOrEmpty(exeName) && !string.IsNullOrEmpty(appName))
+			{
+				exeName = appName;
+			}
+			if (string.IsNullOrEmpty(exeName))
+			{
+				return null;
+			}
+			string bare = exeName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? exeName.Substring(0, exeName.Length - 4) : exeName;
+			List<Entry> entries;
+			lock (gate)
+			{
+				entries = new List<Entry>(entrySnapshot);
+			}
+			foreach (Entry e in entries)
+			{
+				if (e.IsFolder || string.IsNullOrEmpty(e.Path))
+				{
+					continue;
+				}
+				if (Path.GetFileNameWithoutExtension(e.Path).Equals(bare, StringComparison.OrdinalIgnoreCase))
+				{
+					return e.Path;
+				}
+			}
+			foreach (RunningWindow w in RunningWindows.SnapshotWithBackground())
+			{
+				try
+				{
+					string wp = w.Path ?? "";
+					if (wp.Length == 0)
+					{
+						continue;
+					}
+					if (Path.GetFileNameWithoutExtension(wp).Equals(bare, StringComparison.OrdinalIgnoreCase))
+					{
+						return wp;
+					}
+				}
+				catch
+				{
+				}
+			}
+			return null;
+		}
+		catch
+		{
+			return null;
+		}
+	}
+
 	private static string Match(string aumid, string display)
 	{
 		List<Entry> entries;

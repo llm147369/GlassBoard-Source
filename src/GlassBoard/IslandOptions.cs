@@ -41,6 +41,7 @@ public sealed class IslandOptions
 		NotifyDurationSec = 5.0;
 		LowBatteryThreshold = 20;
 		EqualizerStyle = 4;
+		EqualizerEnabled = true;
 		MusicAlignCenter = true;
 		ClipboardMaxItems = 100;
 		ClipboardRetainDays = 14;
@@ -61,6 +62,34 @@ public sealed class IslandOptions
 		Shape = 1;
 		Material = new MaterialOptions();
 		MutedApps = new List<string>();
+		// —— 灵动岛升级（三段分区/卡片化/动效/新功能）——
+		CollapsedLayout = 0;
+		AdaptiveContrast = true;
+		ShowTimeChip = true;
+		ShowWeatherChip = true;
+		ShowBatteryChip = true;
+		ChargeAnim = true;
+		SuggestionEnabled = true;
+		SpringMotion = true;
+		NotifyArrivalStyle = 0;
+		EyesEnabled = true;
+		HudEnabled = true;
+		HudDurationSec = 1.5;
+		ToastActions = true;
+		NotifyGrouping = true;
+		ClipSearch = true;
+		ClipTypeIcons = true;
+		ClipDoublePaste = true;
+		MusicFavorite = true;
+		MusicSourceSwitch = true;
+		MusicProgressPeek = true;
+		MusicWheelVolume = true;
+		FocusMode = true;
+		FocusMinutes = 25;
+		BreakMinutes = 5;
+		FocusEndAlert = 0;
+		QuickLauncher = true;
+		ClassicLayout = false;
 	}
 
 	// —— 总开关与预设 ——
@@ -244,6 +273,10 @@ public sealed class IslandOptions
 	[DataMember]
 	public int EqualizerStyle = 4;
 
+	// 播放音乐时收起态显示跳动条（false=完全不显示，与样式无关）
+	[DataMember]
+	public bool EqualizerEnabled = true;
+
 	// 收起态标题/歌词对齐：true=居中（默认），false=靠左
 	public bool MusicAlignCenter = true;
 
@@ -260,6 +293,109 @@ public sealed class IslandOptions
 
 	[DataMember]
 	public int ClipboardRetainDays = 14;
+
+	// —— 灵动岛升级：收起态三段分区 ——
+	// 收起态布局：0=经典三段（封面 | 主信息 ┊ 时钟/天气/电量）1=极简（仅封面+标题）2=信息优先（无封面）
+	[DataMember]
+	public int CollapsedLayout = 0;
+
+	// 自适应对比度：浅色壁纸上自动加深文字与底衬
+	[DataMember]
+	public bool AdaptiveContrast = true;
+
+	// 收起态显示块：时钟 / 天气 / 电量
+	[DataMember]
+	public bool ShowTimeChip = true;
+
+	[DataMember]
+	public bool ShowWeatherChip = true;
+
+	[DataMember]
+	public bool ShowBatteryChip = true;
+
+	// 电源事件动效：充电绿色脉冲 / 低电量橙色呼吸
+	[DataMember]
+	public bool ChargeAnim = true;
+
+	// 无音乐时收起态轮播建议语
+	[DataMember]
+	public bool SuggestionEnabled = true;
+
+	// —— 灵动岛升级：动效 ——
+	// 展开/收起弹簧 overshoot 弹性曲线
+	[DataMember]
+	public bool SpringMotion = true;
+
+	// 通知到达动画：0=铃铛摇+数字徽标 1=仅徽标 2=无
+	[DataMember]
+	public int NotifyArrivalStyle = 0;
+
+	// 岛眼睛：收起态显示两只跟随鼠标的眼睛（趣味彩蛋）
+	[DataMember]
+	public bool EyesEnabled = true;
+
+	// —— 灵动岛升级：音量/亮度 HUD ——
+	[DataMember]
+	public bool HudEnabled = true;
+
+	// HUD 停留秒数 0.8..3
+	[DataMember]
+	public double HudDurationSec = 1.5;
+
+	// —— 灵动岛升级：通知 ——
+	// Toast 快捷操作按钮（已读/静默该应用）
+	[DataMember]
+	public bool ToastActions = true;
+
+	// 通知列表按应用分组 + 组头清空
+	[DataMember]
+	public bool NotifyGrouping = true;
+
+	// —— 灵动岛升级：剪贴板 ——
+	[DataMember]
+	public bool ClipSearch = true;
+
+	[DataMember]
+	public bool ClipTypeIcons = true;
+
+	// 双击条目直接粘贴到前台窗口
+	[DataMember]
+	public bool ClipDoublePaste = true;
+
+	// —— 灵动岛升级：音乐 ——
+	[DataMember]
+	public bool MusicFavorite = true;
+
+	[DataMember]
+	public bool MusicSourceSwitch = true;
+
+	[DataMember]
+	public bool MusicProgressPeek = true;
+
+	[DataMember]
+	public bool MusicWheelVolume = true;
+
+	// —— 灵动岛升级：专注模式 ——
+	[DataMember]
+	public bool FocusMode = true;
+
+	[DataMember]
+	public int FocusMinutes = 25;
+
+	[DataMember]
+	public int BreakMinutes = 5;
+
+	// 结束提醒：0=通知 1=声音 2=两者 3=无
+	[DataMember]
+	public int FocusEndAlert = 0;
+
+	// —— 灵动岛升级：快捷启动器 ——
+	[DataMember]
+	public bool QuickLauncher = true;
+
+	// 回退开关：展开态经典布局（卡片化为默认，经典=整块列表页）
+	[DataMember]
+	public bool ClassicLayout = false;
 
 	public IslandOptions Copy()
 	{
@@ -312,11 +448,39 @@ public sealed class IslandOptions
 			MutedApps = (MutedApps ?? new List<string>()).Select((string a) => (a ?? "").ToLowerInvariant()).ToList(),
 			LowBatteryThreshold = LowBatteryThreshold,
 			EqualizerStyle = EqualizerStyle,
+			EqualizerEnabled = EqualizerEnabled,
 			MusicAlignCenter = MusicAlignCenter,
 			ClipboardEnabled = ClipboardEnabled,
 			ClipboardPaused = ClipboardPaused,
 			ClipboardMaxItems = ClipboardMaxItems,
 			ClipboardRetainDays = ClipboardRetainDays,
+			CollapsedLayout = CollapsedLayout,
+			AdaptiveContrast = AdaptiveContrast,
+			ShowTimeChip = ShowTimeChip,
+			ShowWeatherChip = ShowWeatherChip,
+			ShowBatteryChip = ShowBatteryChip,
+			ChargeAnim = ChargeAnim,
+			SuggestionEnabled = SuggestionEnabled,
+			SpringMotion = SpringMotion,
+			NotifyArrivalStyle = NotifyArrivalStyle,
+			EyesEnabled = EyesEnabled,
+			HudEnabled = HudEnabled,
+			HudDurationSec = HudDurationSec,
+			ToastActions = ToastActions,
+			NotifyGrouping = NotifyGrouping,
+			ClipSearch = ClipSearch,
+			ClipTypeIcons = ClipTypeIcons,
+			ClipDoublePaste = ClipDoublePaste,
+			MusicFavorite = MusicFavorite,
+			MusicSourceSwitch = MusicSourceSwitch,
+			MusicProgressPeek = MusicProgressPeek,
+			MusicWheelVolume = MusicWheelVolume,
+			FocusMode = FocusMode,
+			FocusMinutes = FocusMinutes,
+			BreakMinutes = BreakMinutes,
+			FocusEndAlert = FocusEndAlert,
+			QuickLauncher = QuickLauncher,
+			ClassicLayout = ClassicLayout,
 			AlwaysOnTop = AlwaysOnTop
 		};
 	}
@@ -484,6 +648,12 @@ public sealed class IslandOptions
 		EqualizerStyle = Math.Max(0, Math.Min(4, EqualizerStyle));
 		ClipboardMaxItems = Math.Max(10, Math.Min(500, ClipboardMaxItems));
 		ClipboardRetainDays = Math.Max(1, Math.Min(90, ClipboardRetainDays));
+		CollapsedLayout = Math.Max(0, Math.Min(2, CollapsedLayout));
+		NotifyArrivalStyle = Math.Max(0, Math.Min(2, NotifyArrivalStyle));
+		HudDurationSec = LayoutRules.Clamp(HudDurationSec, 0.8, 3.0, 1.5);
+		FocusMinutes = Math.Max(5, Math.Min(90, FocusMinutes));
+		BreakMinutes = Math.Max(1, Math.Min(30, BreakMinutes));
+		FocusEndAlert = Math.Max(0, Math.Min(3, FocusEndAlert));
 		if (MutedApps == null)
 		{
 			MutedApps = new List<string>();
