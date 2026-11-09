@@ -205,9 +205,18 @@ toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
 		BuildUi();
 		SourceInitialized += OnSourceInitialized;
 		SizeChanged += (object s, SizeChangedEventArgs e) => RefreshClip();
-// 音频采集回调：真实节奏驱动跳动条（构造期订阅，Closed 里退订）�?
-
-IslandAudio.AudioLevels += OnAudioLevels;
+// 音频采集回调：真实节奏驱动跳动条（构造期订阅，Closed 里退订）。
+// 订阅本身会触发 IslandAudio 静态构造；NAudio 程序集缺失时这里会抛
+// TypeInitializationException。不能用它把整个灵动岛窗口构造搞失败——
+// 否则 IslandHub 拿不到窗口引用，设置里关闭灵动岛时出现“关不掉”的孤儿窗口。
+		try
+		{
+			IslandAudio.AudioLevels += OnAudioLevels;
+		}
+		catch (Exception ex)
+		{
+			Store.Trace("ISLAND audio subscribe failed: " + ex.GetType().Name + " " + ex.Message);
+		}
 		// 展开态点击外部收起改为鼠标钩子驱动（不再依赖失焦）：Win+D 无鼠标点击，永不误收。
 		// suppressDeactivate（GlassBoard 自己的设置窗口打开时置位）继续保护不收起。
 		PanelDismissGuard.Track(this, () =>
@@ -238,7 +247,14 @@ IslandAudio.AudioLevels += OnAudioLevels;
 			toastTimer.Stop();
 			progressTimer.Stop();
 			fullscreenTimer.Stop();
-			IslandAudio.AudioLevels -= OnAudioLevels;
+			try
+			{
+				IslandAudio.AudioLevels -= OnAudioLevels;
+			}
+			catch
+			{
+				// 订阅从未成功（NAudio 缺失）时退订同样会触发静态构造，忽略即可
+			}
 			StopEqualizer();
 			_isClosed = true;
 			Store.Trace("ISLAND window closed");

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -43,7 +44,19 @@ public sealed class IslandHub : IDisposable
 		// 创建新窗口前先清理任何残留旧实例（正在销毁中/已失效的引用），
 		// 并在 Closed 后自动置空引用——杜绝新旧两个灵动岛并存。
 		IslandWindow oldWindow = window;
-		window = new IslandWindow(C);
+		try
+		{
+			window = new IslandWindow(C);
+		}
+		catch (Exception ex)
+		{
+			// 构造失败（如 NAudio 等第三方依赖缺失）时不能让窗口引用停留在半成品状态：
+			// 置空引用并清理可能已经创建的孤儿窗口，保证设置里的开关仍能即时生效。
+			Store.Log(ex);
+			window = null;
+			CloseOrphanIslands();
+			return;
+		}
 		IslandWindow created = window;
 		window.Closed += delegate
 		{
@@ -234,6 +247,12 @@ public sealed class IslandHub : IDisposable
 			{
 				Start();
 			}
+			else
+			{
+				// 构造失败或引用丢失后残留的孤儿窗口也要关掉，
+				// 否则设置里关闭灵动岛后屏幕上仍有那条栏，只能重启才消失。
+				CloseOrphanIslands();
+			}
 			return;
 		}
 		window.ApplyStyle(o);
@@ -363,6 +382,56 @@ public sealed class IslandHub : IDisposable
 				window.RefreshWeather();
 			}
 		}));
+	}
+
+	// 关闭没有 hub 引用的残留灵动岛窗口。
+	// 构造异常或引用丢失时，窗口对象可能仍活在 Application.Windows 里；
+	// 不清理就会出现“设置里关了灵动岛、屏幕上还挂着”的假象。
+	private void CloseOrphanIslands()
+	{
+		try
+		{
+			System.Windows.Application app = System.Windows.Application.Current;
+			if (app == null)
+			{
+				return;
+			}
+			Action close = delegate
+			{
+				List<System.Windows.Window> list = new List<System.Windows.Window>();
+				foreach (System.Windows.Window w in app.Windows)
+				{
+					list.Add(w);
+				}
+				foreach (System.Windows.Window w2 in list)
+				{
+					IslandWindow iw = w2 as IslandWindow;
+					if (iw != null)
+					{
+						try
+						{
+							iw.DisposeBridge();
+							iw.Close();
+						}
+						catch
+						{
+						}
+					}
+				}
+			};
+			if (app.Dispatcher.CheckAccess())
+			{
+				close();
+			}
+			else
+			{
+				app.Dispatcher.BeginInvoke(close);
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 	}
 
 	public void Dispose()
