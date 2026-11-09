@@ -1,4 +1,4 @@
-﻿# pack-release.ps1 — GlassBoard 发布包打包脚本
+# pack-release.ps1 — GlassBoard 发布包打包脚本
 #
 # 用法:
 #   powershell -ExecutionPolicy Bypass -File pack-release.ps1            # 构建 Release 并打包
@@ -74,7 +74,9 @@ $required = @(
     "Interop.UIAutomationClient.dll", "Microsoft.Win32.Registry.dll",
     "System.Security.AccessControl.dll", "System.Security.Principal.Windows.dll",
     "NAudio.dll", "NAudio.Core.dll", "NAudio.Asio.dll", "NAudio.Midi.dll",
-    "NAudio.WinForms.dll", "NAudio.WinMM.dll", "NAudio.Wasapi.dll"
+    "NAudio.WinForms.dll", "NAudio.WinMM.dll", "NAudio.Wasapi.dll",
+    "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll",
+    "Microsoft.Web.WebView2.Wpf.dll", "WebView2Loader.dll"
 )
 foreach ($f in $required) {
     $src = Join-Path $out $f
@@ -126,7 +128,7 @@ Copy-Item $zip $zip2 -Force
 Write-Host ""
 $z = [System.IO.Compression.ZipFile]::OpenRead($zip)
 $entries = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
-$check = @("GlassBoard.exe", "GlassBoard.exe.config", "lib/NPSMLib.dll", "data/AppGroups.tsv", "DefaultConfig.json", "licenses/NPSMLib_LICENSE.txt", "说明.txt", "wallpapers/wallpapers.json")
+$check = @("GlassBoard.exe", "GlassBoard.exe.config", "lib/NPSMLib.dll", "data/AppGroups.tsv", "DefaultConfig.json", "licenses/NPSMLib_LICENSE.txt", "说明.txt", "wallpapers/wallpapers.json", "Microsoft.Web.WebView2.Core.dll", "WebView2Loader.dll")
 $missing = @($check | Where-Object { $entries -notcontains $_ })
 $z.Dispose()
 if ($missing.Count -gt 0) {

@@ -29,7 +29,12 @@ SHA256SUMS.txt
 !GlassBoard.exe
 !GlassBoard.exe.config
 !Interop.UIAutomationClient.dll
-# ±¾µØ±¸·Ý/¹¤×÷Ä¿Â¼£¨²»½ø²Ö¿â£©
+# Video wallpaper runtime (WebView2), shipped with portable build
+!WebView2Loader.dll
+!Microsoft.Web.WebView2.Core.dll
+!Microsoft.Web.WebView2.WinForms.dll
+!Microsoft.Web.WebView2.Wpf.dll
+# ï¿½ï¿½ï¿½Ø±ï¿½ï¿½ï¿½/ï¿½ï¿½ï¿½ï¿½Ä¿Â¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¿â£©
 GlassBoard.exe.pre-*
 GlassBoard.exe.config.pre-*
 wallpapers/
