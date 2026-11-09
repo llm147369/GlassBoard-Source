@@ -551,7 +551,7 @@ internal static class WallpaperSource
 				dynamicActive = false;
 			}
 		}
-		return dynamicActive;
+		return dynamicActive || VideoWallpaper.IsActive;
 	}
 
 	// 壁纸软件渲染窗口的进程 id 集合。壁纸软件用自己的顶层窗口画壁纸（系统壁纸

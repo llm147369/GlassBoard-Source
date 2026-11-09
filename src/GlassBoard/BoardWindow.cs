@@ -249,10 +249,10 @@ public class BoardWindow : GlassWindow
 		};
 		Drop += ExternalDrop;
 		// 点击外部收起改为鼠标钩子驱动（不再依赖失焦）：Win+D 无鼠标点击，永不误收；
-		// 收起前提沿用原失焦逻辑的判定（未激活/非弹窗/非拖拽/无打开菜单）。
+		// 收起前提沿用原失焦逻辑的判定（非弹窗/非拖拽/无打开菜单）。
 		PanelDismissGuard.Track(this, () =>
 		{
-			if (C.Prefs.BoardDismissOnDeactivate && IsVisible && !IsActive && !ModalBusy && !activeDrag && !IsContextMenuOpen() && !ShellContextMenu.Active)
+			if (C.Prefs.BoardDismissOnDeactivate && IsVisible && !ModalBusy && !activeDrag && !IsContextMenuOpen() && !ShellContextMenu.Active)
 			{
 				CollapseSmooth();
 			}

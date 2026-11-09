@@ -348,18 +348,18 @@ public class DockWindow : GlassWindow
 			ReleaseCancelledExternalDrag();
 			C.CheckGameMode();
 			RunningWindows.SampleForeground();
-			if (!C.GlassSuppressed && (IsVisible || C.Board.IsVisible) && (C.Prefs.Dock.ShowRunning || taskWheel.Running))
+			if (!C.GlassSuppressed && (IsVisible || (C.Board != null && C.Board.IsVisible)) && (C.Prefs.Dock.ShowRunning || taskWheel.Running))
 			{
 				// 增量更新：只改指示器可见性（纯快照读取，无扫描），前台切换 1 秒内跟上
 				UpdateRunning();
 			}
-			if (!C.GlassSuppressed && (IsVisible || C.Board.IsVisible) && (C.Prefs.Dock.ShowRunning || taskWheel.Running) && !((DateTime.UtcNow - lastRunningScan).TotalSeconds < (double)(renderedHidden ? 10 : 1.5)))
+			if (!C.GlassSuppressed && (IsVisible || (C.Board != null && C.Board.IsVisible)) && (C.Prefs.Dock.ShowRunning || taskWheel.Running) && !((DateTime.UtcNow - lastRunningScan).TotalSeconds < (double)(renderedHidden ? 10 : 1.5)))
 			{
 				lastRunningScan = DateTime.UtcNow;
 				RunningWindows.Scan();
 				RefreshTaskSnapshot();
 				UpdateRunning();
-				C.Board.UpdateRunning();
+				C.Board?.UpdateRunning();
 			}
 		};
 		runningTimer.Start();
@@ -580,7 +580,7 @@ public class DockWindow : GlassWindow
 	{
 		Dispatcher.BeginInvoke((Action)(() =>
 		{
-			C.Board.HideWithConsent();
+			C.Board?.HideWithConsent();
 			settledBottom = null;
 			Refresh();
 		}));
@@ -851,24 +851,24 @@ public class DockWindow : GlassWindow
 			// 不做激活/最小化切换，行为与任务栏固定图标一致。
 			AddSystemButton("glassboard://dock/computer", DockButton("computer", null, () =>
 			{
-				C.Board.HideWithConsent();
+				C.Board?.HideWithConsent();
 				Native.Computer();
 			}, "此电脑"), () =>
 			{
-				C.Board.HideWithConsent();
+				C.Board?.HideWithConsent();
 				Native.Computer();
 			});
 			// 回收站：单击打开系统回收站窗口；把文件拖到图标上直接送入回收站（可恢复）
 			AddSystemButton("glassboard://dock/recycle", DockButton("recycle", null, () =>
 			{
-				C.Board.HideWithConsent();
+				C.Board?.HideWithConsent();
 				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
 				{
 					UseShellExecute = true
 				});
 			}, "回收站"), () =>
 			{
-				C.Board.HideWithConsent();
+				C.Board?.HideWithConsent();
 				Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder")
 				{
 					UseShellExecute = true
@@ -1109,7 +1109,7 @@ public class DockWindow : GlassWindow
 			bool over = !renderedHidden && point.X >= Left && point.X <= Left + Width && point.Y >= shownTop && point.Y <= shownTop + Height;
 			bool edge = point.X >= Left - 12.0 && point.X <= Left + Width + 12.0 && point.Y >= bottom - C.Prefs.Dock.EdgeRange;
 			bool flag = (ContextMenu != null && ContextMenu.IsOpen) || Items.Children.OfType<System.Windows.Controls.Button>().Any((System.Windows.Controls.Button b) => b.ContextMenu != null && b.ContextMenu.IsOpen);
-			bool flag2 = hidePolicy.Update(DateTime.UtcNow, C.Prefs.Dock.AutoHide, over, edge, ((dragging || DockInputBusy || externalDockDrag) | flag) || C.UiBusy || C.Board.IsVisible, C.Prefs.Dock.HideDelay);
+			bool flag2 = hidePolicy.Update(DateTime.UtcNow, C.Prefs.Dock.AutoHide, over, edge, ((dragging || DockInputBusy || externalDockDrag) | flag) || C.UiBusy || (C.Board != null && C.Board.IsVisible), C.Prefs.Dock.HideDelay);
 			if (flag2 != renderedHidden)
 			{
 				renderedHidden = flag2;
@@ -1137,7 +1137,7 @@ public class DockWindow : GlassWindow
 		Dispatcher.BeginInvoke((Action)(() =>
 		{
 			runUpdatePending = false;
-			if (C.GlassSuppressed || (!IsVisible && !C.Board.IsVisible))
+			if (C.GlassSuppressed || (!IsVisible && (C.Board == null || !C.Board.IsVisible)))
 			{
 				return;
 			}
@@ -1146,7 +1146,7 @@ public class DockWindow : GlassWindow
 				return;
 			}
 			UpdateRunning();
-			C.Board.UpdateRunning();
+			C.Board?.UpdateRunning();
 			RunningWindows.Scan();
 		}));
 	}
@@ -2885,7 +2885,7 @@ public class DockWindow : GlassWindow
 
 	private void RefreshTaskSnapshot()
 	{
-		if (taskWheel.Running && !DockInputBusy && !externalDockDrag && !dragging && !C.Board.ModalBusy && (ContextMenu == null || !ContextMenu.IsOpen) && (previewPopup == null || !previewPopup.IsOpen) && !Items.Children.OfType<System.Windows.Controls.Button>().Any((System.Windows.Controls.Button b) => b.IsMouseOver || (b.ContextMenu != null && b.ContextMenu.IsOpen)) && !(taskSignature == TaskSignature()))
+		if (taskWheel.Running && !DockInputBusy && !externalDockDrag && !dragging && (C.Board == null || !C.Board.ModalBusy) && (ContextMenu == null || !ContextMenu.IsOpen) && (previewPopup == null || !previewPopup.IsOpen) && !Items.Children.OfType<System.Windows.Controls.Button>().Any((System.Windows.Controls.Button b) => b.IsMouseOver || (b.ContextMenu != null && b.ContextMenu.IsOpen)) && !(taskSignature == TaskSignature()))
 		{
 			if (taskWheel.Running)
 			{
@@ -3045,7 +3045,7 @@ public class DockWindow : GlassWindow
 		}
 		if (RunningWindows.ActivateHandle(target.Handle))
 		{
-			C.Board.CollapseSmooth();
+			C.Board?.CollapseSmooth();
 			return;
 		}
 		if (target.Tray)
@@ -3087,7 +3087,7 @@ public class DockWindow : GlassWindow
 		}
 		if (RunningWindows.ActivateHandle(handle))
 		{
-			C.Board.CollapseSmooth();
+			C.Board?.CollapseSmooth();
 			return;
 		}
 		RunningWindows.Scan();
@@ -4683,8 +4683,8 @@ public class DockWindow : GlassWindow
 		dockPointerOwner = owner;
 		dockPointerFromMenu = owner is System.Windows.Controls.MenuItem;
 		owner.SetValue(DragSuppressed, true);
-		dockPointerPreviousBusy = C.Board.ModalBusy;
-		C.Board.ModalBusy = true;
+		dockPointerPreviousBusy = (C.Board != null && C.Board.ModalBusy);
+		if (C.Board != null) { C.Board.ModalBusy = true; }
 		dockPointerLabel.Text = name;
 		dockPointerWatch.Start();
 		Store.Trace("DOCK pointer press");
@@ -4765,7 +4765,7 @@ public class DockWindow : GlassWindow
 		dockIconDragging = false;
 		dockPressActive = false;
 		dockPointerWatch.Stop();
-		C.Board.ModalBusy = dockPointerPreviousBusy;
+		if (C.Board != null) { C.Board.ModalBusy = dockPointerPreviousBusy; }
 		try
 		{
 			ClearDockMarkers();

@@ -37,6 +37,22 @@ public class WallpaperOptions
 	[DataMember]
 	public long CatalogFetchedUtc;
 
+	// 动态壁纸：启用后播放 VideoPath 指定的视频（循环、可调音量），覆盖静态壁纸之上
+	[DataMember]
+	public bool VideoEnabled;
+
+	// 动态壁纸视频文件（直接引用用户原文件，不复制入库）；空 = 未选择
+	[DataMember]
+	public string VideoPath;
+
+	// 动态壁纸音量 0-100
+	[DataMember]
+	public double VideoVolume = 100.0;
+
+	// 动态壁纸静音
+	[DataMember]
+	public bool VideoMuted;
+
 	public WallpaperOptions Copy()
 	{
 		return new WallpaperOptions
@@ -47,7 +63,11 @@ public class WallpaperOptions
 			Style = Style,
 			Previous = Previous == null ? new Dictionary<string, string>() : new Dictionary<string, string>(Previous),
 			Source = Source,
-			CatalogFetchedUtc = CatalogFetchedUtc
+			CatalogFetchedUtc = CatalogFetchedUtc,
+			VideoEnabled = VideoEnabled,
+			VideoPath = VideoPath,
+			VideoVolume = VideoVolume,
+			VideoMuted = VideoMuted
 		};
 	}
 
@@ -62,10 +82,15 @@ public class WallpaperOptions
 			AutoRestore = true;
 		}
 		Style = Math.Max(0, Math.Min(4, Style));
+		VideoVolume = Math.Max(0.0, Math.Min(100.0, VideoVolume));
 		// 壁纸文件已不存在（被移动/删除）：清掉引用，开机恢复时保持现状不打扰
 		if (Path != null && !System.IO.File.Exists(Path))
 		{
 			Path = null;
+		}
+		if (VideoPath != null && !System.IO.File.Exists(VideoPath))
+		{
+			VideoPath = null;
 		}
 	}
 }

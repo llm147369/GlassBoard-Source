@@ -20,6 +20,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
     <!-- Windows 10/11 WinRT 元数据：仅编译期引用，运行时由操作系统提供（通知监听） -->
     <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.19041.1" PrivateAssets="All" />
     <PackageReference Include="NAudio" Version="2.2.1" />
@@ -40,6 +41,11 @@
       <Link>lib\NPSMLib.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- WebView2 原生加载器：固定 x64 版（AnyCPU 下 NuGet 默认选 x86 资产会 BadImageFormat） -->
+    <None Include="..\lib\WebView2Loader.dll">
+      <Link>WebView2Loader.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <Reference Include="Interop.UIAutomationClient">
@@ -53,4 +59,8 @@
     <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Net.Http" />
   </ItemGroup>
+  <!-- WebView2 包在 AnyCPU/net48 下会选 x86 原生加载器（运行时 BadImageFormat）；构建最后强制覆盖为 x64 -->
+  <Target Name="ForceX64WebView2Loader" AfterTargets="Build">
+    <Copy SourceFiles="..\lib\WebView2Loader.dll" DestinationFiles="$(OutputPath)WebView2Loader.dll" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

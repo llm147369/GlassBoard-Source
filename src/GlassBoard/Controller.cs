@@ -266,6 +266,15 @@ public class Controller
 					}
 				});
 			}
+			// 开机恢复视频动态壁纸（启用且文件仍在时启动播放器）
+			if (Prefs.Wallpaper != null && Prefs.Wallpaper.VideoEnabled && !string.IsNullOrEmpty(Prefs.Wallpaper.VideoPath) && File.Exists(Prefs.Wallpaper.VideoPath))
+			{
+				string videoPath = Prefs.Wallpaper.VideoPath;
+				double videoVolume = Prefs.Wallpaper.VideoVolume;
+				bool videoMuted = Prefs.Wallpaper.VideoMuted;
+				VideoWallpaper.Start(videoPath, videoVolume, videoMuted);
+				Store.Trace("START phase=videowallpaper ms=" + (Environment.TickCount - Program.ProcessStartTick));
+			}
 		}
 		catch (Exception ex)
 		{
@@ -545,6 +554,14 @@ public class Controller
 			{
 				DesktopVisibility.SetHidden(taskbar: true, hide: false);
 				TaskbarAutoHide.Set(enabled: true);
+			}
+			else if (DesktopVisibility.IsHidden(taskbar: true) == true)
+			{
+				// 自愈：配置两个开关都已关闭，但任务栏窗口仍处于强制隐藏状态
+				// （上次会话被强杀/崩溃时退出清理未执行，SW_HIDE 残留）。
+				// Windows 原生自动隐藏收起时窗口仍可见（仅移出屏幕），IsHidden 为 false，
+				// 不会误触发。
+				DesktopVisibility.SetHidden(taskbar: true, hide: false);
 			}
 			if (Prefs.HideDesktopIcons)
 			{
@@ -3106,9 +3123,15 @@ public class Controller
 						// 隐藏任务栏内部也走 ABS_AUTOHIDE，读位会让两个开关同时显示开启。
 						toggleButton.IsChecked = Prefs.AutoHideTaskbar && !Prefs.HideTaskbar;
 					}
+					else if (id == 2)
+					{
+						// 与「自动隐藏」互斥的偏好状态：任务栏窗口可见性受 Windows 原生
+						// 自动隐藏影响，不能作为开关状态依据。
+						toggleButton.IsChecked = Prefs.HideTaskbar;
+					}
 					else
 					{
-						toggleButton.IsChecked = DesktopVisibility.DesiredHidden(id == 2);
+						toggleButton.IsChecked = DesktopVisibility.DesiredHidden(taskbar: false);
 					}
 					toggleButton.ToolTip = ((id == 7) ? "开启 Windows 任务栏自动隐藏" : "开启隐藏，关闭显示");
 					stackPanel8.Children.Add(toggleButton);
@@ -3747,7 +3770,9 @@ public class Controller
 			{
 			case 1:
 			{
-				bool flag = hidden ?? (!DesktopVisibility.DesiredHidden(taskbar: true));
+				// 以用户偏好为准切换：DesiredHidden 读窗口可见性，Windows 原生自动隐藏
+				// 收起时窗口不可见会被误判为"已隐藏"，导致开关方向反转（开了变成显示）。
+				bool flag = hidden ?? !Prefs.HideTaskbar;
 				if (flag && TaskbarAutoHide.Enabled)
 				{
 					TaskbarAutoHide.Set(enabled: false);

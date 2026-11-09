@@ -437,10 +437,12 @@ public static class DesktopVisibility
 		Remember(list);
 		if (taskbar && hide)
 		{
-			if (IsHidden(taskbar: true) == true && AppBarAutohideActive())
+			if (taskbarHidden == true && IsHidden(taskbar: true) == true && AppBarAutohideActive())
 			{
-				// 已是隐藏状态（崩溃恢复/重复启动等）：不再重复切换 AppBar 与窗口，
+				// 本会话已主动隐藏（重复切换等）：不再重复切换 AppBar 与窗口，
 				// 避免工作区反复变化引发 Wallpaper Engine 等动态壁纸黑屏。
+				// 注意：必须带 taskbarHidden==true 前缀——Windows 原生自动隐藏收起时窗口
+				// 同样不可见，若误判为"已隐藏"会跳过真正的强制隐藏（任务栏悬停仍弹出）。
 				Store.Trace("SHELL taskbar already hidden -> skip");
 			}
 			else

@@ -33,6 +33,31 @@ public static class WallpaperSettingsUi
 		// 状态栏在每次 Render 时重建，用“外提变量”让后台线程续写时始终指向最新控件
 		TextBlock status = null;
 		TextBlock galleryStatus = null;
+		TextBlock videoStatus = null;
+
+		// 后台线程安全地回写动态壁纸状态文字
+		void PostVideo(string msg)
+		{
+			try
+			{
+				p.Dispatcher.BeginInvoke(new Action(delegate
+				{
+					try
+					{
+						if (videoStatus != null)
+						{
+							videoStatus.Text = msg;
+						}
+					}
+					catch
+					{
+					}
+				}));
+			}
+			catch
+			{
+			}
+		}
 
 		// 持久化当前草稿。注意：不再回调 applyLive——所有改动都已在各自处理器里实时生效，
 		// 若再回调会重复应用壁纸（启用/换样式时 COM 慢操作执行两遍，界面明显卡顿）。
@@ -268,13 +293,125 @@ public static class WallpaperSettingsUi
 			mainPanel.Children.Add(actions);
 			mainPanel.Children.Add(new TextBlock
 			{
-				Text = "提示：若正在使用 Wallpaper Engine、元气桌面等第三方动态壁纸软件，本功能可能不生效或被其覆盖；动态壁纸（视频/粒子等）将在后续版本考虑，本版本仅支持静态图片。",
+				Text = "提示：若正在使用 Wallpaper Engine、元气桌面等第三方动态壁纸软件，静态壁纸可能不生效或被其覆盖。",
 				Foreground = Polish.Muted(light),
 				TextWrapping = TextWrapping.Wrap,
 				FontSize = 11.0,
 				Margin = new Thickness(0.0, 10.0, 0.0, 0.0)
 			});
 			p.Children.Add(main);
+
+			// —— 动态壁纸（视频循环播放，覆盖在静态壁纸之上）——
+			Border vid = Polish.Section("动态壁纸", "选择一段视频作为桌面动态壁纸：循环播放、音量可调，关闭后自动还原静态壁纸。", light);
+			StackPanel vidPanel = (StackPanel)vid.Child;
+			videoStatus = new TextBlock
+			{
+				Foreground = Polish.Muted(light),
+				TextWrapping = TextWrapping.Wrap,
+				FontSize = 12.0,
+				Margin = new Thickness(0.0, 0.0, 0.0, 10.0)
+			};
+			vidPanel.Children.Add(videoStatus);
+			void StartVideo()
+			{
+				if (!string.IsNullOrEmpty(o.VideoPath) && File.Exists(o.VideoPath))
+				{
+					videoStatus.Text = "正在启动动态壁纸…";
+					VideoWallpaper.Start(o.VideoPath, o.VideoVolume, o.VideoMuted, delegate (string msg)
+					{
+						PostVideo(msg);
+					});
+					try
+					{
+						C.Dock?.ScheduleBackdropRefresh(C.Prefs.Light, 800);
+					}
+					catch
+					{
+					}
+				}
+				else
+				{
+					videoStatus.Text = "尚未选择视频：点击下方按钮导入（推荐 MP4/H.264）。";
+				}
+			}
+			check(vidPanel, "启用动态壁纸（开启后立即播放，关闭则还原静态壁纸）", o.VideoEnabled, delegate (bool on)
+			{
+				o.VideoEnabled = on;
+				Apply();
+				if (on)
+				{
+					StartVideo();
+				}
+				else
+				{
+					VideoWallpaper.Stop();
+					videoStatus.Text = "动态壁纸已关闭：恢复静态壁纸。";
+					try
+					{
+						C.Dock?.ScheduleBackdropRefresh(C.Prefs.Light, 800);
+					}
+					catch
+					{
+					}
+				}
+			});
+			WrapPanel videoActions = new WrapPanel
+			{
+				Margin = new Thickness(0.0, 4.0, 0.0, 0.0)
+			};
+			videoActions.Children.Add(FeatureUi.Button("选择视频导入…", delegate
+			{
+				Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog
+				{
+					Title = "选择动态壁纸视频",
+					Filter = "视频文件|*.mp4;*.webm;*.wmv;*.mov;*.avi;*.mkv|所有文件|*.*",
+					Multiselect = false
+				};
+				if (dialog.ShowDialog() == true)
+				{
+					o.VideoPath = dialog.FileName;
+					o.VideoEnabled = true;
+					Apply();
+					StartVideo();
+					videoStatus.Text = "已导入：" + Path.GetFileName(o.VideoPath);
+				}
+			}));
+			videoActions.Children.Add(FeatureUi.Button("停止播放", delegate
+			{
+				VideoWallpaper.Stop();
+				o.VideoEnabled = false;
+				Apply();
+				videoStatus.Text = "动态壁纸已关闭：恢复静态壁纸。";
+				try
+				{
+					C.Dock?.ScheduleBackdropRefresh(C.Prefs.Light, 800);
+				}
+				catch
+				{
+				}
+			}));
+			vidPanel.Children.Add(videoActions);
+			slider(vidPanel, "音量", 0.0, 100.0, o.VideoVolume, 5.0, " %", delegate (double v)
+			{
+				o.VideoVolume = v;
+				Apply();
+				VideoWallpaper.SetVolume(v, o.VideoMuted);
+			});
+			check(vidPanel, "静音", o.VideoMuted, delegate (bool on)
+			{
+				o.VideoMuted = on;
+				Apply();
+				VideoWallpaper.SetVolume(o.VideoVolume, on);
+			});
+			vidPanel.Children.Add(new TextBlock
+			{
+				Text = "提示：视频壁纸持续占用少量解码资源，低配置电脑建议选择短小视频或调低音量；玻璃模糊会实时使用视频画面。",
+				Foreground = Polish.Muted(light),
+				TextWrapping = TextWrapping.Wrap,
+				FontSize = 11.0,
+				Margin = new Thickness(0.0, 10.0, 0.0, 0.0)
+			});
+			p.Children.Add(vid);
 
 			// —— 壁纸图库（本地 + 官方合并，网格按宽度自适应列数）——
 			Border gallery = Polish.Section("壁纸图库", "本地导入过的壁纸与官方内置壁纸都在这里；鼠标悬浮显示操作按钮，点击直接生效。", light);

@@ -301,6 +301,13 @@ internal static class GlassCapture
 	private static List<IntPtr> FindWallpaperCandidates()
 	{
 		List<IntPtr> list = new List<IntPtr>();
+		// 本应用自建视频壁纸窗口：内容即壁纸层，直接作为唯一候选（最精确）
+		IntPtr videoHwnd = VideoWallpaper.CaptureHandle();
+		if (videoHwnd != IntPtr.Zero)
+		{
+			list.Add(videoHwnd);
+			return list;
+		}
 		if (WallpaperSource.DynamicWallpaperActive())
 		{
 			HashSet<int> pids = WallpaperSource.WallpaperProcessIds();

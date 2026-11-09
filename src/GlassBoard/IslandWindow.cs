@@ -252,7 +252,7 @@ IslandAudio.AudioLevels += OnAudioLevels;
 		// suppressDeactivate（GlassBoard 自己的设置窗口打开时置位）继续保护不收起。
 		PanelDismissGuard.Track(this, () =>
 		{
-			if (mode == Mode.Expanded && !suppressDeactivate && !IsActive)
+			if (mode == Mode.Expanded && !suppressDeactivate)
 			{
 				Store.Trace("ISLAND outside click");
 				Collapse();

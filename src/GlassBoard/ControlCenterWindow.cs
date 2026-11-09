@@ -137,7 +137,7 @@ public class ControlCenterWindow : GlassWindow
 		// 点击外部收起改为鼠标钩子驱动（不再依赖失焦）：Win+D 无鼠标点击，永不误收。
 		PanelDismissGuard.Track(this, () =>
 		{
-			if (!suppressHide && !ShellContextMenu.Active && !IsActive)
+			if (!suppressHide && !ShellContextMenu.Active)
 			{
 				ClosePanel();
 			}

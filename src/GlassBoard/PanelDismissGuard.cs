@@ -24,6 +24,8 @@ public static class PanelDismissGuard
 
 	private static IntPtr hook;
 
+	private static DispatcherTimer heartbeat;
+
 	public static void Track(Window win, Action dismiss)
 	{
 		// 确保句柄存在：窗口尚未 Show 时 GetWindowRect 无意义，EnsureHandle 先建立 HWND。
@@ -42,6 +44,28 @@ public static class PanelDismissGuard
 		{
 			hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
 		}
+		// 心跳重装：全局低级钩子回调若因 UI 线程繁忙超时，系统会静默摘除钩子且无通知
+		// （LowLevelHooksTimeout）。定期重装保证摘除后自动恢复，面板收起永不永久失效。
+		if (heartbeat == null)
+		{
+			heartbeat = new DispatcherTimer(DispatcherPriority.Background)
+			{
+				Interval = TimeSpan.FromSeconds(5.0)
+			};
+			heartbeat.Tick += delegate
+			{
+				if (Windows.Count == 0)
+				{
+					return;
+				}
+				if (hook != IntPtr.Zero)
+				{
+					UnhookWindowsHookEx(hook);
+				}
+				hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
+			};
+			heartbeat.Start();
+		}
 	}
 
 	private static IntPtr OnMouse(int code, IntPtr wParam, IntPtr lParam)
@@ -51,6 +75,7 @@ public static class PanelDismissGuard
 			int x = Marshal.ReadInt32(lParam, 0);
 			int y = Marshal.ReadInt32(lParam, 4);
 			bool inPopup = InOpenPopup(x, y);
+			bool inOwnWindow = HitIsOwnWindow(x, y);
 			for (int i = 0; i < Windows.Count; i++)
 			{
 				(Window win, Action dismiss) entry = Windows[i];
@@ -67,15 +92,58 @@ public static class PanelDismissGuard
 				{
 					continue;
 				}
-				if (inPopup)
+				if (inPopup || inOwnWindow)
 				{
 					continue;
 				}
 				Action dismiss = entry.dismiss;
-				entry.win.Dispatcher.BeginInvoke(DispatcherPriority.Input, dismiss);
+				entry.win.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+				{
+					// 面板持有键盘焦点时收起，焦点会被系统转移到壁纸层的 NOACTIVATE
+					// 窗口链（视频壁纸/第三方壁纸），转移失败播放系统提示音。
+					// 点击壁纸区域时前台已切走（GetForegroundWindow != 面板），但焦点
+					// 仍在面板内——所以按"焦点是否在面板内"判定，与前台无关。
+					// 收起前把焦点静默移到桌面图标列表（可接收焦点、不抢前台），杜绝提示音。
+					try
+					{
+						IntPtr hwnd = new WindowInteropHelper(entry.win).Handle;
+						if (hwnd != IntPtr.Zero && entry.win.IsKeyboardFocusWithin)
+						{
+							IntPtr prog = FindWindowNative("Progman", null);
+							IntPtr def = (prog != IntPtr.Zero) ? FindWindowExNative(prog, IntPtr.Zero, "SHELLDLL_DefView", null) : IntPtr.Zero;
+							IntPtr list = (def != IntPtr.Zero) ? FindWindowExNative(def, IntPtr.Zero, "SysListView32", null) : IntPtr.Zero;
+							if (list != IntPtr.Zero)
+							{
+								SetFocusNative(list);
+							}
+						}
+					}
+					catch
+					{
+					}
+					dismiss();
+				}));
 			}
 		}
 		return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+	}
+
+	private static bool HitIsOwnWindow(int x, int y)
+	{
+		try
+		{
+			IntPtr hit = WindowFromPointNative(new POINT { x = x, y = y });
+			if (hit == IntPtr.Zero)
+			{
+				return false;
+			}
+			Native.GetWindowThreadProcessId(hit, out uint pid);
+			return pid == System.Diagnostics.Process.GetCurrentProcess().Id;
+		}
+		catch
+		{
+			return false;
+		}
 	}
 
 	private static bool InOpenPopup(int x, int y)
@@ -120,6 +188,25 @@ public static class PanelDismissGuard
 
 	[DllImport("user32.dll", SetLastError = true)]
 	private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+	[DllImport("user32.dll", EntryPoint = "WindowFromPoint")]
+	private static extern IntPtr WindowFromPointNative(POINT pt);
+
+	[DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowW")]
+	private static extern IntPtr FindWindowNative(string cls, string title);
+
+	[DllImport("user32.dll", EntryPoint = "FindWindowExW")]
+	private static extern IntPtr FindWindowExNative(IntPtr parent, IntPtr after, string cls, string title);
+
+	[DllImport("user32.dll", EntryPoint = "SetFocus")]
+	private static extern IntPtr SetFocusNative(IntPtr h);
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct POINT
+	{
+		public int x;
+		public int y;
+	}
 
 	[DllImport("user32.dll", SetLastError = true)]
 	[return: MarshalAs(UnmanagedType.Bool)]
