@@ -112,6 +112,41 @@ public sealed class WidgetWindow : GlassWindow
 
 	private string clockStamp = "";
 
+	// —— 音乐律动 ——
+	private Canvas vizCanvas;
+
+	private DispatcherTimer vizTimer;
+
+	private DateTime vizLast = DateTime.MinValue;
+
+	private int vizStyle = -1;
+
+	private int vizPalette;
+
+	private double[] vizPartSeed;
+
+	private bool vizAttached;
+
+	private readonly double[] vizEnv = new double[24];
+
+	private readonly double[] vizTarget = new double[24];
+
+	private readonly double[] vizPeak = new double[24];
+
+	private readonly double[] vizVel = new double[24];
+
+	private System.Windows.Shapes.Path vizWaveA;
+
+	private System.Windows.Shapes.Path vizWaveB;
+
+	private System.Windows.Shapes.Path vizWaveC;
+
+	private readonly List<FrameworkElement> vizShapes = new List<FrameworkElement>();
+
+	private readonly List<EllipseGeometry> vizOrbit = new List<EllipseGeometry>();
+
+	private double vizWavePhase;
+
 	private bool BareShell => Kinds.Any((string k) => StyleFor(k).Frameless);
 
 	private string AppearanceSignature => string.Join("|", Kinds.Select((string k) => StyleFor(k).Signature())) + "/" + M.C.Prefs.Widgets.Locked;
@@ -732,6 +767,7 @@ public sealed class WidgetWindow : GlassWindow
 		if (!stopped)
 		{
 			stopped = true;
+			DetachViz();
 			Close();
 		}
 	}
@@ -754,7 +790,7 @@ public sealed class WidgetWindow : GlassWindow
 	{
 		WidgetOptions widgets = M.C.Prefs.Widgets;
 		Kinds = kinds.ToList();
-		bool flag = signature != string.Join(",", Kinds) + "/" + M.C.Prefs.Light + "/" + widgets.CompactMusic + "/" + ControlsHidden + "/" + AppearanceSignature + "/" + GlassMaterials.DarkSurface(widgets.Material, M.C.Prefs.Light) + "/" + M.C.Prefs.Dock.Accent;
+		bool flag = signature != string.Join(",", Kinds) + "/" + M.C.Prefs.Light + "/" + widgets.CompactMusic + "/" + ControlsHidden + "/" + AppearanceSignature + "/" + GlassMaterials.DarkSurface(widgets.Material, M.C.Prefs.Light) + "/" + M.C.Prefs.Dock.Accent + "/" + widgets.VisualizerStyle + "/" + widgets.VisualizerColor;
 		LightTheme = M.C.Prefs.Light;
 		MotionEnabled = M.C.Prefs.Dock.MotionEnabled;
 		MotionLevel = M.C.Prefs.Dock.MotionLevel;
@@ -770,7 +806,7 @@ public sealed class WidgetWindow : GlassWindow
 		if (flag)
 		{
 			Build();
-			signature = string.Join(",", Kinds) + "/" + LightTheme + "/" + widgets.CompactMusic + "/" + ControlsHidden + "/" + AppearanceSignature + "/" + GlassMaterials.DarkSurface(widgets.Material, LightTheme) + "/" + M.C.Prefs.Dock.Accent;
+			signature = string.Join(",", Kinds) + "/" + LightTheme + "/" + widgets.CompactMusic + "/" + ControlsHidden + "/" + AppearanceSignature + "/" + GlassMaterials.DarkSurface(widgets.Material, LightTheme) + "/" + M.C.Prefs.Dock.Accent + "/" + widgets.VisualizerStyle + "/" + widgets.VisualizerColor;
 		}
 		Tick();
 		UpdateMusic();
@@ -952,6 +988,9 @@ public sealed class WidgetWindow : GlassWindow
 				case "music":
 					Music(stackPanel);
 					break;
+				case "visualizer":
+					Visualizer(stackPanel);
+					break;
 				default:
 					Notes(stackPanel);
 					break;
@@ -983,6 +1022,51 @@ public sealed class WidgetWindow : GlassWindow
 				ClockSettings();
 			};
 			contextMenu.Items.Add(menuItem);
+			contextMenu.Items.Add(new Separator());
+		}
+		if (kind == "visualizer")
+		{
+			string[] vizNames = new string[6] { "极光镜像柱", "频谱曲线", "双螺旋", "粒子喷泉", "音轨条带", "雷达频谱" };
+			for (int i = 0; i < vizNames.Length; i++)
+			{
+				int styleIdx = i;
+				MenuItem menuItemV = new MenuItem
+				{
+					Header = "律动样式 · " + vizNames[i],
+					IsCheckable = true,
+					IsChecked = M.C.Prefs.Widgets.VisualizerStyle == styleIdx
+				};
+				menuItemV.Click += (object ss, RoutedEventArgs ee) =>
+				{
+					M.C.Prefs.Widgets.VisualizerStyle = styleIdx;
+					M.C.Save();
+					M.QueueSync();
+				};
+				contextMenu.Items.Add(menuItemV);
+			}
+			string[] palNames = new string[10] { "极光蓝紫", "青绿", "粉红", "橙金", "紫红", "绿", "红", "纯白", "彩虹循环", "跟随强调色" };
+			MenuItem paletteMenu = new MenuItem
+			{
+				Header = "律动配色"
+			};
+			for (int p = 0; p < palNames.Length; p++)
+			{
+				int palIdx = p;
+				MenuItem menuItemP = new MenuItem
+				{
+					Header = palNames[p],
+					IsCheckable = true,
+					IsChecked = M.C.Prefs.Widgets.VisualizerColor == palIdx
+				};
+				menuItemP.Click += (object ss, RoutedEventArgs ee) =>
+				{
+					M.C.Prefs.Widgets.VisualizerColor = palIdx;
+					M.C.Save();
+					M.QueueSync();
+				};
+				paletteMenu.Items.Add(menuItemP);
+			}
+			contextMenu.Items.Add(paletteMenu);
 			contextMenu.Items.Add(new Separator());
 		}
 		if (kind == "music")
@@ -1708,6 +1792,650 @@ public sealed class WidgetWindow : GlassWindow
 			}
 		};
 		w.ShowDialog();
+	}
+
+	// ===================== 音乐律动组件 =====================
+	// 6 套内置样式，全部由 IslandAudio 的 24 频段 WASAPI 回环频谱驱动（覆盖任何播放器）。
+	// 帧循环 15ms（Render 优先级），指数平滑 + 峰值帽独立回落，视觉连贯不抖。
+	private void Visualizer(StackPanel parent)
+	{
+		vizStyle = M.C.Prefs.Widgets.VisualizerStyle;
+		vizPalette = M.C.Prefs.Widgets.VisualizerColor;
+		vizCanvas = new Canvas
+		{
+			Width = 380.0,
+			Height = 190.0
+		};
+		parent.Children.Add(vizCanvas);
+		BuildVizScene();
+		if (!vizAttached)
+		{
+			vizAttached = true;
+			IslandAudio.AudioLevels += OnVizLevels;
+			IslandAudio.Acquire();
+			vizTimer = new DispatcherTimer(DispatcherPriority.Render)
+			{
+				Interval = TimeSpan.FromMilliseconds(15.0)
+			};
+			vizTimer.Tick += (object s, EventArgs e) => VizTick();
+			vizTimer.Start();
+		}
+	}
+
+	private void DetachViz()
+	{
+		if (!vizAttached)
+		{
+			return;
+		}
+		vizAttached = false;
+		try
+		{
+			IslandAudio.AudioLevels -= OnVizLevels;
+		}
+		catch
+		{
+		}
+		try
+		{
+			IslandAudio.Release();
+		}
+		catch
+		{
+		}
+		if (vizTimer != null)
+		{
+			vizTimer.Stop();
+			vizTimer = null;
+		}
+	}
+
+	// 采集线程回调 → 只存目标值；绘制在 UI 帧循环里做平滑。
+	private void OnVizLevels(double[] levels)
+	{
+		if (levels == null || levels.Length < 24 || vizCanvas == null)
+		{
+			return;
+		}
+		try
+		{
+			Dispatcher.BeginInvoke(DispatcherPriority.Background, (Action)delegate
+			{
+				for (int i = 0; i < 24; i++)
+				{
+					double l = levels[i];
+					if (l < 0.0)
+					{
+						l = 0.0;
+					}
+					else if (l > 1.0)
+					{
+						l = 1.0;
+					}
+					vizTarget[i] = l;
+				}
+			});
+		}
+		catch
+		{
+		}
+	}
+
+	private Color VizHue(double t)
+	{
+		t = Math.Max(0.0, Math.Min(1.0, t));
+		int p = vizPalette;
+		if (p == 7)
+		{
+			byte v = (byte)Math.Round(150.0 + 105.0 * t);
+			return Color.FromRgb(v, v, v);
+		}
+		double h;
+		if (p == 8)
+		{
+			h = t * 360.0;
+		}
+		else if (p == 9)
+		{
+			try
+			{
+				Color accent = IconPacks.AccentColor(M.C.Prefs.Dock.Accent);
+				double ah, as2, al;
+				RgbToHsl(accent, out ah, out as2, out al);
+				return HslToRgb((ah + 40.0 * t) % 360.0, 0.82, 0.6);
+			}
+			catch
+			{
+			}
+			h = 218.0 + 92.0 * t;
+		}
+		else
+		{
+			double h0 = 218.0;
+			double h1 = 310.0;
+			switch (p)
+			{
+			case 0: h0 = 218.0; h1 = 310.0; break;
+			case 1: h0 = 156.0; h1 = 205.0; break;
+			case 2: h0 = 305.0; h1 = 342.0; break;
+			case 3: h0 = 20.0; h1 = 52.0; break;
+			case 4: h0 = 262.0; h1 = 322.0; break;
+			case 5: h0 = 100.0; h1 = 155.0; break;
+			case 6: h0 = 352.0; h1 = 20.0; break;
+			}
+			if (h0 > h1)
+			{
+				h1 += 360.0;
+			}
+			h = h0 + (h1 - h0) * t;
+		}
+		return HslToRgb(h, 0.82, 0.6);
+	}
+
+	private static Color HslToRgb(double h, double s, double l)
+	{
+		h = ((h % 360.0) + 360.0) % 360.0;
+		double c = (1.0 - Math.Abs(2.0 * l - 1.0)) * s;
+		double x = c * (1.0 - Math.Abs(h / 60.0 % 2.0 - 1.0));
+		double m = l - c / 2.0;
+		double r;
+		double g;
+		double b;
+		if (h < 60.0)
+		{
+			r = c; g = x; b = 0.0;
+		}
+		else if (h < 120.0)
+		{
+			r = x; g = c; b = 0.0;
+		}
+		else if (h < 180.0)
+		{
+			r = 0.0; g = c; b = x;
+		}
+		else if (h < 240.0)
+		{
+			r = 0.0; g = x; b = c;
+		}
+		else if (h < 300.0)
+		{
+			r = x; g = 0.0; b = c;
+		}
+		else
+		{
+			r = c; g = 0.0; b = x;
+		}
+		return Color.FromRgb((byte)Math.Round((r + m) * 255.0), (byte)Math.Round((g + m) * 255.0), (byte)Math.Round((b + m) * 255.0));
+	}
+
+	private static void RgbToHsl(Color c, out double h, out double s, out double l)
+	{
+		double r = c.R / 255.0;
+		double g = c.G / 255.0;
+		double b = c.B / 255.0;
+		double max = Math.Max(r, Math.Max(g, b));
+		double min = Math.Min(r, Math.Min(g, b));
+		l = (max + min) / 2.0;
+		double d = max - min;
+		if (d < 1e-6)
+		{
+			h = 0.0;
+			s = 0.0;
+			return;
+		}
+		s = l > 0.5 ? d / (2.0 - max - min) : d / (max + min);
+		if (max == r)
+		{
+			h = (g - b) / d + (g < b ? 6.0 : 0.0);
+		}
+		else if (max == g)
+		{
+			h = (b - r) / d + 2.0;
+		}
+		else
+		{
+			h = (r - g) / d + 4.0;
+		}
+		h *= 60.0;
+	}
+
+	private void BuildVizScene()
+	{
+		vizCanvas.Children.Clear();
+		vizShapes.Clear();
+		vizOrbit.Clear();
+		for (int i = 0; i < 24; i++)
+		{
+			vizEnv[i] = 0.0;
+			vizTarget[i] = 0.0;
+			vizPeak[i] = 0.0;
+			vizVel[i] = 0.0;
+		}
+		vizWaveA = null;
+		vizWaveB = null;
+		vizWaveC = null;
+		vizWavePhase = 0.0;
+		switch (vizStyle)
+		{
+		case 0:
+			// 极光镜像柱：上下对称、低音蓝→高音紫红
+			for (int j = 0; j < 32; j++)
+			{
+				SolidColorBrush solidColorBrush = new SolidColorBrush(VizHue(j / 31.0));
+				solidColorBrush.Freeze();
+				double x = 15.0 + j * 10.94;
+				Rectangle item = new Rectangle
+				{
+					Width = 6.6,
+					Height = 0.0,
+					RadiusX = 3.0,
+					RadiusY = 3.0,
+					Fill = solidColorBrush,
+					RenderTransformOrigin = new Point(0.5, 1.0)
+				};
+				Canvas.SetLeft(item, x);
+				Canvas.SetTop(item, 95.0);
+				Rectangle rectangle = new Rectangle
+				{
+					Width = 6.6,
+					Height = 0.0,
+					RadiusX = 3.0,
+					RadiusY = 3.0,
+					Fill = new SolidColorBrush(Color.FromArgb(140, solidColorBrush.Color.R, solidColorBrush.Color.G, solidColorBrush.Color.B)),
+					RenderTransformOrigin = new Point(0.5, 0.0)
+				};
+				Canvas.SetLeft(rectangle, x);
+				Canvas.SetBottom(rectangle, 95.0);
+				vizCanvas.Children.Add(item);
+				vizCanvas.Children.Add(rectangle);
+				vizShapes.Add(item);
+				vizShapes.Add(rectangle);
+			}
+			break;
+		case 1:
+		{
+			// 频谱曲线：平滑频谱包络 + 线下渐变填充 + 顶点发光（录音室频谱仪风）
+			System.Windows.Shapes.Path fill = new System.Windows.Shapes.Path
+			{
+				Data = new PathGeometry()
+			};
+			fill.Fill = new LinearGradientBrush(Color.FromArgb(150, 120, 180, 255), Color.FromArgb(0, 120, 180, 255), 90.0);
+			vizCanvas.Children.Add(fill);
+			vizWaveA = fill;
+			System.Windows.Shapes.Path line = new System.Windows.Shapes.Path
+			{
+				Data = new PathGeometry(),
+				StrokeThickness = 2.4,
+				Stroke = new SolidColorBrush(Color.FromArgb(235, 140, 200, 255)),
+				StrokeLineJoin = PenLineJoin.Round
+			};
+			vizCanvas.Children.Add(line);
+			vizWaveB = line;
+			for (int k = 0; k < 24; k++)
+			{
+				Ellipse ellipse = new Ellipse
+				{
+					Width = 7.0,
+					Height = 7.0,
+					Fill = new SolidColorBrush(VizHue(k / 23.0))
+				};
+				Canvas.SetLeft(ellipse, 0.0);
+				Canvas.SetTop(ellipse, 0.0);
+				vizCanvas.Children.Add(ellipse);
+				vizShapes.Add(ellipse);
+			}
+			break;
+		}
+		case 2:
+		{
+			// 双螺旋：两带正弦缠绕 + 24 节点发光（DNA 风）
+			for (int m = 0; m < 24; m++)
+			{
+				Ellipse ellipse2 = new Ellipse
+				{
+					Width = 7.0,
+					Height = 7.0,
+					Fill = new SolidColorBrush(VizHue(m / 23.0))
+				};
+				Canvas.SetLeft(ellipse2, 0.0);
+				Canvas.SetTop(ellipse2, 0.0);
+				vizCanvas.Children.Add(ellipse2);
+				vizShapes.Add(ellipse2);
+			}
+			System.Windows.Shapes.Polyline polyline = new System.Windows.Shapes.Polyline
+			{
+				StrokeThickness = 1.6,
+				Stroke = new SolidColorBrush(Color.FromArgb(160, 130, 190, 255))
+			};
+			System.Windows.Shapes.Polyline polyline2 = new System.Windows.Shapes.Polyline
+			{
+				StrokeThickness = 1.2,
+				Stroke = new SolidColorBrush(Color.FromArgb(100, 200, 150, 255))
+			};
+			vizCanvas.Children.Add(polyline);
+			vizCanvas.Children.Add(polyline2);
+			vizShapes.Add(polyline);
+			vizShapes.Add(polyline2);
+			break;
+		}
+		case 3:
+		{
+			// 粒子喷泉：24 发射器 × 3 粒子，能量喷射 + 相位错开 + 横向漂移
+			vizPartSeed = new double[72];
+			Random random = new Random(12345);
+			for (int m2 = 0; m2 < 72; m2++)
+			{
+				vizPartSeed[m2] = random.NextDouble();
+				Ellipse ellipse3 = new Ellipse
+				{
+					Width = 5.0,
+					Height = 5.0,
+					Fill = new SolidColorBrush(VizHue(m2 % 24 / 23.0))
+				};
+				Canvas.SetLeft(ellipse3, 0.0);
+				Canvas.SetTop(ellipse3, 0.0);
+				vizCanvas.Children.Add(ellipse3);
+				vizShapes.Add(ellipse3);
+			}
+			break;
+		}
+		case 4:
+		{
+			// 音轨条带：底部柱 + 峰值帽二次回落（经典播放器风）
+			Rectangle rectangle2 = new Rectangle
+			{
+				Width = 356.0,
+				Height = 1.0,
+				Fill = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255))
+			};
+			Canvas.SetLeft(rectangle2, 12.0);
+			Canvas.SetTop(rectangle2, 166.0);
+			vizCanvas.Children.Add(rectangle2);
+			for (int n2 = 0; n2 < 24; n2++)
+			{
+				double x3 = 14.0 + n2 * 14.6;
+				SolidColorBrush solidColorBrush3 = new SolidColorBrush(VizHue(n2 / 23.0));
+				solidColorBrush3.Freeze();
+				Rectangle rectangle3 = new Rectangle
+				{
+					Width = 7.5,
+					Height = 0.0,
+					RadiusX = 3.0,
+					RadiusY = 3.0,
+					Fill = solidColorBrush3
+				};
+				Canvas.SetLeft(rectangle3, x3);
+				Canvas.SetBottom(rectangle3, 24.0);
+				vizCanvas.Children.Add(rectangle3);
+				vizShapes.Add(rectangle3);
+				Rectangle rectangle4 = new Rectangle
+				{
+					Width = 7.5,
+					Height = 3.0,
+					RadiusX = 1.5,
+					RadiusY = 1.5,
+					Fill = new SolidColorBrush(Color.FromArgb(235, solidColorBrush3.Color.R, solidColorBrush3.Color.G, solidColorBrush3.Color.B))
+				};
+				Canvas.SetLeft(rectangle4, x3);
+				Canvas.SetBottom(rectangle4, 24.0);
+				vizCanvas.Children.Add(rectangle4);
+				vizShapes.Add(rectangle4);
+			}
+			break;
+		}
+		case 5:
+		{
+			// 雷达频谱：24 颗绕心旋转的频谱点 + 中心低频呼吸核
+			for (int o = 0; o < 24; o++)
+			{
+				Ellipse ellipse4 = new Ellipse
+				{
+					Width = 5.0,
+					Height = 5.0,
+					Fill = new SolidColorBrush(VizHue(o / 23.0))
+				};
+				Canvas.SetLeft(ellipse4, 0.0);
+				Canvas.SetTop(ellipse4, 0.0);
+				vizCanvas.Children.Add(ellipse4);
+				vizShapes.Add(ellipse4);
+			}
+			Ellipse ellipse5 = new Ellipse
+			{
+				Width = 20.0,
+				Height = 20.0,
+				Fill = new SolidColorBrush(VizHue(0.0))
+			};
+			Canvas.SetLeft(ellipse5, 180.0);
+			Canvas.SetTop(ellipse5, 85.0);
+			vizCanvas.Children.Add(ellipse5);
+			vizShapes.Add(ellipse5);
+			break;
+		}
+	}
+}
+
+	private void VizTick()
+	{
+		if (vizCanvas == null || vizStyle < 0)
+		{
+			return;
+		}
+		DateTime now = DateTime.UtcNow;
+		double dt = (vizLast == DateTime.MinValue) ? 0.016 : (now - vizLast).TotalSeconds;
+		vizLast = now;
+		if (double.IsNaN(dt) || dt <= 0.0)
+		{
+			dt = 0.016;
+		}
+		else if (dt > 0.1)
+		{
+			dt = 0.1;
+		}
+		double k = 1.0 - Math.Exp(-dt / 0.055);
+		for (int i = 0; i < 24; i++)
+		{
+			vizEnv[i] += (vizTarget[i] - vizEnv[i]) * k;
+			// 峰值帽：线性回落，形成二次弹落
+			vizPeak[i] = Math.Max(vizEnv[i], vizPeak[i] - dt * 0.55);
+		}
+		vizWavePhase += dt;
+		switch (vizStyle)
+		{
+		case 0:
+			for (int j = 0; j < 32; j++)
+			{
+				int i2 = Math.Min(23, (int)Math.Round(j * 23.0 / 31.0));
+				double h = vizEnv[i2] * 82.0 + 1.0;
+				((Rectangle)vizShapes[j * 2]).Height = h;
+				((Rectangle)vizShapes[j * 2 + 1]).Height = h * 0.82;
+			}
+			break;
+		case 1:
+		{
+			// 频谱曲线：三点平滑后重建填充/描边路径 + 顶点发光
+			double[] sm = new double[24];
+			for (int i = 0; i < 24; i++)
+			{
+				double prev = (i > 0) ? vizEnv[i - 1] : vizEnv[i];
+				double next = (i < 23) ? vizEnv[i + 1] : vizEnv[i];
+				sm[i] = vizEnv[i] * 0.55 + (prev + next) * 0.225;
+			}
+			StreamGeometry fillGeom = new StreamGeometry();
+			using (StreamGeometryContext ctx = fillGeom.Open())
+			{
+				ctx.BeginFigure(new Point(10.0, 165.0), true, true);
+				for (int m = 0; m < 24; m++)
+				{
+					ctx.LineTo(new Point(10.0 + m * 15.22, 164.0 - sm[m] * 122.0), true, false);
+				}
+				ctx.LineTo(new Point(370.0, 165.0), true, false);
+				ctx.LineTo(new Point(10.0, 165.0), true, false);
+			}
+			vizWaveA.Data = fillGeom;
+			Color lowC = VizHue(0.12);
+			Color highC = VizHue(0.9);
+			vizWaveA.Fill = new LinearGradientBrush(Color.FromArgb((byte)Math.Round(120.0 + 80.0 * AvgEnv(0, 24)), lowC.R, lowC.G, lowC.B), Color.FromArgb(0, highC.R, highC.G, highC.B), 90.0);
+			StreamGeometry lineGeom = new StreamGeometry();
+			using (StreamGeometryContext ctx = lineGeom.Open())
+			{
+				bool first = true;
+				for (int m2 = 0; m2 < 24; m2++)
+				{
+					double x = 10.0 + m2 * 15.22;
+					double y = 164.0 - sm[m2] * 122.0;
+					if (first)
+					{
+						ctx.BeginFigure(new Point(x, y), false, false);
+						first = false;
+					}
+					else
+					{
+						ctx.LineTo(new Point(x, y), true, false);
+					}
+				}
+			}
+			vizWaveB.Data = lineGeom;
+			vizWaveB.Stroke = new SolidColorBrush(VizHue(0.3));
+			for (int n = 0; n < 24; n++)
+			{
+				double x2 = 10.0 + n * 15.22;
+				double y2 = 164.0 - sm[n] * 122.0;
+				FrameworkElement dot = vizShapes[n];
+				double size = 5.0 + vizPeak[n] * 5.0;
+				dot.Width = size;
+				dot.Height = size;
+				Canvas.SetLeft(dot, x2 - size / 2.0);
+				Canvas.SetTop(dot, y2 - size / 2.0);
+			}
+			break;
+		}
+		case 2:
+		{
+			// 双螺旋：两带正弦缠绕 + 节点发光
+			double amp = AvgEnv(0, 10) * 26.0 + 7.0;
+			double twist = vizWavePhase * 2.1;
+			System.Windows.Shapes.Polyline frontP = (System.Windows.Shapes.Polyline)vizShapes[24];
+			System.Windows.Shapes.Polyline backP = (System.Windows.Shapes.Polyline)vizShapes[25];
+			frontP.Points.Clear();
+			backP.Points.Clear();
+			for (int n2 = 0; n2 < 24; n2++)
+			{
+				double x3 = 12.0 + n2 * 15.5;
+				double e = Math.Sin(x3 * 0.052 + twist) * amp;
+				double y3 = 95.0 + e;
+				int band = Math.Min(23, n2);
+				frontP.Points.Add(new Point(x3, y3 - 5.0 - vizEnv[band] * 4.0));
+				backP.Points.Add(new Point(x3, y3 + 5.0 + vizEnv[band] * 4.0));
+				FrameworkElement node = vizShapes[n2];
+				double size2 = 5.5 + vizEnv[band] * 5.0;
+				node.Width = size2;
+				node.Height = size2;
+				Canvas.SetLeft(node, x3 - size2 / 2.0);
+				Canvas.SetTop(node, y3 - size2 / 2.0);
+			}
+			break;
+		}
+		case 3:
+		{
+			// 粒子喷泉：绝对正弦喷发 + 横向漂移 + 相位错开
+			for (int n3 = 0; n3 < 24; n3++)
+			{
+				double e2 = vizEnv[n3];
+				for (int p = 0; p < 3; p++)
+				{
+					int idx = n3 * 3 + p;
+					double seed = (vizPartSeed != null && idx < vizPartSeed.Length) ? vizPartSeed[idx] : 0.3;
+					double ph = vizWavePhase * (1.4 + seed * 1.2) + p * 2.094 + seed * 6.28;
+					double burst = Math.Abs(Math.Sin(ph));
+					double h3 = e2 * (110.0 + seed * 34.0) * burst;
+					double x4 = 12.0 + n3 * 15.4 + Math.Sin(ph * 0.8 + seed * 9.0) * e2 * 26.0;
+					double y4 = 164.0 - h3;
+					FrameworkElement part = vizShapes[idx];
+					double size3 = 3.0 + e2 * (3.5 + seed * 2.5) * (0.5 + burst);
+					part.Width = size3;
+					part.Height = size3;
+					Canvas.SetLeft(part, x4 - size3 / 2.0);
+					Canvas.SetTop(part, y4 - size3 / 2.0);
+				}
+			}
+			break;
+		}
+		case 4:
+			for (int n2 = 0; n2 < 24; n2++)
+			{
+				double h2 = vizEnv[n2] * 118.0 + 1.0;
+				((Rectangle)vizShapes[n2 * 2]).Height = h2;
+				Canvas.SetBottom(vizShapes[n2 * 2 + 1], 24.0 + h2 - 3.0);
+			}
+			break;
+		case 5:
+		{
+			// 雷达频谱：绕心旋转 + 径向距离随频段能量 + 中心呼吸核
+			for (int o = 0; o < 24; o++)
+			{
+				double ang = o * 15.0 * Math.PI / 180.0 + vizWavePhase * 0.35;
+				double len = 30.0 + vizEnv[o] * 58.0;
+				double ex = 190.0 + Math.Cos(ang) * len;
+				double ey = 95.0 + Math.Sin(ang) * len;
+				FrameworkElement el2 = vizShapes[o];
+				double size4 = 4.0 + vizEnv[o] * 5.5;
+				el2.Width = size4;
+				el2.Height = size4;
+				Canvas.SetLeft(el2, ex - size4 / 2.0);
+				Canvas.SetTop(el2, ey - size4 / 2.0);
+			}
+			double breath = 16.0 + AvgEnv(0, 8) * 12.0;
+			SizeCenter(vizShapes[24], breath);
+			break;
+		}
+		}
+	}
+
+	private double AvgEnv(int from, int to)
+	{
+		double sum = 0.0;
+		for (int i = from; i < to; i++)
+		{
+			sum += vizEnv[i];
+		}
+		return sum / (double)(to - from);
+	}
+
+	private void SizeCenter(FrameworkElement el, double size)
+	{
+		el.Width = size;
+		el.Height = size;
+		Canvas.SetLeft(el, 190.0 - size / 2.0);
+		Canvas.SetTop(el, 95.0 - size / 2.0);
+	}
+
+	private void WavePath(System.Windows.Shapes.Path path, double freq, double phase, double amp, double yBase)
+	{
+		if (path == null)
+		{
+			return;
+		}
+		StreamGeometry streamGeometry = new StreamGeometry();
+		using (StreamGeometryContext ctx = streamGeometry.Open())
+		{
+			bool first = true;
+			for (int i = 0; i <= 76; i++)
+			{
+				double x = i * 5.0;
+				double e = Math.Sin(x * freq + phase) * amp + Math.Sin(x * freq * 2.1 + phase * 1.7) * amp * 0.32;
+				double y = yBase + e;
+				if (first)
+				{
+					ctx.BeginFigure(new Point(x, y), false, false);
+					first = false;
+				}
+				else
+				{
+					ctx.LineTo(new Point(x, y), true, false);
+				}
+			}
+		}
+		path.Data = streamGeometry;
 	}
 
 	private void Notes(StackPanel parent)

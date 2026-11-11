@@ -2285,7 +2285,9 @@ public class Controller
 			{
 				if (!loading)
 				{
-					draft.ItemOrder = (Prefs.Dock.ItemOrder ?? new List<string>()).ToList();
+					// 同步 ItemOrder 时过滤掉被设置开关关闭的系统项（游戏模式等）：
+					// 否则关闭开关后该项仍留在 ItemOrder，Dock 上入口不消失。
+					draft.ItemOrder = (Prefs.Dock.ItemOrder ?? new List<string>()).Where((string k) => !DockLayoutRules.SystemItem(k) || DockLayoutRules.Visible(draft, k)).ToList();
 					draft.RunningOrder = (Prefs.Dock.RunningOrder ?? new List<string>()).ToList();
 					if (g.Unify)
 					{
@@ -3413,6 +3415,40 @@ public class Controller
 				};
 				stackPanel5.Children.Add(grid3);
 			}
+			// 律动配色（仅律动组件生效；右键组件菜单里也可切换）
+			Grid paletteRow = new Grid
+			{
+				Margin = new Thickness(0.0, 4.0, 0.0, 9.0)
+			};
+			paletteRow.ColumnDefinitions.Add(new ColumnDefinition());
+			paletteRow.ColumnDefinitions.Add(new ColumnDefinition
+			{
+				Width = new GridLength(132.0)
+			});
+			paletteRow.Children.Add(new TextBlock
+			{
+				Text = "律动配色",
+				Foreground = System.Windows.Media.Brushes.White,
+				VerticalAlignment = VerticalAlignment.Center
+			});
+			System.Windows.Controls.ComboBox paletteCombo = new System.Windows.Controls.ComboBox
+			{
+				ItemsSource = new string[10] { "极光蓝紫", "青绿", "粉红", "橙金", "紫红", "绿", "红", "纯白", "彩虹循环", "跟随强调色" },
+				SelectedIndex = Prefs.Widgets.VisualizerColor,
+				Height = 34.0
+			};
+			Grid.SetColumn(paletteCombo, 1);
+			paletteRow.Children.Add(paletteCombo);
+			paletteCombo.SelectionChanged += (object s, SelectionChangedEventArgs e) =>
+			{
+				if (paletteCombo.SelectedIndex >= 0 && Prefs.Widgets.VisualizerColor != paletteCombo.SelectedIndex)
+				{
+					Prefs.Widgets.VisualizerColor = paletteCombo.SelectedIndex;
+					Save();
+					RefreshWidgets();
+				}
+			};
+			stackPanel5.Children.Add(paletteRow);
 			TextBlock componentStatus = new TextBlock
 			{
 				Text = "组件开关会自动保存，可随时关闭或重新开启。",
@@ -4087,6 +4123,18 @@ public class Controller
 					};
 					editor.Children.Add(b);
 				};
+				if (k == "visualizer")
+				{
+					action2("律动样式", new string[6] { "极光镜像柱", "频谱曲线", "双螺旋", "粒子喷泉", "音轨条带", "雷达频谱" }, Prefs.Widgets.VisualizerStyle, (int v) =>
+					{
+						Prefs.Widgets.VisualizerStyle = v;
+					});
+					action2("律动配色", new string[10] { "极光蓝紫", "青绿", "粉红", "橙金", "紫红", "绿", "红", "纯白", "彩虹循环", "跟随强调色" }, Prefs.Widgets.VisualizerColor, (int v) =>
+					{
+						Prefs.Widgets.VisualizerColor = v;
+					});
+					return;
+				}
 				Action<string, double, double, double, Action<double>> action3 = (string text2, double min, double max, double value, Action<double> set) =>
 				{
 					TextBlock title = new TextBlock

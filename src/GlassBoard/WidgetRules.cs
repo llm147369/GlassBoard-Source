@@ -6,9 +6,9 @@ namespace GlassBoard;
 
 public static class WidgetRules
 {
-	public static readonly string[] Kinds = new string[4] { "clock", "weather", "music", "notes" };
+	public static readonly string[] Kinds = new string[5] { "clock", "weather", "music", "notes", "visualizer" };
 
-	public static readonly string[] Names = new string[4] { "时钟", "天气", "音乐", "备忘录" };
+	public static readonly string[] Names = new string[5] { "时钟", "天气", "音乐", "备忘录", "音乐律动" };
 
 	public static bool Enabled(WidgetOptions o, string kind)
 	{
@@ -18,6 +18,7 @@ public static class WidgetRules
 			"music" => o.Music, 
 			"weather" => o.Weather, 
 			"clock" => o.Clock, 
+			"visualizer" => o.Visualizer, 
 			_ => false, 
 		};
 	}
@@ -29,6 +30,7 @@ public static class WidgetRules
 			"music" => o.MusicPanel, 
 			"weather" => o.WeatherPanel, 
 			"clock" => o.ClockPanel, 
+			"visualizer" => o.VisualizerPanel, 
 			_ => o.NotesPanel, 
 		};
 	}
@@ -50,6 +52,9 @@ public static class WidgetRules
 		case "notes":
 			o.NotesPanel = panel;
 			break;
+		case "visualizer":
+			o.VisualizerPanel = panel;
+			break;
 		}
 	}
 
@@ -68,6 +73,9 @@ public static class WidgetRules
 			break;
 		case "notes":
 			o.Notes = value;
+			break;
+		case "visualizer":
+			o.Visualizer = value;
 			break;
 		}
 	}

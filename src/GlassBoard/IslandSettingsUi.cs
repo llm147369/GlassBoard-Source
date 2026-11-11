@@ -97,9 +97,10 @@ public static class IslandSettingsUi
 			combo(layoutPanel, "收起态布局", new[] { "经典三段（封面·信息·状态）", "极简（封面·信息）", "信息优先（时钟·天气）" }, d.CollapsedLayout, delegate (int v) { d.CollapsedLayout = v; Apply(); });
 			combo(layoutPanel, "形状", new[] { "胶囊", "圆角矩形" }, d.Shape, delegate (int v) { d.Shape = v; Apply(); });
 			slider(layoutPanel, "圆角", 4, 48, d.CornerRadius, 1, "px", delegate (double v) { d.CornerRadius = v; Apply(); });
-			slider(layoutPanel, "宽度", 180, 640, Math.Round(d.CollapsedWidth), 4, "px", delegate (double v) { d.WidthScale = v / 320.0; Apply(); });
+			slider(layoutPanel, "宽度", 132, 640, Math.Round(d.CollapsedWidth), 4, "px", delegate (double v) { d.WidthScale = v / 320.0; Apply(); });
 			slider(layoutPanel, "高度", 40, 128, Math.Round(d.CollapsedHeight), 2, "px", delegate (double v) { d.HeightScale = v / 64.0; Apply(); });
 			slider(layoutPanel, "顶部间距", 0, 160, d.TopGap, 2, "px", delegate (double v) { d.TopGap = v; Apply(); });
+			slider(layoutPanel, "水平偏移", -800, 800, d.HorizontalOffset, 4, "px", delegate (double v) { d.HorizontalOffset = v; Apply(); });
 			string[] monitors = MonitorChoices();
 			combo(layoutPanel, "显示器", monitors, Math.Min(Math.Max(d.MonitorIndex, 0), monitors.Length - 1), delegate (int v) { d.MonitorIndex = v; Apply(); });
 			check(layoutPanel, "自适应对比度（浅色壁纸上自动加深文字与底衬）", d.AdaptiveContrast, delegate (bool v) { d.AdaptiveContrast = v; Apply(); });
@@ -229,6 +230,11 @@ public static class IslandSettingsUi
 			check(musicSetPanel, "媒体源切换（本地 / 系统）", d.MusicSourceSwitch, delegate (bool v) { d.MusicSourceSwitch = v; Apply(); });
 			check(musicSetPanel, "悬停进度条预览时间", d.MusicProgressPeek, delegate (bool v) { d.MusicProgressPeek = v; Apply(); });
 			check(musicSetPanel, "滚轮调节音量", d.MusicWheelVolume, delegate (bool v) { d.MusicWheelVolume = v; Apply(); });
+			combo(musicSetPanel, "歌词颜色", new[] { "跟随主题", "白色", "米白", "浅蓝", "浅绿", "浅粉", "浅紫", "浅橙" },
+				LyricColorIndex(d.LyricColor), delegate (int v) { d.LyricColor = LyricColorHex(v); Apply(); });
+			combo(musicSetPanel, "歌词高亮色", new[] { "跟随强调色", "金色", "亮蓝", "亮绿", "橙色", "粉色", "紫色", "红色" },
+				LyricActiveColorIndex(d.LyricActiveColor), delegate (int v) { d.LyricActiveColor = LyricActiveColorHex(v); Apply(); });
+			slider(musicSetPanel, "歌词同步校准", -5, 5, d.LyricOffset, 0.1, "秒", delegate (double v) { d.LyricOffset = Math.Round(v, 1); Apply(); });
 			p.Children.Add(musicSet);
 
 			// —— ⑨ 快捷入口 ——
@@ -328,6 +334,46 @@ public static class IslandSettingsUi
 		}
 
 		Render(draft);
+	}
+
+	// 歌词颜色可选项（空串=跟随主题）
+	private static readonly string[] LyricColors = new[] { "", "#FFFFFF", "#F5EFDC", "#A8D8FF", "#B8F0C8", "#FFC8E0", "#D8C8FF", "#FFD9A8" };
+
+	// 歌词高亮色可选项（空串=跟随强调色）
+	private static readonly string[] LyricActiveColors = new[] { "", "#FFC94D", "#4DA8FF", "#5AE082", "#FF8A3D", "#FF6FA5", "#B48CFF", "#FF5A5A" };
+
+	private static int LyricColorIndex(string hex)
+	{
+		for (int i = 0; i < LyricColors.Length; i++)
+		{
+			if (string.Equals(LyricColors[i], hex ?? "", StringComparison.OrdinalIgnoreCase))
+			{
+				return i;
+			}
+		}
+		return 0;
+	}
+
+	private static string LyricColorHex(int index)
+	{
+		return index >= 0 && index < LyricColors.Length ? LyricColors[index] : "";
+	}
+
+	private static int LyricActiveColorIndex(string hex)
+	{
+		for (int i = 0; i < LyricActiveColors.Length; i++)
+		{
+			if (string.Equals(LyricActiveColors[i], hex ?? "", StringComparison.OrdinalIgnoreCase))
+			{
+				return i;
+			}
+		}
+		return 0;
+	}
+
+	private static string LyricActiveColorHex(int index)
+	{
+		return index >= 0 && index < LyricActiveColors.Length ? LyricActiveColors[index] : "";
 	}
 
 	// 设置页重建失败时显示可读的错误信息（完整异常已写日志），保证设置页不会整体不可用。

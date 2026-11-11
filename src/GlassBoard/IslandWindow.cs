@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Markup;
@@ -66,6 +68,16 @@ private Grid collapsedRoot;
 	private double[] eqVel = new double[7];
 	private Path eqPath;
 	private TextBlock collapsedSub;
+	private Run collapsedDoneRun;
+	private Run collapsedTodoRun;
+	private string lastLyricText = "";
+	private bool lyricTlDead;
+	private Run collapsedMidRun;
+	// 歌词同步锚点：锚定播放器位置 + 本地高精度时钟插值（GSMTC 轮询粒度太粗）
+	private double lyricAnchorPos = -1.0;
+	private DateTime lyricAnchorUtc = DateTime.MinValue;
+	// 暂停冻结的歌词进度（无时间线秒表用；有时间线走 lyricAnchorPos 冻结）
+	private double lyricPausedElapsed = 0.0;
 	private DateTime lyricStartUtc = DateTime.MinValue;
 	private string lastRealTrackKey = "";
 	private bool lyricUntrusted;
@@ -230,7 +242,7 @@ public bool IsClosedWindow => _isClosed;
 
 toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
 		toastTimer.Tick += (object s, EventArgs e) => { toastTimer.Stop(); CollapseFromToast(); };
-		progressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+		progressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
 		progressTimer.Tick += (object s, EventArgs e) => UpdateProgressTick();
 		fullscreenTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
 		fullscreenTimer.Tick += (object s, EventArgs e) =>
@@ -305,8 +317,20 @@ IslandAudio.AudioLevels += OnAudioLevels;
 // 会直接穿透到小岛下面的应�?�?小岛失焦 �?Deactivated 误判为“点击外部”而自动收起�?
 
 collapsedRoot = new Grid { Background = Brushes.Transparent };
-		collapsedStack = new DockPanel { LastChildFill = true, VerticalAlignment = VerticalAlignment.Center };
-		collapsedRoot.Children.Add(collapsedStack);
+		// 内容居中容器：非播放态胶囊内容水平居中；播放态由 RebuildCollapsed 把
+		// collapsedStack 拉满整条胶囊（封面贴左端、跳动条贴右端，中间留给歌词）。
+		Grid collapsedCenter = new Grid
+		{
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		collapsedStack = new DockPanel
+		{
+			LastChildFill = true,
+			VerticalAlignment = VerticalAlignment.Center,
+			HorizontalAlignment = HorizontalAlignment.Center
+		};
+		collapsedCenter.Children.Add(collapsedStack);
+		collapsedRoot.Children.Add(collapsedCenter);
 		collapsedRoot.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) => Expand();
 		collapsedRoot.Cursor = Cursors.Hand;
 
@@ -512,6 +536,10 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 		// 布局 1=极简；布局 2=信息优先（旧形态）。
 		if (playing)
 		{
+			// 播放态内容铺满整条胶囊：封面贴最左、跳动条贴最右、歌词占中间。
+			// 非播放态保持居中（RebuildCollapsed 的 else 分支切回 Center）。
+			collapsedStack.HorizontalAlignment = HorizontalAlignment.Stretch;
+			collapsedStack.Margin = new Thickness(8, 0, 8, 0);
 			if (layout != 2)
 			{
 				double coverBase = SnapTop() ? O.CollapsedHeight - 14.0 : O.CollapsedHeight;
@@ -566,6 +594,8 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 		}
 		else
 		{
+			collapsedStack.HorizontalAlignment = HorizontalAlignment.Center;
+			collapsedStack.Margin = new Thickness(0);
 			StopEqualizer();
 			if (layout == 0)
 			{
@@ -690,13 +720,26 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 			mid.Children.Add(collapsedTitle);
 			collapsedSub = new TextBlock
 			{
-				Text = sub,
 				FontSize = Math.Max(10.0, O.FontSize - 2.5),
-				Foreground = muted,
 				TextAlignment = O.MusicAlignCenter ? TextAlignment.Center : TextAlignment.Left,
 				TextTrimming = TextTrimming.CharacterEllipsis,
 				Margin = new Thickness(0, 1, 0, 0)
 			};
+			// 逐字卡拉OK高亮：已唱部分 runDone（高亮色）、未唱部分 runTodo（普通色）。
+			// 颜色每次重建时按配置解析，进度推进只改两个 Run 的文本（零布局重排）。
+			collapsedDoneRun = new Run("");
+			collapsedMidRun = new Run("");
+			collapsedTodoRun = new Run("");
+			Brush lyricBrush = string.IsNullOrEmpty(O.LyricColor) ? muted : new SolidColorBrush(IslandChrome.ParseColor(O.LyricColor, ""));
+			Brush lyricActiveBrush = string.IsNullOrEmpty(O.LyricActiveColor)
+				? new SolidColorBrush(IconPacks.AccentColor(O.Accent))
+				: new SolidColorBrush(IslandChrome.ParseColor(O.LyricActiveColor, ""));
+			collapsedDoneRun.Foreground = lyricActiveBrush;
+			collapsedMidRun.Foreground = lyricActiveBrush;
+			collapsedTodoRun.Foreground = lyricBrush;
+			collapsedSub.Inlines.Add(collapsedDoneRun);
+			collapsedSub.Inlines.Add(collapsedMidRun);
+			collapsedSub.Inlines.Add(collapsedTodoRun);
 			mid.Children.Add(collapsedSub);
 			collapsedStack.Children.Add(mid);
 		}
@@ -1653,11 +1696,16 @@ default: // 0 霓虹辉光：强调色纵向渐变（由深到浅）+ 强辉�?
 		return bars;
 	}
 
+	private bool equalizerHeld;
 	private void StartEqualizer()
 	{
 		try
 		{
-			IslandAudio.Start();
+			if (!equalizerHeld)
+			{
+				equalizerHeld = true;
+				IslandAudio.Acquire();
+			}
 		}
 		catch
 		{
@@ -1668,7 +1716,11 @@ default: // 0 霓虹辉光：强调色纵向渐变（由深到浅）+ 强辉�?
 	{
 		try
 		{
-			IslandAudio.Stop();
+			if (equalizerHeld)
+			{
+				equalizerHeld = false;
+				IslandAudio.Release();
+			}
 		}
 		catch
 		{
@@ -3299,6 +3351,7 @@ private Style BuildProgressSliderStyle()
 		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+		g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
 		// 快捷启动器（QuickLauncher）：回车呼出 GlassBoard 应用面板
 		launcherBox = new System.Windows.Controls.TextBox
@@ -3331,7 +3384,7 @@ private Style BuildProgressSliderStyle()
 			launcherBox.Clear();
 			Collapse();
 		};
-		Grid.SetRow(launcherBox, 6);
+		Grid.SetRow(launcherBox, 7);
 		g.Children.Add(launcherBox);
 
 		Grid tiles = new Grid();
@@ -3460,6 +3513,47 @@ private Style BuildProgressSliderStyle()
 		Grid.SetRow(batteryRow, 4);
 		g.Children.Add(batteryRow);
 
+		// 电源行：电源（睡眠/重启/关机菜单）、锁屏、打开设置
+		Grid powerRow = new Grid { Margin = new Thickness(0, 12, 0, 0) };
+		powerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		powerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		powerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		TextBlock pst1, pst2, pst3, pnm1, pnm2, pnm3;
+		Border powerTile = SmallTile("电源", b => new TextBlock { Text = "⏻", FontSize = 16, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center }, out pst1, out pnm1, (object s, MouseButtonEventArgs e) => OpenPowerMenu());
+		Border lockTile = SmallTile("锁屏", b => new TextBlock { Text = "🔒", FontSize = 16, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center }, out pst2, out pnm2, (object s, MouseButtonEventArgs e) =>
+		{
+			try
+			{
+				Collapse();
+				Native.Lock();
+			}
+			catch
+			{
+			}
+		});
+		Border settingsTile = SmallTile("设置", b => new TextBlock { Text = "⚙", FontSize = 16, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center }, out pst3, out pnm3, (object s, MouseButtonEventArgs e) =>
+		{
+			try
+			{
+				Collapse();
+				C.Settings();
+			}
+			catch
+			{
+			}
+		});
+		Grid.SetColumn(powerTile, 0);
+		Grid.SetColumn(lockTile, 1);
+		Grid.SetColumn(settingsTile, 2);
+		powerTile.Margin = new Thickness(0, 0, 5, 0);
+		lockTile.Margin = new Thickness(5, 0, 5, 0);
+		settingsTile.Margin = new Thickness(5, 0, 0, 0);
+		powerRow.Children.Add(powerTile);
+		powerRow.Children.Add(lockTile);
+		powerRow.Children.Add(settingsTile);
+		Grid.SetRow(powerRow, 5);
+		g.Children.Add(powerRow);
+
 		Grid note = new Grid { Margin = new Thickness(2, 12, 2, 0) };
 		controlNote = new TextBlock
 		{
@@ -3469,9 +3563,67 @@ private Style BuildProgressSliderStyle()
 			Foreground = MutedBrush
 		};
 		note.Children.Add(controlNote);
-		Grid.SetRow(note, 5);
+		Grid.SetRow(note, 6);
 		g.Children.Add(note);
 		return g;
+	}
+
+	[DllImport("PowrProf.dll", SetLastError = true)]
+	[return: MarshalAs(UnmanagedType.U1)]
+	private static extern bool SetSuspendState([MarshalAs(UnmanagedType.U1)] bool hibernate, [MarshalAs(UnmanagedType.U1)] bool force, [MarshalAs(UnmanagedType.U1)] bool disableWake);
+
+	// 电源菜单：睡眠 / 重启 / 关机（两段式：点瓦片出菜单，点菜单项执行）
+	private void OpenPowerMenu()
+	{
+		try
+		{
+			ContextMenu menu = MenuTheme.Create(LightTheme, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
+			string[] names = new string[3] { "睡眠", "重启", "关机" };
+			for (int i = 0; i < names.Length; i++)
+			{
+				int action = i;
+				MenuItem item = new MenuItem
+				{
+					Header = names[i]
+				};
+				item.Click += (object s, RoutedEventArgs e) =>
+				{
+					try
+					{
+						Collapse();
+						if (action == 0)
+						{
+							if (!SetSuspendState(hibernate: false, force: false, disableWake: false))
+							{
+								throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+							}
+						}
+						else
+						{
+							Process.Start(new ProcessStartInfo("shutdown.exe", (action == 1) ? "/r /t 0" : "/s /t 0")
+							{
+								UseShellExecute = false,
+								CreateNoWindow = true
+							});
+						}
+					}
+					catch (Exception ex)
+					{
+						Store.Log(ex);
+					}
+				};
+				menu.Items.Add(item);
+			}
+			menu.PlacementTarget = null;
+			menu.Placement = PlacementMode.Bottom;
+			menu.HorizontalOffset = 0.0;
+			menu.VerticalOffset = 4.0;
+			menu.IsOpen = true;
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 	}
 
 	// 电量信息卡：图标 + 文本，默认隐藏，读到有效数据才显示（无数据不留空位）。
@@ -3930,6 +4082,11 @@ expandedRoot.Visibility = Visibility.Collapsed;
 
 	public void ShowToast(string app, string title, string body, string aumid = null)
 	{
+		// 全屏时仅消息弹出：通知到来先结束全屏隐藏、恢复收起态再显示
+		if (mode == Mode.Hidden && modeBeforeHide != Mode.Hidden && O.NotifyOnFullscreen)
+		{
+			RestoreFromFullscreen();
+		}
 		if (mode == Mode.Expanded)
 		{
 			return; // 展开面板打开时事件不强行关闭面板
@@ -4014,7 +4171,7 @@ expandedRoot.Visibility = Visibility.Collapsed;
 // 内容淡入 + 轻微下滑：配合窗口尺寸动画，展开/事件卡出现不“一下弹出”�?
 private void FadeInContent(FrameworkElement el)
 	{
-		if (!O.AnimationEnabled || !IsVisible)
+		if (!O.AnimationEnabled || !IsVisible || (RenderCapability.Tier >> 16) < 2)
 		{
 			el.BeginAnimation(OpacityProperty, null);
 			el.Opacity = 1.0;
@@ -4743,6 +4900,13 @@ foreach (Border b in tabBar.Children.OfType<Border>())
 		return string.IsNullOrWhiteSpace(src) ? "" : " · " + src;
 	}
 
+	// 取 Run 当前前景色的 RGB（用于正在唱的字颜色插值）
+	private static Color LyricBrushColor(Run run)
+	{
+		SolidColorBrush b = run.Foreground as SolidColorBrush;
+		return b != null ? b.Color : Colors.White;
+	}
+
 	private void UpdateProgressTick()
 	{
 		if (sizeAnimating)
@@ -4755,10 +4919,11 @@ foreach (Border b in tabBar.Children.OfType<Border>())
 
 // 位置不可知（播放器内部跳转）时只显示歌手名，绝不显示错位歌词�?
 
-if (M != null && M.Playing && collapsedSub != null && mode == Mode.Collapsed)
+if (M != null && collapsedSub != null && mode == Mode.Collapsed)
 		{
 			string sub;
-			if (M.Duration > 0)
+			double lyricElapsed = -1.0;
+			if (M.Duration > 0 && !lyricTlDead)
 			{
 				// 播放器发布时间线：位置可信。采�?桥接往返约滞后 0.3~0.8s
 // （这就是“歌词比音乐慢半秒”的来源），给歌词时钟加 0.5s 提前量补偿�?
@@ -4766,7 +4931,58 @@ if (M != null && M.Playing && collapsedSub != null && mode == Mode.Collapsed)
 
 
 lyricUntrusted = false;
-				IslandLyrics.Update(M.Position + 0.5);
+				// 播放器发布时间线：锚点 + 本地高精度时钟插值（GSMTC 轮询粒度粗，直接读会跳变）。
+				// 播放中锚点随本地时钟推进；暂停时冻结在锚点（拖动进度 rawPos 变化即重锚定）。
+				DateTime utcNow = DateTime.UtcNow;
+				double rawPos = M.Position;
+				// 时间线死亡检测：播放中位置连续 6 秒不前进（如汽水音乐 GSMTC 位置长期冻结在 0），
+				// 判定时间线不可用，切到本机秒表模式（以冻结位置为起点）推进歌词。
+				if (M.Playing && lyricAnchorPos >= 0.0 && Math.Abs(rawPos - lyricAnchorPos) < 0.05 && (utcNow - lyricAnchorUtc).TotalSeconds > 6.0)
+				{
+					lyricTlDead = true;
+					lyricStartUtc = DateTime.Now.AddSeconds(-rawPos);
+					lyricPausedElapsed = 0.0;
+				}
+				if (lyricTlDead)
+				{
+					lyricElapsed = M.Playing
+						? (lyricStartUtc == DateTime.MinValue ? rawPos : (DateTime.Now - lyricStartUtc).TotalSeconds)
+						: lyricPausedElapsed;
+					lyricElapsed += O.LyricOffset + IslandLyrics.LrcOffsetMs / 1000.0;
+					if (lyricElapsed < 0.0)
+					{
+						lyricElapsed = 0.0;
+					}
+					IslandLyrics.Update(lyricElapsed);
+					lyricUntrusted = false;
+					if (lyricElapsed < 0.0)
+					{
+						lyricElapsed = 0.0;
+					}
+				}
+				else
+				{
+				if (lyricAnchorPos < 0.0 || (utcNow - lyricAnchorUtc).TotalSeconds > 10.0)
+				{
+					lyricAnchorPos = rawPos;
+					lyricAnchorUtc = utcNow;
+				}
+				else if (Math.Abs(rawPos - lyricAnchorPos) > 0.05 && (utcNow - lyricAnchorUtc).TotalSeconds > 0.25)
+				{
+					double drifted = M.Playing ? lyricAnchorPos + (utcNow - lyricAnchorUtc).TotalSeconds : lyricAnchorPos;
+					if (Math.Abs(rawPos - drifted) > 0.35)
+					{
+						lyricAnchorPos = rawPos;
+						lyricAnchorUtc = utcNow;
+					}
+				}
+				lyricElapsed = (M.Playing ? lyricAnchorPos + (utcNow - lyricAnchorUtc).TotalSeconds : lyricAnchorPos) + O.LyricOffset + IslandLyrics.LrcOffsetMs / 1000.0;
+				if (lyricElapsed < 0.0)
+				{
+					lyricElapsed = 0.0;
+				}
+				IslandLyrics.Update(lyricElapsed);
+				}
 			}
 			else if (!lyricUntrusted)
 			{
@@ -4774,7 +4990,15 @@ lyricUntrusted = false;
 
 
 
-IslandLyrics.Update(lyricStartUtc == DateTime.MinValue ? 0.0 : (DateTime.Now - lyricStartUtc).TotalSeconds);
+lyricElapsed = M.Playing
+					? (lyricStartUtc == DateTime.MinValue ? 0.0 : (DateTime.Now - lyricStartUtc).TotalSeconds)
+					: lyricPausedElapsed;
+				lyricElapsed += O.LyricOffset + IslandLyrics.LrcOffsetMs / 1000.0;
+				if (lyricElapsed < 0.0)
+				{
+					lyricElapsed = 0.0;
+				}
+				IslandLyrics.Update(lyricElapsed);
 			}
 			if (lyricUntrusted && M.Duration <= 0)
 			{
@@ -4788,9 +5012,133 @@ IslandLyrics.Update(lyricStartUtc == DateTime.MinValue ? 0.0 : (DateTime.Now - l
 					sub = string.IsNullOrEmpty(M.Artist) ? "" : M.Artist;
 				}
 			}
-			if (collapsedSub.Text != sub)
+			// 歌词与歌手都为空时（汽水音乐等不报歌手的播放器 + 歌词尚未到达）显示占位符，
+			// 避免歌词行整行空白，用户会误以为歌词功能坏了。
+			if (sub.Length == 0)
 			{
-				collapsedSub.Text = sub;
+				sub = "♫";
+			}
+			// 逐字卡拉OK：三 Run（已唱高亮 | 正在唱的字颜色插值 | 未唱普通色）。
+			// 逐字时间轴（网易云 yrc）优先，无则按字数均分；位置不可信时整句普通色。
+			string doneText = "";
+			string midText = "";
+			string todoText = sub;
+			double midAnimDur = 0.35;
+			if (lyricElapsed >= 0.0 && sub.Length > 0 && sub == IslandLyrics.ActiveText)
+			{
+				double t0 = IslandLyrics.LineStart;
+				double t1 = IslandLyrics.LineEnd;
+				if (t0 >= 0.0 && t1 > t0)
+				{
+					double within = Math.Max(0.0, lyricElapsed - t0);
+					List<double> wordTimes = IslandLyrics.ActiveWordTimes;
+					int n;
+					double midProgress;
+					if (wordTimes != null && wordTimes.Count > 0)
+					{
+						// 逐字时间轴：最后一个开始时间 <= within 的字为已唱；下一字为正在唱的字
+						n = 0;
+						for (int i = 0; i < wordTimes.Count && i < sub.Length; i++)
+						{
+							if (wordTimes[i] <= within)
+							{
+								n = i + 1;
+							}
+							else
+							{
+								break;
+							}
+						}
+						if (n < sub.Length)
+						{
+							double wordStart = n < wordTimes.Count ? wordTimes[n] : wordTimes[wordTimes.Count - 1];
+							double wordEnd = n + 1 < wordTimes.Count ? wordTimes[n + 1] : Math.Max(wordStart + 0.3, t1 - t0);
+							midProgress = Math.Max(0.0, Math.Min(1.0, (within - wordStart) / Math.Max(0.15, wordEnd - wordStart)));
+							midAnimDur = Math.Max(0.15, Math.Min(1.5, wordEnd - wordStart));
+						}
+						else
+						{
+							midProgress = 1.0;
+						}
+					}
+					else
+					{
+						double frac = Math.Max(0.0, Math.Min(1.0, within / Math.Max(0.5, t1 - t0)));
+						double pos = sub.Length * frac;
+						n = (int)Math.Floor(pos);
+						midProgress = pos - n;
+						if (n >= sub.Length)
+						{
+							n = sub.Length;
+							midProgress = 0.0;
+						}
+					}
+					if (n > 0)
+					{
+						doneText = sub.Substring(0, n);
+					}
+					if (n < sub.Length)
+					{
+						midText = sub.Substring(n, 1);
+						todoText = sub.Substring(n + 1);
+					}
+					else
+					{
+						todoText = sub;
+					}
+				}
+			}
+			bool lyricLineChanged = sub != lastLyricText;
+			if (lyricLineChanged)
+			{
+				lastLyricText = sub;
+			}
+			if (collapsedDoneRun != null && collapsedTodoRun != null)
+			{
+				bool midWordChanged = collapsedMidRun != null && collapsedMidRun.Text != midText;
+				if (collapsedDoneRun.Text != doneText)
+				{
+					collapsedDoneRun.Text = doneText;
+				}
+				if (collapsedMidRun != null && midWordChanged)
+				{
+					collapsedMidRun.Text = midText;
+				}
+				if (collapsedTodoRun.Text != todoText)
+				{
+					collapsedTodoRun.Text = todoText;
+				}
+				// 正在唱的字：颜色在字时长内由普通色渐变到高亮色——动画驱动，
+				// 不再每 200ms 手工插值（逐帧步进感就是"变色时字会动"的来源之一）。
+				if (midWordChanged && collapsedMidRun != null && midText.Length > 0)
+				{
+					Color fromC = LyricBrushColor(collapsedTodoRun);
+					Color toC = LyricBrushColor(collapsedDoneRun);
+					// TextElement.Foreground 是 Brush 类型，ColorAnimation 只能作用于
+					// SolidColorBrush.Color（此前直接对 Foreground 播 ColorAnimation 会抛
+					// ArgumentException 并中断整帧 UI 更新）。
+					SolidColorBrush midBrush = new SolidColorBrush(fromC);
+					collapsedMidRun.Foreground = midBrush;
+					midBrush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(fromC, toC, new Duration(TimeSpan.FromSeconds(midAnimDur)))
+					{
+						FillBehavior = FillBehavior.HoldEnd
+					});
+				}
+				// 歌词行切换：淡出旧行→换文本→淡入新行，消除整句位置突变的"跳"感。
+				if (lyricLineChanged && sub.Length > 0)
+				{
+					AnimateTextSwap(collapsedSub, delegate { });
+				}
+			}
+			else
+			{
+				collapsedSub.Inlines.Clear();
+				collapsedDoneRun = new Run(doneText);
+				collapsedMidRun = new Run(midText);
+				collapsedTodoRun = new Run(todoText);
+				collapsedSub.Inlines.Add(collapsedDoneRun);
+				collapsedSub.Inlines.Add(collapsedMidRun);
+				collapsedSub.Inlines.Add(collapsedTodoRun);
 			}
 		}
 // 无音乐时的默认收起布局：时�?日期每秒、屏幕刷新率�?2 秒刷新一次�?
@@ -5943,7 +6291,7 @@ private void SyncExpandedSize()
 		{
 			syncToken++;
 			int tok = syncToken;
-			double left = MonitorWorkArea().Left + (MonitorWorkArea().Width - w) / 2.0;
+			double left = MonitorWorkArea().Left + (MonitorWorkArea().Width - w) / 2.0 + O.HorizontalOffset;
 			// 只动画高度（矩形底边伸缩）；宽度与水平位置一步到位。
 			// 分层窗口同时逐帧改 宽+高+位置 三路会产生明显抖动；高度-only 与
 			// “分页切换高度调节”是同一类动画（已验证丝滑），内容钉住不重排。
@@ -6062,7 +6410,7 @@ private void RunWhenIdle(Action work)
 			return;
 		}
 		Rect wa = MonitorWorkArea();
-		double left = wa.Left + (wa.Width - width) / 2.0;
+		double left = wa.Left + (wa.Width - width) / 2.0 + O.HorizontalOffset;
 		double top = SnapTop() ? wa.Top : wa.Top + Math.Max(0, O.TopGap);
 // 吸附顶部�?Root 顶边距为 0，Surface 比非吸附状态多�?14px 高度—�?
 
@@ -6393,7 +6741,7 @@ public void PrepareStartup()
 		try
 		{
 			Rect wa = MonitorWorkArea();
-			double left = wa.Left + (wa.Width - O.CollapsedWidth) / 2.0;
+			double left = wa.Left + (wa.Width - O.CollapsedWidth) / 2.0 + O.HorizontalOffset;
 			double top = SnapTop() ? wa.Top : wa.Top + Math.Max(0, O.TopGap);
 			Root.Margin = SnapTop() ? new Thickness(14, 0, 14, 14) : new Thickness(14);
 			// 停止 ctor 阶段可能已启动的入场动画：动画持有期间直接赋值 Width/Height
@@ -6811,7 +7159,7 @@ bool full = FullscreenState.Active() && !ForegroundIsMaximized();
 // 只有被动状态（收起�?事件卡）在“全屏时隐藏”开启时避让�?
 
 
-if ((game || !O.ShowOnFullscreen) && mode != Mode.Hidden && (game || mode != Mode.Expanded))
+if ((game || !O.ShowOnFullscreen) && mode != Mode.Hidden && (game || mode != Mode.Expanded) && mode != Mode.Toast)
 			{
 				HideForFullscreen();
 			}
@@ -7298,18 +7646,21 @@ private void RestyleToast()
 		{
 			if (key == lastRealTrackKey && lyricAge > 5.0)
 			{
-				// 标题短暂丢失后恢复为同一首歌（播放器内部跳转/会话重启引起的一过性空缺）：
-				// 歌词位置已不可知。不重置时钟、不显示错位歌词——改为显示歌手名。
-				lyricUntrusted = true;
+				// title lost then restored for same track: keep timeline anchor/stopwatch,
+				// do NOT mark untrusted (mis-fires on players with flapping titles)
 			}
 			else
 			{
 				// 真正切歌：重置歌词与跳动条运动状态，重新计时（无时间线播放器用）
 				lastRealTrackKey = key;
 				trackSwitched = true;
-				IslandLyrics.Reset(M.Artist, M.Title);
+				IslandLyrics.Reset(M.Artist, M.Title, M.Album, M.Duration);
 				lyricStartUtc = DateTime.Now;
 				lyricUntrusted = false;
+				lyricAnchorPos = -1.0;
+				lyricAnchorUtc = DateTime.MinValue;
+				lyricPausedElapsed = 0.0;
+				lyricTlDead = false;
 				for (int i = 0; i < eqCap.Length; i++)
 				{
 					eqCap[i] = 0.0;
@@ -7320,9 +7671,36 @@ private void RestyleToast()
 		}
 		else if (sessChanged && !placeholder && !changed && M.Playing && M.Duration <= 0 && key == lastRealTrackKey && lyricAge > 5.0)
 		{
-			// 无时间线播放器（如网易云桌面版）在播放器内部拖动进度时，媒体会话会重启，
-			// 但曲目不变、仍在播放：歌词位置已不可知，改为显示歌手名，绝不显示错位歌词。
-			lyricUntrusted = true;
+			// 会话重启不再判 untrusted：汽水音乐等播放器切歌后 GSMTC 会话会多次重建，
+			// 该判定会把正常切歌误伤为"位置不可知"，导致歌词行被清空（完全不显示）。
+			// 拖动进度造成的错位由时间线死亡检测与锚点重锚定兜底。
+		}
+		if (playingChanged && !placeholder)
+		{
+			// 暂停/恢复：歌词时钟与播放状态严格同步，消除"恢复后数秒才继续"的滞后。
+			if (M.Playing)
+			{
+				// 恢复播放：无时间线秒表从冻结点继续（有时间线走 lyricAnchorPos 冻结/重锚定，无需处理）
+				if (M.Duration <= 0 && lyricPausedElapsed > 0.0)
+				{
+					lyricStartUtc = DateTime.Now.AddSeconds(-lyricPausedElapsed);
+				}
+				lyricPausedElapsed = 0.0;
+			}
+			else
+			{
+				// 暂停：冻结当前进度
+				if (M.Duration <= 0)
+				{
+					lyricPausedElapsed = lyricStartUtc == DateTime.MinValue ? 0.0 : (DateTime.Now - lyricStartUtc).TotalSeconds;
+				}
+				else
+				{
+					lyricPausedElapsed = M.Position;
+					lyricAnchorPos = M.Position;
+					lyricAnchorUtc = DateTime.UtcNow;
+				}
+			}
 		}
 		if (mode == Mode.Collapsed)
 		{

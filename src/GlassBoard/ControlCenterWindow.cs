@@ -338,10 +338,22 @@ public class ControlCenterWindow : GlassWindow
 			Width = GridLength.Auto
 		});
 		header.Children.Add(Label("控制中心", 16.0, FontWeights.SemiBold, TextBrush));
-		TextBlock tip = Label("跟随 Dock 主题", 10.5, FontWeights.Normal, MutedBrush);
+		TextBlock tip = Label("拖动标题栏可移动，位置会被记住", 10.5, FontWeights.Normal, MutedBrush);
 		tip.VerticalAlignment = VerticalAlignment.Center;
 		Grid.SetColumn(tip, 1);
 		header.Children.Add(tip);
+		header.Cursor = Cursors.SizeAll;
+		header.MouseLeftButtonDown += (object s, MouseButtonEventArgs e) =>
+		{
+			try
+			{
+				DragMove();
+				SavePanelPosition();
+			}
+			catch
+			{
+			}
+		};
 		body.Children.Add(header);
 
 		Grid tiles = new Grid
@@ -912,10 +924,23 @@ public class ControlCenterWindow : GlassWindow
 		Height = Math.Max(240.0, Math.Min(600.0, page.DesiredSize.Height + 28.0));
 	}
 
-	// 始终贴着 Dock 右缘：上方 10px，空间不足则翻到 Dock 下方
+	// 用户拖动过标题栏则用保存位置（越界自动回退贴 Dock 右缘）
 	private void PositionPanel()
 	{
 		Rect wa = SystemParameters.WorkArea;
+		double? savedLeft = C.Prefs.Placement.ControlLeft;
+		double? savedTop = C.Prefs.Placement.ControlTop;
+		if (savedLeft.HasValue && savedTop.HasValue)
+		{
+			double sl = savedLeft.Value;
+			double st = savedTop.Value;
+			if (sl >= wa.Left - 40.0 && sl <= wa.Right - 100.0 && st >= wa.Top - 40.0 && st <= wa.Bottom - 100.0)
+			{
+				Left = Math.Max(wa.Left + 8.0, Math.Min(sl, wa.Right - Width - 8.0));
+				Top = Math.Max(wa.Top + 8.0, Math.Min(st, wa.Bottom - Height - 8.0));
+				return;
+			}
+		}
 		double dockTop = C.Dock.Top;
 		double dockLeft = C.Dock.Left;
 		double dockWidth = C.Dock.Width;
@@ -928,6 +953,24 @@ public class ControlCenterWindow : GlassWindow
 		}
 		Left = left;
 		Top = top;
+	}
+
+	// 拖动结束后保存面板位置（越界/贴边保护：丢弃明显不合法的坐标）
+	private void SavePanelPosition()
+	{
+		try
+		{
+			Rect wa = SystemParameters.WorkArea;
+			if (Left >= wa.Left - 40.0 && Top >= wa.Top - 40.0 && Left + Width <= wa.Right + 40.0)
+			{
+				C.Prefs.Placement.ControlLeft = Left;
+				C.Prefs.Placement.ControlTop = Top;
+				C.Save();
+			}
+		}
+		catch
+		{
+		}
 	}
 
 	[DllImport("PowrProf.dll", SetLastError = true)]

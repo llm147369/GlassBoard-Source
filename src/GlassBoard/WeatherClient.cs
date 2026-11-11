@@ -322,6 +322,40 @@ public static class WeatherClient
 
 	public static GeoPlace AutoLocate()
 	{
+		// 上次成功定位的城市缓存——桌面机位置基本不变，缓存可避开每次启动
+		// 都打 IP 定位接口造成的限流（ipinfo.io 免费层 429 Too Many Requests）。
+		string cacheFile = Path.Combine(Store.Folder, "weather-geo.json");
+		try
+		{
+			if (File.Exists(cacheFile))
+			{
+				GeoPlace cached = (GeoPlace)new DataContractJsonSerializer(typeof(GeoPlace)).ReadObject(File.OpenRead(cacheFile));
+				if (cached != null && !string.IsNullOrWhiteSpace(cached.Name) && Math.Abs(cached.Latitude) <= 90.0 && Math.Abs(cached.Longitude) <= 180.0 && (Math.Abs(cached.Latitude) > 0.01 || Math.Abs(cached.Longitude) > 0.01))
+				{
+					return cached;
+				}
+			}
+		}
+		catch
+		{
+		}
+		GeoPlace result = LocateOnline();
+		try
+		{
+			using (MemoryStream memoryStream = new MemoryStream())
+			{
+				new DataContractJsonSerializer(typeof(GeoPlace)).WriteObject(memoryStream, result);
+				File.WriteAllText(cacheFile, Encoding.UTF8.GetString(memoryStream.ToArray()));
+			}
+		}
+		catch
+		{
+		}
+		return result;
+	}
+
+	private static GeoPlace LocateOnline()
+	{
 		Exception last = null;
 		try
 		{
@@ -420,6 +454,18 @@ public static class WeatherClient
 				Code = -1
 			}
 		};
+	}
+
+	public static bool IsRateLimited(Exception exception)
+	{
+		for (Exception e = exception; e != null; e = e.InnerException)
+		{
+			if (e is WebException webException && webException.Response is HttpWebResponse httpWebResponse && (int)httpWebResponse.StatusCode == 429)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static string Failure(Exception exception)

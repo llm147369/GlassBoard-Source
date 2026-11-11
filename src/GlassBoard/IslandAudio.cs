@@ -42,6 +42,110 @@ public static class IslandAudio
 		get { lock (gate) { return running; } }
 	}
 
+	// 引用计数：灵动岛与桌面律动组件共用同一份采集。计数归零才真正停止，
+	// 避免任一方退出时把另一方的数据源停掉。
+	private static int users;
+	private static int restartAttempts;
+	private static DateTime lastDataUtc = DateTime.UtcNow;
+	private static System.Threading.Timer stallWatch;
+	private static bool stallBusy;
+
+	// 采集静默看门狗：WASAPI 共享流偶发静默停发（无 RecordingStopped 事件），
+	// 每 2s 检查一次，数据断流 >2.5s 且仍有使用者时强制重建采集。
+	private static void OnStallCheck(object state)
+	{
+		bool needRestart = false;
+		lock (gate)
+		{
+			needRestart = running && users > 0 && !stallBusy && (DateTime.UtcNow - lastDataUtc).TotalSeconds > 2.5;
+			if (needRestart)
+			{
+				stallBusy = true;
+			}
+		}
+		if (!needRestart)
+		{
+			return;
+		}
+		try
+		{
+			WasapiLoopbackCapture old;
+			lock (gate)
+			{
+				old = capture;
+				capture = null;
+			}
+			try
+			{
+				old?.StopRecording();
+			}
+			catch
+			{
+			}
+			try
+			{
+				old?.Dispose();
+			}
+			catch
+			{
+			}
+			Store.Trace("AUDIO stall restart");
+			Start();
+		}
+		finally
+		{
+			lock (gate)
+			{
+				stallBusy = false;
+			}
+		}
+	}
+
+	// 设备意外停采（默认格式切换/设备重枚举）后的自愈重启：延迟 600ms 再拉，最多连试
+	// 10 次（约 6 秒）；期间 OnData 正常到达即清零计数。避免与设备的重枚举风暴对撞。
+	private static void ScheduleRestart()
+	{
+		System.Threading.ThreadPool.QueueUserWorkItem(delegate
+		{
+			System.Threading.Thread.Sleep(600);
+			lock (gate)
+			{
+				if (!running || users <= 0 || restartAttempts >= 10)
+				{
+					return;
+				}
+			}
+			restartAttempts++;
+			Start();
+		});
+	}
+
+	public static void Acquire()
+	{
+		lock (gate)
+		{
+			users++;
+		}
+		Start();
+	}
+
+	public static void Release()
+	{
+		bool stop = false;
+		lock (gate)
+		{
+			if (users > 0)
+			{
+				users--;
+			}
+			stop = (users == 0);
+		}
+		if (stop)
+		{
+			Stop();
+		}
+	}
+
 	public static void Start()
 	{
 		WasapiLoopbackCapture cap;
@@ -62,12 +166,23 @@ public static class IslandAudio
 				cap.DataAvailable += OnData;
 				cap.RecordingStopped += (object s, StoppedEventArgs e) =>
 				{
+					bool restart = false;
 					lock (gate)
 					{
 						if (ReferenceEquals(capture, cap))
 						{
 							capture = null;
 						}
+						restart = running && users > 0;
+					}
+					Store.Trace("AUDIO stopped ex=" + (e.Exception != null ? e.Exception.GetType().Name : "null") + " restart=" + restart);
+					if (restart)
+					{
+						ScheduleRestart();
+					}
+					else
+					{
+						restartAttempts = 0;
 					}
 				};
 				capture = cap;
@@ -75,6 +190,11 @@ public static class IslandAudio
 			// 用局部引用启动：RecordingStopped 回调可能在锁释放后恰好清掉字段（设备自行失效），
 			// 此时字段二次读取会抛空引用并被 catch 静默吞掉，导致采集永久假死、跳动条冻结。
 			cap.StartRecording();
+			lastDataUtc = DateTime.UtcNow;
+			if (stallWatch == null)
+			{
+				stallWatch = new System.Threading.Timer(OnStallCheck, null, 2000, 2000);
+			}
 		}
 		catch (Exception ex)
 		{
@@ -131,6 +251,8 @@ public static class IslandAudio
 			{
 				return;
 			}
+			restartAttempts = 0;
+			lastDataUtc = DateTime.UtcNow;
 			int channels = cap.WaveFormat != null && cap.WaveFormat.Channels > 0 ? cap.WaveFormat.Channels : 2;
 			int floatCount = e.BytesRecorded / 4;
 			if (floatCount < fftLength)

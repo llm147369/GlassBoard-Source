@@ -104,7 +104,15 @@ public sealed class WeatherEngine
 			{
 				failures++;
 				Message = ((Snapshot == null) ? "" : "显示上次数据 · ") + WeatherClient.Failure(ex) + " · 稍后自动重试，也可点击刷新";
-				Store.Log(ex);
+				if (WeatherClient.IsRateLimited(ex))
+				{
+					// 服务端限流（HTTP 429）是正常配额现象，只记会话日志，不污染 error.log
+					Store.Trace("WEATHER rate-limited: " + ex.Message);
+				}
+				else
+				{
+					Store.Log(ex);
+				}
 			}
 		}
 		finally

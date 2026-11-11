@@ -28,7 +28,8 @@ public sealed class IslandOptions
 		CollapsedHeight = 76.0;
 		ExpandedWidth = 422.75;
 		TopGap = 0.0;
-		OpacityPercent = 22.0;
+		HorizontalOffset = 0.0;
+		OpacityPercent = 78.0;
 		BlurRadius = 0.0;
 		BorderOpacity = 0.35;
 		ShadowStrength = 0.3;
@@ -127,6 +128,10 @@ public sealed class IslandOptions
 	[DataMember]
 	public double TopGap = 0.0;
 
+	// 水平偏移（物理像素语义）：正=右移，负=左移；配合顶部居中定位
+	[DataMember]
+	public double HorizontalOffset = 0.0;
+
 	// 0 = 主显示器；越界时回退主显示器
 	[DataMember]
 	public int MonitorIndex = 0;
@@ -145,7 +150,7 @@ public sealed class IslandOptions
 
 	// 不透明度 10..100（100 = 完全不透明）
 	[DataMember]
-	public double OpacityPercent = 22.0;
+	public double OpacityPercent = 78.0;
 
 	// 模糊程度 0..40（玻璃材质的底图模糊；纯色预设下仍影响边缘氛围）
 	[DataMember]
@@ -253,6 +258,10 @@ public sealed class IslandOptions
 	[DataMember]
 	public bool ShowOnFullscreen = false;
 
+	// 全屏隐藏时仍允许消息弹出（通知到达时临时恢复显示，ShowOnFullscreen=false 时生效）
+	[DataMember]
+	public bool NotifyOnFullscreen = false;
+
 	// 事件提示卡停留秒数 2..15
 	[DataMember]
 	public double NotifyDurationSec = 5.0;
@@ -293,6 +302,17 @@ public sealed class IslandOptions
 
 	[DataMember]
 	public int ClipboardRetainDays = 14;
+
+	// 歌词颜色（#RRGGBB，空=跟随主题次要色）；歌词高亮色（空=跟随强调色）
+	[DataMember]
+	public string LyricColor = "";
+
+	[DataMember]
+	public string LyricActiveColor = "";
+
+	// 歌词手动校准偏移（秒，负数=歌词提前，正数=歌词延后）
+	[DataMember]
+	public double LyricOffset = 0.0;
 
 	// —— 灵动岛升级：收起态三段分区 ——
 	// 收起态布局：0=经典三段（封面 | 主信息 ┊ 时钟/天气/电量）1=极简（仅封面+标题）2=信息优先（无封面）
@@ -443,6 +463,7 @@ public sealed class IslandOptions
 			FollowSystemTheme = FollowSystemTheme,
 			Light = Light,
 			ShowOnFullscreen = ShowOnFullscreen,
+			NotifyOnFullscreen = NotifyOnFullscreen,
 			NotifyDurationSec = NotifyDurationSec,
 			HideNotifyBody = HideNotifyBody,
 			MutedApps = (MutedApps ?? new List<string>()).Select((string a) => (a ?? "").ToLowerInvariant()).ToList(),
@@ -454,6 +475,9 @@ public sealed class IslandOptions
 			ClipboardPaused = ClipboardPaused,
 			ClipboardMaxItems = ClipboardMaxItems,
 			ClipboardRetainDays = ClipboardRetainDays,
+			LyricColor = LyricColor,
+			LyricActiveColor = LyricActiveColor,
+			LyricOffset = LyricOffset,
 			CollapsedLayout = CollapsedLayout,
 			AdaptiveContrast = AdaptiveContrast,
 			ShowTimeChip = ShowTimeChip,
@@ -611,12 +635,13 @@ public sealed class IslandOptions
 			SizeScale = 1.0;
 		}
 		// 旧配置缺失 Width/HeightScale 字段 → 反序列化为 0 → 取 SizeScale 作为初值
-		WidthScale = LayoutRules.Clamp(WidthScale < 0.99 ? SizeScale : WidthScale, 0.8, 2.0, 1.0);
+		WidthScale = LayoutRules.Clamp(WidthScale < 0.99 ? SizeScale : WidthScale, 0.41, 2.0, 1.0);
 		HeightScale = LayoutRules.Clamp(HeightScale < 0.99 ? SizeScale : HeightScale, 0.8, 2.0, 1.0);
-		CollapsedWidth = LayoutRules.Clamp(320.0 * WidthScale, 180.0, 640.0, 320.0);
+		CollapsedWidth = LayoutRules.Clamp(320.0 * WidthScale, 132.0, 640.0, 320.0);
 		CollapsedHeight = LayoutRules.Clamp(64.0 * HeightScale, 40.0, 128.0, 64.0);
 		ExpandedWidth = LayoutRules.Clamp(380.0 * WidthScale, 240.0, 760.0, 380.0);
 		TopGap = LayoutRules.Clamp(TopGap, 0.0, 200.0, 10.0);
+		HorizontalOffset = LayoutRules.Clamp(HorizontalOffset, -800.0, 800.0, 0.0);
 		MonitorIndex = Math.Max(0, MonitorIndex);
 		Accent = Math.Max(0, Math.Min(5, Accent));
 		if (BackgroundColor == null)
@@ -648,6 +673,7 @@ public sealed class IslandOptions
 		EqualizerStyle = Math.Max(0, Math.Min(4, EqualizerStyle));
 		ClipboardMaxItems = Math.Max(10, Math.Min(500, ClipboardMaxItems));
 		ClipboardRetainDays = Math.Max(1, Math.Min(90, ClipboardRetainDays));
+		LyricOffset = Math.Max(-5.0, Math.Min(5.0, LyricOffset));
 		CollapsedLayout = Math.Max(0, Math.Min(2, CollapsedLayout));
 		NotifyArrivalStyle = Math.Max(0, Math.Min(2, NotifyArrivalStyle));
 		HudDurationSec = LayoutRules.Clamp(HudDurationSec, 0.8, 3.0, 1.5);

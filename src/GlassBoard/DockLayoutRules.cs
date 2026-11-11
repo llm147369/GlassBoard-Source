@@ -59,7 +59,7 @@ public static class DockLayoutRules
 		}
 	}
 
-	private static List<string> Merge(IEnumerable<string> saved, List<string> apps)
+	private static List<string> Merge(DockOptions dock, IEnumerable<string> saved, List<string> apps)
 	{
 		HashSet<string> allowed = new HashSet<string>(SystemKeys.Concat(apps), StringComparer.OrdinalIgnoreCase);
 		List<string> list = (saved ?? new string[0]).Where((string k) => k != null && allowed.Contains(k)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -71,6 +71,12 @@ public static class DockLayoutRules
 		string[] systemKeys = SystemKeys;
 		foreach (string text in systemKeys)
 		{
+			// 被设置开关关闭的系统项（如游戏模式）不补齐进 ItemOrder：
+			// 否则关闭开关后该项仍被 Merge 自动塞回列表，入口无法真正隐藏。
+			if (!Visible(dock, text))
+			{
+				continue;
+			}
 			if (!list.Contains(text, StringComparer.OrdinalIgnoreCase))
 			{
 				list.Add(text);
@@ -93,7 +99,7 @@ public static class DockLayoutRules
 
 	public static List<string> Common(Preferences p, bool visible = false)
 	{
-		List<string> list = Merge(p.Dock.ItemOrder, (from a in DockOrderRules.Ordered(p)
+		List<string> list = Merge(p.Dock, p.Dock.ItemOrder, (from a in DockOrderRules.Ordered(p)
 			select a.Path).ToList());
 		if (!visible)
 		{
@@ -128,7 +134,7 @@ public static class DockLayoutRules
 			}
 			enumerable = list2;
 		}
-		List<string> list3 = Merge(enumerable, list);
+		List<string> list3 = Merge(p.Dock, enumerable, list);
 		if (!visible)
 		{
 			return list3;

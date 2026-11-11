@@ -1,4 +1,4 @@
-# pack-release.ps1 — GlassBoard 发布包打包脚本
+﻿# pack-release.ps1 — GlassBoard 发布包打包脚本
 #
 # 用法:
 #   powershell -ExecutionPolicy Bypass -File pack-release.ps1            # 构建 Release 并打包

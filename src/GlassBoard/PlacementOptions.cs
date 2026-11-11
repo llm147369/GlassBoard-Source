@@ -33,6 +33,12 @@ public class PlacementOptions
 	public double? WidgetTop;
 
 	[DataMember]
+	public double? ControlLeft;
+
+	[DataMember]
+	public double? ControlTop;
+
+	[DataMember]
 	public bool DockLocked = true;
 
 	[DataMember]
@@ -59,6 +65,8 @@ public class PlacementOptions
 		PanelTop = Valid(PanelTop);
 		WidgetLeft = Valid(WidgetLeft);
 		WidgetTop = Valid(WidgetTop);
+		ControlLeft = Valid(ControlLeft);
+		ControlTop = Valid(ControlTop);
 		PanelWidth = Valid(PanelWidth);
 		PanelHeight = Valid(PanelHeight);
 		if (PanelWidth < 320.0)

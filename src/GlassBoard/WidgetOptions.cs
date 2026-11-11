@@ -21,6 +21,9 @@ public class WidgetOptions
 	public bool Notes;
 
 	[DataMember]
+	public bool Visualizer;
+
+	[DataMember]
 	public int ClockPanel;
 
 	[DataMember]
@@ -31,6 +34,17 @@ public class WidgetOptions
 
 	[DataMember]
 	public int NotesPanel;
+
+	[DataMember]
+	public int VisualizerPanel;
+
+	// 律动样式：0 极光镜像柱 1 频谱曲线 2 双螺旋 3 粒子喷泉 4 音轨条带 5 径向频谱
+	[DataMember]
+	public int VisualizerStyle;
+
+	// 律动配色：0 极光蓝紫 1 青绿 2 粉红 3 橙金 4 紫红 5 绿 6 红 7 白 8 彩虹 9 跟随强调色
+	[DataMember]
+	public int VisualizerColor;
 
 	[DataMember]
 	public bool CompactMusic;
@@ -134,6 +148,9 @@ public class WidgetOptions
 		WeatherPanel = Panel(WeatherPanel);
 		MusicPanel = Panel(MusicPanel);
 		NotesPanel = Panel(NotesPanel);
+		VisualizerPanel = Panel(VisualizerPanel);
+		VisualizerStyle = Math.Max(0, Math.Min(5, VisualizerStyle));
+		VisualizerColor = Math.Max(0, Math.Min(9, VisualizerColor));
 		MusicMode = ((MusicMode == "local") ? "local" : "system");
 		Playlist = (Playlist ?? new List<string>()).Where((string p) => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 		TrackIndex = ((Playlist.Count != 0) ? Math.Max(0, Math.Min(Playlist.Count - 1, TrackIndex)) : 0);
