@@ -612,16 +612,36 @@ public class VideoWindow
 			{
 			}
 
-			var env = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(null, System.IO.Path.Combine(Store.Folder, "WebView2"));
+			Store.Trace("VIDEOWALL env init...");
+			System.Threading.Tasks.Task<Microsoft.Web.WebView2.Core.CoreWebView2Environment> envTask =
+				Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(null, System.IO.Path.Combine(Store.Folder, "WebView2"));
+			if (await System.Threading.Tasks.Task.WhenAny(envTask, System.Threading.Tasks.Task.Delay(20000)) != envTask)
+			{
+				Store.Trace("VIDEOWALL env init timeout");
+				DispatcherSafe(status, "WebView2 初始化超时：运行时可能刚安装未重启电脑，请重启电脑后再开启动态壁纸。");
+				VideoWallpaper.Stop();
+				return;
+			}
+			var env = await envTask;
 			if (stopped)
 			{
 				return;
 			}
-			await web.EnsureCoreWebView2Async(env);
+			Store.Trace("VIDEOWALL env ok");
+			System.Threading.Tasks.Task ensureTask = web.EnsureCoreWebView2Async(env);
+			if (await System.Threading.Tasks.Task.WhenAny(ensureTask, System.Threading.Tasks.Task.Delay(20000)) != ensureTask)
+			{
+				Store.Trace("VIDEOWALL ensure timeout");
+				DispatcherSafe(status, "WebView2 初始化超时：运行时可能刚安装未重启电脑，请重启电脑后再开启动态壁纸。");
+				VideoWallpaper.Stop();
+				return;
+			}
+			await ensureTask;
 			if (stopped)
 			{
 				return;
 			}
+			Store.Trace("VIDEOWALL ensure ok");
 			web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
 			web.CoreWebView2.Settings.IsStatusBarEnabled = false;
 			web.CoreWebView2.Settings.IsZoomControlEnabled = false;
