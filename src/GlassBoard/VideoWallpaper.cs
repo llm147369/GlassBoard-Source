@@ -368,9 +368,21 @@ public static class VideoWallpaper
 		SetParent(hwnd, wall);
 		SetWindowLong(hwnd, -16, (GetWindowLong(hwnd, -16) & 0x7FFFFFFF) | 0x40000000); // 去 WS_POPUP 加 WS_CHILD
 		ShowWindow(hwnd, 8);
-		// 置顶：盖过 WorkerW 内其它动态壁纸窗口（Folia 等）；Progman 兜底时排到
-		// DefView（图标层）之下、壁纸之上（HWND_BOTTOM=1，不屏蔽 z 序插入）。
-		SetWindowPos(hwnd, bottom ? (IntPtr)1 : IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | (bottom ? 0u : 0x0004u));
+		// 置顶：盖过 WorkerW 内其它动态壁纸窗口（Folia 等）。Progman 兜底时排到
+		// DefView（图标层）之后=之下、壁纸之上（与 WorkerW 同层语义）；
+		// DefView 找不到才用 HWND_BOTTOM。
+		IntPtr after = IntPtr.Zero;
+		uint zflags = 0x0004u;
+		if (bottom)
+		{
+			after = FindWindowEx(FindWindow("Progman", null), IntPtr.Zero, "SHELLDLL_DefView", null);
+			if (after == IntPtr.Zero)
+			{
+				after = (IntPtr)1;
+			}
+			zflags = 0u;
+		}
+		SetWindowPos(hwnd, after, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | zflags);
 	}
 
 	private static void AttachToDesktop(VideoWindow w)
@@ -381,7 +393,26 @@ public static class VideoWallpaper
 			return;
 		}
 		AttachToWorkerW(hwnd);
+		RECT r;
+		GetWindowRect(hwnd, out r);
+		Store.Trace("VIDEOWALL attach hwnd=" + hwnd + " parent=" + GetParent(hwnd) + " vis=" + IsWindowVisible(hwnd) +
+			" rect=(" + r.Left + "," + r.Top + ")-(" + r.Right + "," + r.Bottom + ") style=0x" + GetWindowLong(hwnd, -16).ToString("X8"));
 	}
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct RECT
+	{
+		public int Left;
+
+		public int Top;
+
+		public int Right;
+
+		public int Bottom;
+	}
+
+	[DllImport("user32.dll")]
+	private static extern bool GetWindowRect(IntPtr h, out RECT r);
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	internal static extern IntPtr FindWindow(string cls, string title);
