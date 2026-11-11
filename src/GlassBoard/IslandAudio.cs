@@ -26,7 +26,9 @@ public static class IslandAudio
 	private static readonly int[] counts = new int[BandCount];
 
 	private const int fftLength = 1024;
-	private static readonly Complex[] fftBuf = new Complex[fftLength];
+	// 延迟分配：类型初始化不触碰 NAudio 类型——发布包缺 NAudio.Core.dll 时律动静默
+	// 降级（Start 内 try/catch 兜底），而不是整个灵动岛随类型初始化一起崩。
+	private static Complex[] fftBuf;
 	private static readonly float[] samples = new float[fftLength];
 
 	static IslandAudio()
@@ -34,6 +36,14 @@ public static class IslandAudio
 		for (int i = 0; i < BandCount; i++)
 		{
 			peak[i] = 1e-3;
+		}
+	}
+
+	private static void EnsureFft()
+	{
+		if (fftBuf == null)
+		{
+			fftBuf = new Complex[fftLength];
 		}
 	}
 
@@ -259,6 +269,7 @@ public static class IslandAudio
 			{
 				return;
 			}
+			EnsureFft();
 			// 数据为 IEEE float32 交错声道，取最新 1024 帧（左右声道平均）。
 			int n = fftLength;
 			for (int i = 0; i < n; i++)

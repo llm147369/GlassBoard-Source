@@ -53,6 +53,20 @@ public static class Store
 		}
 	}
 
+	// 纯文本错误记录（error.log，与 Trace 的 session.log 分开）：
+	// 弹窗提示"查看 error.log"的场景必须有对应条目，避免用户扑空。
+	public static void LogError(string message)
+	{
+		try
+		{
+			Directory.CreateDirectory(Folder);
+			File.AppendAllText(Path.Combine(Folder, "error.log"), DateTime.Now.ToString("s") + " [" + Assembly.GetExecutingAssembly().GetName().Version?.ToString() + "] " + message + Environment.NewLine);
+		}
+		catch
+		{
+		}
+	}
+
 	private static byte[] Encode<T>(T value)
 	{
 		using MemoryStream memoryStream = new MemoryStream();

@@ -64,6 +64,19 @@ public static class VideoWallpaper
 			PostStatus(status, "检测到 Wallpaper Engine 正在运行：两者会争夺壁纸层，请先在 WPE 中退出，再开启视频壁纸。");
 			return;
 		}
+		// Win10/精简系统常见：未装 WebView2 运行时。提前探测并给出明确指引，
+		// 避免只报"启动失败、查看日志"而日志里又找不到对应条目。
+		try
+		{
+			Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString();
+		}
+		catch (Exception rtx)
+		{
+			Store.Trace("VIDEOWALL runtime missing: " + rtx.GetType().Name + " " + rtx.Message);
+			Store.LogError("VIDEOWALL runtime missing: " + rtx.GetType().Name + " " + rtx.Message);
+			PostStatus(status, "未检测到 WebView2 运行时（Win10 未安装时为常见原因）：请到 https://developer.microsoft.com/microsoft-edge/webview2/ 下载安装后重启应用。");
+			return;
+		}
 		try
 		{
 			window = new VideoWindow();
@@ -78,6 +91,7 @@ public static class VideoWallpaper
 		catch (Exception ex)
 		{
 			Store.Trace("VIDEOWALL start failed: " + ex.GetType().FullName + " " + ex.Message);
+			Store.LogError("VIDEOWALL start failed: " + ex.GetType().FullName + " " + ex.Message);
 			try
 			{
 				if (window != null)
@@ -90,7 +104,7 @@ public static class VideoWallpaper
 			}
 			window = null;
 			CurrentPath = null;
-			PostStatus(status, "动态壁纸启动失败，详见配置目录 error.log。");
+			PostStatus(status, "动态壁纸启动失败，详见配置目录 session.log 与 error.log。");
 		}
 	}
 
@@ -639,10 +653,11 @@ public class VideoWindow
 		catch (Exception ex)
 		{
 			Store.Trace("VIDEOWALL load failed: " + ex.GetType().FullName + " " + ex.Message);
+			Store.LogError("VIDEOWALL load failed: " + ex.GetType().FullName + " " + ex.Message);
 			if (status != null)
 			{
 				Action<string> cb = status;
-				DispatcherSafe(cb, "动态壁纸启动失败，详见配置目录 session.log。");
+				DispatcherSafe(cb, "动态壁纸启动失败，详见配置目录 session.log 与 error.log。");
 			}
 			VideoWallpaper.Stop();
 		}
