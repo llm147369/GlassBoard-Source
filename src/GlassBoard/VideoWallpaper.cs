@@ -326,18 +326,34 @@ public static class VideoWallpaper
 	private static IntPtr FindWallWorkerW()
 	{
 		IntPtr progman = FindWindow("Progman", null);
-		if (progman == IntPtr.Zero)
+		if (progman != IntPtr.Zero)
 		{
-			return IntPtr.Zero;
+			IntPtr wall = FindWindowEx(progman, IntPtr.Zero, "WorkerW", null);
+			if (wall == IntPtr.Zero)
+			{
+				// 无 WorkerW 时向 Progman 发送 0x052C 让 explorer 创建（幂等安全）
+				SendMessageTimeout(progman, 0x052C, IntPtr.Zero, IntPtr.Zero, 0, 1000, out IntPtr _);
+				wall = FindWindowEx(progman, IntPtr.Zero, "WorkerW", null);
+			}
+			if (wall != IntPtr.Zero)
+			{
+				return wall;
+			}
 		}
-		IntPtr wall = FindWindowEx(progman, IntPtr.Zero, "WorkerW", null);
-		if (wall == IntPtr.Zero)
+		// 兜底：Win10 某些 shell 主题/第三方桌面工具下 WorkerW 的父窗口不是 Progman。
+		// 枚举所有顶层窗口找可见的 WorkerW（取最后一个=z 序最低的壁纸层）。
+		IntPtr found = IntPtr.Zero;
+		EnumWindows(delegate (IntPtr h, IntPtr lp)
 		{
-			// 无 WorkerW 时向 Progman 发送 0x052C 让 explorer 创建（幂等安全）
-			SendMessageTimeout(progman, 0x052C, IntPtr.Zero, IntPtr.Zero, 0, 1000, out IntPtr _);
-			wall = FindWindowEx(progman, IntPtr.Zero, "WorkerW", null);
-		}
-		return wall;
+			var cn = new System.Text.StringBuilder(64);
+			GetClassName(h, cn, 64);
+			if (cn.ToString() == "WorkerW" && IsWindowVisible(h))
+			{
+				found = h;
+			}
+			return true;
+		}, IntPtr.Zero);
+		return found;
 	}
 
 	// 挂载到壁纸 WorkerW 层（图标之下、壁纸之上）：
@@ -453,10 +469,15 @@ public static class VideoWallpaper
 	[DllImport("user32.dll")]
 	private static extern bool EnumChildWindows(IntPtr parent, EnumChildProc callback, IntPtr lp);
 
+	[DllImport("user32.dll")]
+	private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lp);
+
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	private static extern int GetClassName(IntPtr h, System.Text.StringBuilder sb, int max);
 
 	private delegate bool EnumChildProc(IntPtr h, IntPtr lp);
+
+	private delegate bool EnumWindowsProc(IntPtr h, IntPtr lp);
 
 	// 点击壁纸层窗口时，WM_MOUSEACTIVATE 会被 WorkerW 转发到被点击的最深子窗口
 	// （Chrome_RenderWidgetHostHWND 等，跨进程、不经我们的 HwndSource hook），这些窗口
