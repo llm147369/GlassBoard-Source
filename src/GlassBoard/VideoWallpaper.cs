@@ -79,11 +79,21 @@ public static class VideoWallpaper
 		}
 		try
 		{
+			if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+			{
+				return;
+			}
 			window = new VideoWindow();
 			CurrentPath = path;
 			currentVolume = Math.Max(0.0, Math.Min(100.0, volume));
 			currentMuted = muted;
 			window.Load(path, currentVolume, currentMuted, FindWallWorkerW(), status);
+			// Load 内部失败会调用 Stop() 把 window 置空（异步 void 的同步段直接抛），
+			// 此处必须复查，否则继续解引用 null 产生 NullReferenceException。
+			if (window == null || window.IsDisposed || !window.IsHandleCreated)
+			{
+				return;
+			}
 			AttachToDesktop(window);
 			attached = true;
 			EnsureWatchdog();
@@ -336,16 +346,31 @@ public static class VideoWallpaper
 	// 必须同时把样式转为 WS_CHILD（去掉 WS_POPUP）才能稳定挂载。
 	private static void AttachToWorkerW(IntPtr hwnd)
 	{
+		if (hwnd == IntPtr.Zero)
+		{
+			return;
+		}
 		IntPtr wall = FindWallWorkerW();
-		if (wall == IntPtr.Zero || hwnd == IntPtr.Zero)
+		bool bottom = false;
+		if (wall == IntPtr.Zero)
+		{
+			// Win10 精简/自定义 shell 可能没有 WorkerW（或 0x052C 创建失败）。
+			// 兜底挂到 Progman 本身并排到 DefView（图标层）之下：视频在壁纸上、
+			// 图标之下，效果等效；不可再创建 WS_CHILD 顶层窗口（CreateWindowEx 会
+			// 直接失败报「无法创建最上层子窗口」）。
+			wall = FindWindow("Progman", null);
+			bottom = true;
+		}
+		if (wall == IntPtr.Zero)
 		{
 			return;
 		}
 		SetParent(hwnd, wall);
 		SetWindowLong(hwnd, -16, (GetWindowLong(hwnd, -16) & 0x7FFFFFFF) | 0x40000000); // 去 WS_POPUP 加 WS_CHILD
 		ShowWindow(hwnd, 8);
-		// 置顶：盖过 WorkerW 内其它动态壁纸窗口（Folia 等）
-		SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+		// 置顶：盖过 WorkerW 内其它动态壁纸窗口（Folia 等）；Progman 兜底时排到
+		// DefView（图标层）之下、壁纸之上（HWND_BOTTOM=1，不屏蔽 z 序插入）。
+		SetWindowPos(hwnd, bottom ? (IntPtr)1 : IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | (bottom ? 0u : 0x0004u));
 	}
 
 	private static void AttachToDesktop(VideoWindow w)
@@ -359,7 +384,7 @@ public static class VideoWallpaper
 	}
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
-	private static extern IntPtr FindWindow(string cls, string title);
+	internal static extern IntPtr FindWindow(string cls, string title);
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
@@ -536,13 +561,26 @@ public class VideoWindow
 			}
 
 			Rect vs = new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop, SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+			IntPtr parent = wall;
+			if (parent == IntPtr.Zero)
+			{
+				// Win10 精简/自定义 shell 无 WorkerW：直接挂 Progman（AttachToWorkerW 会排到图标层之下）。
+				parent = VideoWallpaper.FindWindow("Progman", null);
+			}
+			if (parent == IntPtr.Zero)
+			{
+				Store.Trace("VIDEOWALL no desktop host window");
+				DispatcherSafe(status, "未找到桌面壁纸层（Progman/WorkerW 缺失），无法创建视频壁纸窗口。");
+				VideoWallpaper.Stop();
+				return;
+			}
 			HwndSourceParameters p = new HwndSourceParameters("GlassBoardVideoWallpaper")
 			{
 				PositionX = (int)vs.Left,
 				PositionY = (int)vs.Top,
 				Width = (int)vs.Width,
 				Height = (int)vs.Height,
-				ParentWindow = wall,
+				ParentWindow = parent,
 				WindowStyle = 0x40000000 | 0x10000000 | 0x04000000 | 0x02000000,
 				// WS_EX_NOACTIVATE：点击壁纸层窗口时拦截 WM_MOUSEACTIVATE 冒泡，防止
 				// WorkerW 被激活后 SetFocus 找不到焦点窗口而触发系统提示音。
