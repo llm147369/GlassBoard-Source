@@ -677,6 +677,11 @@ public class VideoWindow
 				else if (msg == "ready")
 				{
 					Store.Trace("VIDEOWALL opened ok(webview2): " + path);
+					if (status != null)
+					{
+						Action<string> cb = status;
+						DispatcherSafe(cb, "动态壁纸已启用。");
+					}
 					ApplyVolume();
 				}
 				else if (msg == "playing" || msg.StartsWith("playfail", StringComparison.Ordinal))
