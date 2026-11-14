@@ -181,16 +181,36 @@ public static class DesktopVisibility
 		{
 			return;
 		}
-		// 广播上限 250ms：个别窗口响应慢时不能让 UI 线程跟着卡 2 秒。
-		// SMTO_ABORTIFHUNG(2) 已保证挂起窗口立即跳过，其余窗口 250ms 内足够入队。
-		SendMessageTimeout(new IntPtr(0xFFFF), 26u, IntPtr.Zero, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 2u, 250u, out IntPtr _);
+		// WM_SETTINGCHANGE 广播必须放线程池：SendMessageTimeout 到 HWND_BROADCAST 会
+		// 串行等待每个顶层窗口处理消息（Explorer 重排桌面可达数百毫秒），在 UI 线程
+		// 调用会冻结界面——一键隐藏图标后"短暂卡顿甚至无响应"的根因。
+		try
+		{
+			System.Threading.Tasks.Task.Run(delegate
+			{
+				SendMessageTimeout(new IntPtr(0xFFFF), 26u, IntPtr.Zero, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 2u, 250u, out IntPtr _);
+			});
+		}
+		catch
+		{
+		}
 	}
 
 	// 仅广播 WM_SETTINGCHANGE（两阶段图标切换的第二阶段）：通知 Explorer 读取当前
 	// HideIcons 值，原生隐藏/显示图标层。广播会触发桌面重排，必须在窗口切换之后错开执行。
 	private static void BroadcastIconsChange()
 	{
-		SendMessageTimeout(new IntPtr(0xFFFF), 26u, IntPtr.Zero, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 2u, 250u, out IntPtr _);
+		// 与 WriteHideIcons 同理：广播在后台线程执行，UI 线程零阻塞。
+		try
+		{
+			System.Threading.Tasks.Task.Run(delegate
+			{
+				SendMessageTimeout(new IntPtr(0xFFFF), 26u, IntPtr.Zero, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 2u, 250u, out IntPtr _);
+			});
+		}
+		catch
+		{
+		}
 	}
 
 	static DesktopVisibility()

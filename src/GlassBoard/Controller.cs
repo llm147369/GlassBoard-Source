@@ -953,6 +953,18 @@ public class Controller
 				Board.CollapseSmooth();
 				return;
 			}
+			// 自动记住位置：入口源文件（桌面快捷方式等）被移动/删除后，回退到导入时解析出的目标位置。
+			string launchPath = entry.Path;
+			if (!File.Exists(launchPath) && !Directory.Exists(launchPath) && !string.IsNullOrWhiteSpace(entry.LaunchTarget) && (File.Exists(entry.LaunchTarget) || Directory.Exists(entry.LaunchTarget)))
+			{
+				Store.Trace("LAUNCH fallback target=" + entry.LaunchTarget);
+				launchPath = entry.LaunchTarget;
+			}
+			if (!File.Exists(launchPath) && !Directory.Exists(launchPath))
+			{
+				AskRemoveEntry(entry);
+				return;
+			}
 			if (entry.IsFolder || Directory.Exists(entry.Path) || !RunningWindows.Activate(entry))
 			{
 				// 冷却保护：启动器类入口（汽水音乐等）主程序窗口与入口路径不同，
@@ -963,7 +975,7 @@ public class Controller
 					Board.CollapseSmooth();
 					return;
 				}
-				Process process = Process.Start(new ProcessStartInfo(entry.Path)
+				Process process = Process.Start(new ProcessStartInfo(launchPath)
 				{
 					UseShellExecute = true
 				});
@@ -982,9 +994,32 @@ public class Controller
 			}
 			Board.CollapseSmooth();
 		}
-		catch (Exception ex)
+		catch (Exception)
 		{
-			System.Windows.MessageBox.Show("无法打开「" + entry.Name + "」。\n入口可能已移动或卸载。\n\n" + ex.Message, "GlassBoard-Source");
+			AskRemoveEntry(entry);
+		}
+	}
+
+	// 入口失效处理：源文件与目标位置都不存在时，询问是否移除入口
+	private void AskRemoveEntry(Entry entry)
+	{
+		try
+		{
+			System.Windows.MessageBoxResult result = System.Windows.MessageBox.Show(
+				"无法打开「" + entry.Name + "」。\n\n入口对应的文件可能已被移动或删除。\n\n是否从 Dock 与大面板移除该入口？",
+				"GlassBoard", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+			if (result == System.Windows.MessageBoxResult.Yes)
+			{
+				RemovalRules.Remember(Prefs, entry);
+				Prefs.Apps.Remove(entry);
+				Prefs.Normalize();
+				Save();
+				Refresh();
+				Board.SetStatus("已移除入口「" + entry.Name + "」");
+			}
+		}
+		catch
+		{
 		}
 	}
 
@@ -3745,6 +3780,96 @@ public class Controller
 				}));
 			}));
 			stackPanel6.Children.Add(wrapPanel4);
+			stackPanel6.Children.Add(new TextBlock
+			{
+				Text = "卸载 GlassBoard",
+				FontSize = 18.0,
+				Margin = new Thickness(0.0, 22.0, 0.0, 10.0)
+			});
+			TextBlock uninstallInfo = new TextBlock
+			{
+				Text = Uninstaller.Summary(),
+				TextWrapping = TextWrapping.Wrap,
+				Foreground = System.Windows.Media.Brushes.LightGray,
+				Margin = new Thickness(0.0, 0.0, 0.0, 6.0)
+			};
+			stackPanel6.Children.Add(uninstallInfo);
+			WrapPanel uninstallRow = new WrapPanel
+			{
+				Margin = new Thickness(0.0, 8.0, 0.0, 6.0)
+			};
+			System.Windows.Controls.Button uninstallBtn = new System.Windows.Controls.Button
+			{
+				Content = "卸载…",
+				Height = 34.0,
+				MinWidth = 130.0,
+				Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xB4, 0x3A, 0x3A)),
+				Foreground = System.Windows.Media.Brushes.White,
+				Padding = new Thickness(18.0, 0.0, 18.0, 0.0)
+			};
+			uninstallBtn.Click += (object s, RoutedEventArgs e) =>
+			{
+				Window uw = FeatureUi.Dialog("卸载 GlassBoard", w, 560.0, 430.0);
+				StackPanel usp = new StackPanel
+				{
+					Margin = new Thickness(24.0)
+				};
+				usp.Children.Add(new TextBlock
+				{
+					Text = Uninstaller.Summary() + "\n\n卸载会关闭 GlassBoard 并移除开机启动项。请选择要删除的内容：",
+					TextWrapping = TextWrapping.Wrap,
+					Foreground = System.Windows.Media.Brushes.LightGray,
+					Margin = new Thickness(0.0, 0.0, 0.0, 10.0)
+				});
+				System.Windows.Controls.CheckBox delData = new System.Windows.Controls.CheckBox
+				{
+					Content = "删除配置与数据（布局、Dock 入口、图标缓存、歌词缓存、组件数据等）",
+					IsChecked = false,
+					Margin = new Thickness(0.0, 6.0, 0.0, 0.0)
+				};
+				System.Windows.Controls.CheckBox delInstall = new System.Windows.Controls.CheckBox
+				{
+					Content = "删除程序目录（卸载后本软件将无法再运行）",
+					IsChecked = false,
+					Margin = new Thickness(0.0, 6.0, 0.0, 0.0)
+				};
+				usp.Children.Add(delData);
+				usp.Children.Add(delInstall);
+				WrapPanel urow = new WrapPanel
+				{
+					Margin = new Thickness(0.0, 18.0, 0.0, 0.0)
+				};
+				System.Windows.Controls.Button confirmBtn = new System.Windows.Controls.Button
+				{
+					Content = "确认卸载",
+					Height = 36.0,
+					MinWidth = 120.0,
+					Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xB4, 0x3A, 0x3A)),
+					Foreground = System.Windows.Media.Brushes.White,
+					Margin = new Thickness(0.0, 0.0, 10.0, 0.0)
+				};
+				confirmBtn.Click += (object s2, RoutedEventArgs e2) =>
+				{
+					uw.Close();
+					Uninstaller.Run(delData.IsChecked == true, delInstall.IsChecked == true);
+				};
+				System.Windows.Controls.Button cancelBtn = new System.Windows.Controls.Button
+				{
+					Content = "取消",
+					Height = 36.0,
+					MinWidth = 90.0
+				};
+				cancelBtn.Click += (object s2, RoutedEventArgs e2) =>
+				{
+					uw.Close();
+				};
+				urow.Children.Add(confirmBtn);
+				urow.Children.Add(cancelBtn);
+				usp.Children.Add(urow);
+				uw.Content = usp;
+			};
+			uninstallRow.Children.Add(uninstallBtn);
+			stackPanel6.Children.Add(uninstallRow);
 			System.Windows.Controls.Button button5 = new System.Windows.Controls.Button
 			{
 				Content = "保存快捷键并完成",
@@ -4133,6 +4258,51 @@ public class Controller
 					{
 						Prefs.Widgets.VisualizerColor = v;
 					});
+				// viz size sliders: component size = panel size (same as other widgets' width slider)
+				double defW = Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Width ?? 380.0;
+				double defH = Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Height ?? 190.0;
+				TextBlock wTitle = new TextBlock
+				{
+					Text = "\u7ec4\u4ef6\u5bbd\u5ea6 \u00b7 " + Math.Round(defW),
+					Margin = new Thickness(0.0, 12.0, 0.0, 6.0)
+				};
+				editor.Children.Add(wTitle);
+				Slider wSlider = new Slider
+				{
+					Minimum = 240.0,
+					Maximum = 1000.0,
+					Value = defW,
+					MinHeight = 36.0
+				};
+				wSlider.ValueChanged += (object o2, RoutedPropertyChangedEventArgs<double> e2) =>
+				{
+					int v2 = (int)Math.Round(wSlider.Value);
+					Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Width = v2;
+					wTitle.Text = "\u7ec4\u4ef6\u5bbd\u5ea6 \u00b7 " + v2;
+					apply();
+				};
+				editor.Children.Add(wSlider);
+				TextBlock hTitle = new TextBlock
+				{
+					Text = "\u7ec4\u4ef6\u9ad8\u5ea6 \u00b7 " + Math.Round(defH),
+					Margin = new Thickness(0.0, 12.0, 0.0, 6.0)
+				};
+				editor.Children.Add(hTitle);
+				Slider hSlider = new Slider
+				{
+					Minimum = 140.0,
+					Maximum = 800.0,
+					Value = defH,
+					MinHeight = 36.0
+				};
+				hSlider.ValueChanged += (object o2, RoutedPropertyChangedEventArgs<double> e2) =>
+				{
+					int v2 = (int)Math.Round(hSlider.Value);
+					Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Height = v2;
+					hTitle.Text = "\u7ec4\u4ef6\u9ad8\u5ea6 \u00b7 " + v2;
+					apply();
+				};
+				editor.Children.Add(hSlider);
 					return;
 				}
 				Action<string, double, double, double, Action<double>> action3 = (string text2, double min, double max, double value, Action<double> set) =>

@@ -475,6 +475,9 @@ public static class VideoWallpaper
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	private static extern int GetClassName(IntPtr h, System.Text.StringBuilder sb, int max);
 
+	[DllImport("user32.dll")]
+	internal static extern int GetSystemMetrics(int nIndex);
+
 	private delegate bool EnumChildProc(IntPtr h, IntPtr lp);
 
 	private delegate bool EnumWindowsProc(IntPtr h, IntPtr lp);
@@ -612,7 +615,10 @@ public class VideoWindow
 				return IntPtr.Zero;
 			}
 
-			Rect vs = new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop, SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+			// 用 GetSystemMetrics 取虚拟屏物理像素（76/77/78/79），不要用 WPF SystemParameters.VirtualScreen*：
+			// 后者返回 DIP，在 125%/150% 缩放下与 HwndSource/MoveWindow 期望的物理像素不一致，
+			// 窗口会被缩到左上角且盖不满全屏。
+			Rect vs = new Rect(VideoWallpaper.GetSystemMetrics(76), VideoWallpaper.GetSystemMetrics(77), VideoWallpaper.GetSystemMetrics(78), VideoWallpaper.GetSystemMetrics(79));
 			IntPtr parent = wall;
 			if (parent == IntPtr.Zero)
 			{

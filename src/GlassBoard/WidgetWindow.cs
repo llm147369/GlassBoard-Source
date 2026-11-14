@@ -1806,7 +1806,14 @@ public sealed class WidgetWindow : GlassWindow
 			Width = 380.0,
 			Height = 190.0
 		};
-		parent.Children.Add(vizCanvas);
+		// 内部画布固定 380×190 坐标系（各样式硬编码布局），经 Viewbox 拉伸填满面板内容区。
+		// 组件实际大小由面板尺寸决定（DIY「组件宽度/高度」滑杆 + 面板右下角拖动）。
+		Viewbox box = new Viewbox
+		{
+			Stretch = Stretch.Fill,
+			Child = vizCanvas
+		};
+		parent.Children.Add(box);
 		BuildVizScene();
 		if (!vizAttached)
 		{
@@ -2141,43 +2148,36 @@ public sealed class WidgetWindow : GlassWindow
 		}
 		case 4:
 		{
-			// 音轨条带：底部柱 + 峰值帽二次回落（经典播放器风）
-			Rectangle rectangle2 = new Rectangle
+			// 音轨条带 v2：48 根细柱（24 采集点双倍插值）+ 发光峰值帽
+			for (int n2 = 0; n2 < 48; n2++)
 			{
-				Width = 356.0,
-				Height = 1.0,
-				Fill = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255))
-			};
-			Canvas.SetLeft(rectangle2, 12.0);
-			Canvas.SetTop(rectangle2, 166.0);
-			vizCanvas.Children.Add(rectangle2);
-			for (int n2 = 0; n2 < 24; n2++)
-			{
-				double x3 = 14.0 + n2 * 14.6;
-				SolidColorBrush solidColorBrush3 = new SolidColorBrush(VizHue(n2 / 23.0));
+				double x3 = 10.0 + n2 * 7.4;
+				double t2 = n2 / 47.0;
+				Color barC = VizHue(t2);
+				SolidColorBrush solidColorBrush3 = new SolidColorBrush(Color.FromArgb(225, barC.R, barC.G, barC.B));
 				solidColorBrush3.Freeze();
 				Rectangle rectangle3 = new Rectangle
 				{
-					Width = 7.5,
+					Width = 4.6,
 					Height = 0.0,
-					RadiusX = 3.0,
-					RadiusY = 3.0,
+					RadiusX = 2.3,
+					RadiusY = 2.3,
 					Fill = solidColorBrush3
 				};
 				Canvas.SetLeft(rectangle3, x3);
-				Canvas.SetBottom(rectangle3, 24.0);
+				Canvas.SetBottom(rectangle3, 25.0);
 				vizCanvas.Children.Add(rectangle3);
 				vizShapes.Add(rectangle3);
 				Rectangle rectangle4 = new Rectangle
 				{
-					Width = 7.5,
-					Height = 3.0,
-					RadiusX = 1.5,
-					RadiusY = 1.5,
-					Fill = new SolidColorBrush(Color.FromArgb(235, solidColorBrush3.Color.R, solidColorBrush3.Color.G, solidColorBrush3.Color.B))
+					Width = 5.2,
+					Height = 4.0,
+					RadiusX = 2.0,
+					RadiusY = 2.0,
+					Fill = new SolidColorBrush(Color.FromArgb(255, (byte)Math.Min(255, barC.R + 60), (byte)Math.Min(255, barC.G + 60), (byte)Math.Min(255, barC.B + 60)))
 				};
-				Canvas.SetLeft(rectangle4, x3);
-				Canvas.SetBottom(rectangle4, 24.0);
+				Canvas.SetLeft(rectangle4, x3 - 0.3);
+				Canvas.SetBottom(rectangle4, 25.0);
 				vizCanvas.Children.Add(rectangle4);
 				vizShapes.Add(rectangle4);
 			}
@@ -2231,12 +2231,15 @@ public sealed class WidgetWindow : GlassWindow
 		{
 			dt = 0.1;
 		}
-		double k = 1.0 - Math.Exp(-dt / 0.055);
+		double kUp = 1.0 - Math.Exp(-dt / 0.030);
+		double kDn = 1.0 - Math.Exp(-dt / 0.085);
 		for (int i = 0; i < 24; i++)
 		{
-			vizEnv[i] += (vizTarget[i] - vizEnv[i]) * k;
-			// 峰值帽：线性回落，形成二次弹落
-			vizPeak[i] = Math.Max(vizEnv[i], vizPeak[i] - dt * 0.55);
+			// 攻击/释放分离：上升跟得快（鼓点感），回落带尾音（丝滑感）
+			double k2 = vizTarget[i] > vizEnv[i] ? kUp : kDn;
+			vizEnv[i] += (vizTarget[i] - vizEnv[i]) * k2;
+			// 峰值帽：缓慢回落，二次弹落
+			vizPeak[i] = Math.Max(vizEnv[i], vizPeak[i] - dt * 0.35);
 		}
 		vizWavePhase += dt;
 		switch (vizStyle)
@@ -2311,8 +2314,10 @@ public sealed class WidgetWindow : GlassWindow
 		}
 		case 2:
 		{
-			// 双螺旋：两带正弦缠绕 + 节点发光
-			double amp = AvgEnv(0, 10) * 26.0 + 7.0;
+			// 双螺旋：两带正弦缠绕 + 节点发光；无信号时保持待机波浪（相位驱动呼吸），避免静音时静止成一条线
+			double beat2 = AvgEnv(0, 10);
+			double idle2 = 6.0 + (Math.Sin(vizWavePhase * 0.9) + 1.0) * 5.0;
+			double amp = Math.Max(beat2 * 26.0 + 7.0, idle2);
 			double twist = vizWavePhase * 2.1;
 			System.Windows.Shapes.Polyline frontP = (System.Windows.Shapes.Polyline)vizShapes[24];
 			System.Windows.Shapes.Polyline backP = (System.Windows.Shapes.Polyline)vizShapes[25];
@@ -2324,10 +2329,11 @@ public sealed class WidgetWindow : GlassWindow
 				double e = Math.Sin(x3 * 0.052 + twist) * amp;
 				double y3 = 95.0 + e;
 				int band = Math.Min(23, n2);
-				frontP.Points.Add(new Point(x3, y3 - 5.0 - vizEnv[band] * 4.0));
-				backP.Points.Add(new Point(x3, y3 + 5.0 + vizEnv[band] * 4.0));
+				double se = 1.0 + Math.Sin(vizWavePhase * 1.7 + n2 * 0.55) * 0.4;
+				frontP.Points.Add(new Point(x3, y3 - 5.0 - vizEnv[band] * 4.0 - se * 1.5));
+				backP.Points.Add(new Point(x3, y3 + 5.0 + vizEnv[band] * 4.0 + se * 1.5));
 				FrameworkElement node = vizShapes[n2];
-				double size2 = 5.5 + vizEnv[band] * 5.0;
+				double size2 = 5.5 + vizEnv[band] * 5.0 + se * 1.2;
 				node.Width = size2;
 				node.Height = size2;
 				Canvas.SetLeft(node, x3 - size2 / 2.0);
@@ -2361,13 +2367,23 @@ public sealed class WidgetWindow : GlassWindow
 			break;
 		}
 		case 4:
-			for (int n2 = 0; n2 < 24; n2++)
+		{
+			for (int n2 = 0; n2 < 48; n2++)
 			{
-				double h2 = vizEnv[n2] * 118.0 + 1.0;
+				double pos = n2 * 23.0 / 47.0;
+				int lo = (int)Math.Floor(pos);
+				int hi = Math.Min(23, lo + 1);
+				double frac = pos - lo;
+				double e = vizEnv[lo] * (1.0 - frac) + vizEnv[hi] * frac;
+				double h2 = e * 118.0 + 1.0;
 				((Rectangle)vizShapes[n2 * 2]).Height = h2;
-				Canvas.SetBottom(vizShapes[n2 * 2 + 1], 24.0 + h2 - 3.0);
+				double p2 = vizPeak[lo] * (1.0 - frac) + vizPeak[hi] * frac;
+				double ph = p2 * 118.0 + 3.0;
+				vizShapes[n2 * 2 + 1].Opacity = 0.35 + e * 0.65;
+				Canvas.SetBottom(vizShapes[n2 * 2 + 1], 25.0 + ph - 2.0);
 			}
 			break;
+		}
 		case 5:
 		{
 			// 雷达频谱：绕心旋转 + 径向距离随频段能量 + 中心呼吸核
