@@ -714,6 +714,9 @@ public class DockWindow : GlassWindow
 		case 33:
 			// WM_MOUSEACTIVATE -> MA_NOACTIVATE: 点击 Dock 不抢前台焦点。
 			// 此刻旧前台窗口尚未失活，先记录它，供"再点关闭"判断使用。
+			// 显示桌面状态下点 Dock：开一个短时观察窗，把随后新出现的应用窗口还原并
+			// 拉到前台。否则新窗口会落在桌面层之下，看起来就是"点了没反应"。
+			DesktopCoverGuard.NotifyPointerActivation();
 			RunningWindows.RecordPressForeground();
 			handled = true;
 			return (IntPtr)3;
