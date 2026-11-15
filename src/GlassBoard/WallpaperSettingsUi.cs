@@ -312,6 +312,52 @@ public static class WallpaperSettingsUi
 				Margin = new Thickness(0.0, 0.0, 0.0, 10.0)
 			};
 			vidPanel.Children.Add(videoStatus);
+			// Win10 未安装 WebView2 运行时提示（动态壁纸依赖 WebView2 内核）
+			TextBlock webviewHint = new TextBlock
+			{
+				TextWrapping = TextWrapping.Wrap,
+				FontSize = 12.0,
+				Margin = new Thickness(0.0, 0.0, 0.0, 10.0)
+			};
+			bool webviewOk = false;
+			try
+			{
+				webviewOk = !string.IsNullOrEmpty(Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString());
+			}
+			catch
+			{
+				webviewOk = false;
+			}
+			if (!webviewOk)
+			{
+				webviewHint.Inlines.Add(new System.Windows.Documents.Run("⚠ 检测到系统缺少 WebView2 运行时（Win10 未安装为常见原因），动态壁纸无法使用。请先安装："));
+				System.Windows.Documents.Hyperlink link = new System.Windows.Documents.Hyperlink
+				{
+					TextDecorations = null
+				};
+				link.Inlines.Add(new System.Windows.Documents.Run("前往微软官网下载 WebView2 运行时")
+				{
+					TextDecorations = TextDecorations.Underline,
+					Foreground = Polish.Accent
+				});
+				link.Click += delegate
+				{
+					try
+					{
+						System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://developer.microsoft.com/microsoft-edge/webview2/")
+						{
+							UseShellExecute = true
+						});
+					}
+					catch
+					{
+					}
+				};
+				webviewHint.Inlines.Add(link);
+				webviewHint.Inlines.Add(new System.Windows.Documents.Run("，安装完成后重启本应用即可正常使用。"));
+				webviewHint.Visibility = Visibility.Visible;
+			}
+			vidPanel.Children.Add(webviewHint);
 			void StartVideo()
 			{
 				if (!string.IsNullOrEmpty(o.VideoPath) && File.Exists(o.VideoPath))
