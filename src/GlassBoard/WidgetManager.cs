@@ -21,7 +21,10 @@ public sealed class WidgetManager : IDisposable
 
 	private readonly WidgetRegistry<WidgetWindow> windows = new WidgetRegistry<WidgetWindow>();
 
-	private readonly DispatcherTimer timer = new DispatcherTimer
+	// Send 优先级：Background 队列里堆积的刷新任务（运行扫描/音乐轮询等）会把它拖后
+	// 2-3 秒，时钟秒数就“隔两三秒跳一下”。Send 优先级 tick 插队到渲染/输入之前，
+	// tick 内只有闹钟检查+文本赋值，无风险。
+	private readonly DispatcherTimer timer = new DispatcherTimer(DispatcherPriority.Send)
 	{
 		Interval = TimeSpan.FromSeconds(1.0)
 	};
@@ -37,6 +40,7 @@ public sealed class WidgetManager : IDisposable
 	private bool queued;
 
 	private DateTime lastWeatherCheck = DateTime.MinValue;
+	private DateTime lastTickUtc = DateTime.MinValue;
 
 	public string LastError = "";
 
@@ -66,6 +70,13 @@ public sealed class WidgetManager : IDisposable
 			{
 				return;
 			}
+			// 诊断：DispatcherTimer 1s 若被 UI 线程阻塞，实际间隔会拉长到 2-3s（时钟秒数跳格）。
+			double gapMs = (DateTime.UtcNow - lastTickUtc).TotalMilliseconds;
+			if (lastTickUtc != DateTime.MinValue && gapMs > 1150.0)
+			{
+				Store.Trace("WIDGET tick gap=" + (int)gapMs + "ms");
+			}
+			lastTickUtc = DateTime.UtcNow;
 			if ((DateTime.UtcNow - lastWeatherCheck).TotalSeconds >= 30.0)
 			{
 				lastWeatherCheck = DateTime.UtcNow;

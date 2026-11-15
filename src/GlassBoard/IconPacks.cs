@@ -452,7 +452,7 @@ public static class IconPacks
 		{
 			Data = group,
 			Stroke = stroke,
-			StrokeThickness = 2.0,
+			StrokeThickness = 2.4,
 			Stretch = Stretch.Uniform,
 			Width = 24.0,
 			Height = 24.0,

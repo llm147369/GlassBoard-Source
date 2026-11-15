@@ -56,7 +56,7 @@ public sealed class WidgetWindow : GlassWindow
 
 	private ScrollViewer viewport;
 
-	private Viewbox contentScale;
+	private Grid contentScale;
 
 	private double minimumWidgetHeight = 200.0;
 
@@ -551,6 +551,34 @@ public sealed class WidgetWindow : GlassWindow
 		}
 	}
 
+	// 时钟秒数用渲染帧驱动：DispatcherTimer 在 UI 线程繁忙时会延迟触发（现象=秒数
+	// 隔两三秒才跳一下）。渲染帧每帧回调一次，秒变化立即反映，永不累积延迟。
+	private bool clockFrameHooked;
+	private int lastClockSecond = -1;
+	private void HookClockFrame()
+	{
+		if (clockFrameHooked)
+		{
+			return;
+		}
+		clockFrameHooked = true;
+		CompositionTarget.Rendering += ClockFrame;
+	}
+	private void ClockFrame(object sender, EventArgs e)
+	{
+		if (!IsVisible || clock == null)
+		{
+			lastClockSecond = -1;
+			return;
+		}
+		DateTime now = TimeZones.Now(M.C.Prefs.Widgets.TimeZoneId);
+		if (now.Second != lastClockSecond)
+		{
+			lastClockSecond = now.Second;
+			ClockTick();
+		}
+	}
+
 	private Button MusicGlyph(string icon, Action action, double size, bool primary)
 	{
 		int musicButtons = StyleFor("music").MusicButtons;
@@ -873,6 +901,38 @@ public sealed class WidgetWindow : GlassWindow
 		}
 	}
 
+	// Viewbox 的 RenderTransform 缩放会把文字“栅格化后再放大”导致越放越糊；
+	// LayoutTransform 在布局阶段缩放，文字按新尺寸重新布局+重新栅格化，永远清晰。
+	private void RescaleContent()
+	{
+		if (stack == null || contentScale == null || building)
+		{
+			return;
+		}
+		double aw = contentScale.ActualWidth;
+		double ah = contentScale.ActualHeight;
+		if (aw <= 0.0 || ah <= 0.0)
+		{
+			return;
+		}
+		stack.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+		double sw = stack.DesiredSize.Width;
+		double sh = stack.DesiredSize.Height;
+		if (sw <= 0.0 || sh <= 0.0)
+		{
+			return;
+		}
+		double s = Math.Min(aw / sw, ah / sh);
+		// 比例未变就不动 LayoutTransform：重复赋值新 ScaleTransform 会触发整树重排，
+		// 文字被重新栅格化（ClearType 相位变化）——周期性 SizeChanged 会让文字“隔几秒跳一下”。
+		double cur = ((stack.LayoutTransform as System.Windows.Media.ScaleTransform) != null) ? ((System.Windows.Media.ScaleTransform)stack.LayoutTransform).ScaleX : 1.0;
+		if (Math.Abs(s - cur) < 0.005)
+		{
+			return;
+		}
+		stack.LayoutTransform = (Math.Abs(s - 1.0) < 0.005) ? null : new System.Windows.Media.ScaleTransform(s, s);
+	}
+
 	private void ApplyWidgetGlass()
 	{
 		SetGlassOpacity(BareShell ? 0.0 : WidgetSizing.Background(M.C.Prefs, M.C.Prefs.Widgets, M.C.Prefs.Widgets.Position(PanelId)));
@@ -943,14 +1003,16 @@ public sealed class WidgetWindow : GlassWindow
 			{
 				Margin = (BareShell ? new Thickness(2.0) : new Thickness(16.0, Kinds.SequenceEqual(new string[1] { "clock" }) ? 16 : 25, 16.0, 16.0))
 			};
-			contentScale = new Viewbox
+			// Viewbox 用 RenderTransform 缩放：文字被“栅格化后再放大”，组件越大越糊。
+			// 改用 Grid + LayoutTransform：缩放发生在布局阶段，文字按新尺寸重新布局并
+			// 重新栅格化，任何放大倍数下都保持原生清晰度（resize 重排是低频操作）。
+			contentScale = new Grid
 			{
-				Child = stack,
-				Stretch = Stretch.Uniform,
-				StretchDirection = StretchDirection.Both,
 				HorizontalAlignment = HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Top
 			};
+			contentScale.Children.Add(stack);
+			contentScale.SizeChanged += (object s, System.Windows.SizeChangedEventArgs e) => RescaleContent();
 			viewport = new ScrollViewer
 			{
 				Content = contentScale,
@@ -981,6 +1043,7 @@ public sealed class WidgetWindow : GlassWindow
 				{
 				case "clock":
 					ClockDesign(stackPanel);
+					HookClockFrame();
 					break;
 				case "weather":
 					Weather(stackPanel);

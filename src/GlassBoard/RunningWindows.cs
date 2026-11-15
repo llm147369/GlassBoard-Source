@@ -1370,6 +1370,12 @@ public static class RunningWindows
 				Store.Trace("ACTIVATE launch-window fallback count=" + list.Count);
 			}
 		}
+		if (list.Count > 0)
+		{
+			// 只过滤不可见窗口（DDE 服务窗、隐藏的 Chrome_WidgetWin_0 等被误当候选时，
+			// 点击会去"激活"一个看不见的窗口）。最小化窗口必须保留：点击=恢复最大化。
+			list = list.Where((RunningWindow w) => IsWindowVisible(w.Handle)).ToList();
+		}
 		Store.Trace("ACTIVATE entry=" + (entry == null ? "null" : entry.Path) + " launchTarget=" + (entry == null ? "" : entry.LaunchTarget) + " windowTarget=" + (entry == null ? "" : entry.WindowTarget) + " matches=" + list.Count);
 		IntPtr foregroundWindow = EffectiveForeground();
 		GetWindowThreadProcessId(foregroundWindow, out var id);
@@ -1384,8 +1390,7 @@ public static class RunningWindows
 				foregroundWindow = topVisible;
 				id = 0u;
 			}
-		}
-		if (list.Any((RunningWindow w) => w.Handle == foregroundWindow))
+		}		if (list.Any((RunningWindow w) => w.Handle == foregroundWindow))
 		{
 			// 前台窗口属于该应用：沿 Z 序向下找同一应用的下一个可见窗口并提到上层
 			//（两个窗口时点 Dock 把下面的换上来）；只有一个可见窗口才走"再点最小化"。

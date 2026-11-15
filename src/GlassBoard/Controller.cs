@@ -2951,6 +2951,11 @@ public class Controller
 				draft.IconRipple = iconRipple;
 				live();
 			});
+			func3(stackPanel3, "图标倒影（图标下方的渐隐镜像）", draft.Reflections, (bool reflections) =>
+			{
+				draft.Reflections = reflections;
+				live();
+			});
 			func3(stackPanel3, "锁定 Dock 位置", Prefs.Placement.DockLocked, (bool dockLocked) =>
 			{
 				Prefs.Placement.DockLocked = dockLocked;

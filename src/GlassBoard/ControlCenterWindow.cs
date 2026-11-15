@@ -1112,11 +1112,16 @@ public class ControlCenterWindow : GlassWindow
 						savedProfiles = profiles;
 					}
 					ApplyState(wifi, wifiSupported, bt, btSupported, volumeOk, volume, isMuted, brightness, devices, networks);
-					if (btLines != null)
-					{
-						RebuildBluetooth(btLines);
-					}
 				}));
+				if (btLines != null)
+				{
+					// 蓝牙列表挪到空闲帧：与网络列表同理，避免面板首帧卡顿。
+					List<string> btSnap = btLines;
+					Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ContextIdle, new Action(delegate
+					{
+						RebuildBluetooth(btSnap);
+					}));
+				}
 			}
 			catch (Exception ex)
 			{
@@ -1253,7 +1258,13 @@ public class ControlCenterWindow : GlassWindow
 		}
 		if (networks != null)
 		{
-			RebuildNetworks(networks);
+			// 网络列表重建挪到空闲帧：先让开关/音量/亮度立即可用，再填列表，
+			// 避免打开面板的第一帧 UI 线程长时间阻塞（鼠标拖动卡顿来源之一）。
+			List<WirelessCore.WifiNetwork> netSnap = networks;
+			Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ContextIdle, new Action(delegate
+			{
+				RebuildNetworks(netSnap);
+			}));
 		}
 	}
 

@@ -33,6 +33,77 @@ public class DockWindow : GlassWindow
 		public List<RunningWindow> Windows;
 	}
 
+	// 图标倒影转换器：把图标位图纵向镜像（翻转+平移归位）后裁出底部 ratio 比例作为倒影图，
+	// 自动跟随源 Image.Source 的异步更新（IconPipeline 回填后倒影同步出现）。
+	private sealed class FlipReflectConverter : System.Windows.Data.IValueConverter
+	{
+		private readonly double ratio;
+
+		public FlipReflectConverter(double ratio)
+		{
+			this.ratio = ratio;
+		}
+
+		public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+		{
+			if (value is DrawingImage di)
+			{
+				// 矢量图标源：先光栅化再走位图翻转管线。
+				// 尺寸以 Drawing 内容边界为准（DrawingImage.Width/Height 常为 0）。
+				Rect bnds = di.Drawing.Bounds;
+				if (bnds.Width <= 0.0 || bnds.Height <= 0.0 || double.IsInfinity(bnds.Width) || double.IsInfinity(bnds.Height))
+				{
+					return null;
+				}
+				int rw = Math.Max(1, (int)Math.Ceiling(bnds.Width));
+				int rh = Math.Max(1, (int)Math.Ceiling(bnds.Height));
+				RenderTargetBitmap rtb = new RenderTargetBitmap(rw, rh, 96.0, 96.0, PixelFormats.Pbgra32);
+				DrawingVisual dv = new DrawingVisual();
+				using (DrawingContext dctx = dv.RenderOpen())
+				{
+					dctx.DrawImage(di, new Rect(0.0, 0.0, rw, rh));
+				}
+				rtb.Render(dv);
+				value = rtb;
+			}
+			if (!(value is BitmapSource bmp) || bmp.PixelWidth <= 0 || bmp.PixelHeight <= 0)
+			{
+				return null;
+			}
+			try
+			{
+				int w = bmp.PixelWidth;
+				int h = Math.Max(1, (int)Math.Round(bmp.PixelHeight * ratio));
+				// TransformedBitmap 对 CachedBitmap 等特殊源会静默输出透明，
+				// 这里强制转 Bgra32 拿像素后手动镜像，任何源都稳定。
+				FormatConvertedBitmap fcb = new FormatConvertedBitmap(bmp, PixelFormats.Bgra32, null, 0.0);
+				int stride = w * 4;
+				byte[] px = new byte[stride * bmp.PixelHeight];
+				fcb.CopyPixels(px, stride, 0);
+				byte[] outPx = new byte[stride * h];
+				for (int y = 0; y < h; y++)
+				{
+					int srcY = bmp.PixelHeight - 1 - y;
+					Buffer.BlockCopy(px, srcY * stride, outPx, y * stride, stride);
+				}
+				WriteableBitmap wb = new WriteableBitmap(w, h, 96.0, 96.0, PixelFormats.Bgra32, null);
+				wb.WritePixels(new Int32Rect(0, 0, w, h), outPx, stride, 0);
+				wb.Freeze();
+				return wb;
+			}
+			catch (Exception ex)
+			{
+				Store.Trace("DOCK refl conv fail type=" + bmp.GetType().Name + " fmt=" + bmp.Format + " " + bmp.PixelWidth + "x" + bmp.PixelHeight + " err=" + ex.Message);
+				return null;
+			}
+		}
+
+		public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+		{
+			throw new NotSupportedException();
+		}
+	}
+
 	private Controller C;
 
 	// —— 悬浮窗口预览（任务栏式缩略图）——
@@ -103,10 +174,11 @@ public class DockWindow : GlassWindow
 		public double BaseCenter = double.NaN;
 		public double Current = 1.0;
 		public double Target = 1.0;
+		public double ShiftTargetX = 0.0;
+		public int Z = 0;
 	}
 	private readonly List<ZoomNode> zoomNodes = new List<ZoomNode>();
 	private System.Windows.Threading.DispatcherTimer zoomLeaveTimer;
-	private System.Windows.Threading.DispatcherTimer zoomFrameTimer;
 	private bool zoomHoverActive;
 	private double zoomMouseX = double.NaN;
 	// 帧计时用 Stopwatch（QueryPerformanceCounter）：DateTime.UtcNow 分辨率只有
@@ -834,9 +906,13 @@ public class DockWindow : GlassWindow
 		Surface.CornerRadius = new CornerRadius(dock.Radius);
 		Rect rect = (dockWorkingArea = DesktopWindowPolicy.WorkArea(this));
 		dockScreenArea = DesktopWindowPolicy.WorkArea(this, pointer: false, fullScreen: true);
+		// hExtra（悬停放大水平延展）也占用窗口宽度：VisiblePinned 的可用宽度必须扣掉它，
+		// 否则按满宽预算的应用+系统按钮总数超出窗口，右端内置图标（此电脑/电源等）被裁出窗口。
+		double zoomS0 = Math.Min(2.0, 1.0 + (dock.Zoom - 1.0) * MotionLevel);
+		double hExtra0 = Math.Max(0.0, Math.Min(40.0, Math.Ceiling((zoomS0 - 1.0) * (dock.IconSize + 16.0) * 0.9)));
 		List<Entry> list = DockOrderRules.Ordered(C.Prefs);
 		int num = (taskWheel.Running ? taskGroups.Count : list.Count);
-		int num2 = dock.VisiblePinned(rect.Width - 20.0, num);
+		int num2 = dock.VisiblePinned(rect.Width - 20.0 - hExtra0, num);
 		int num3 = ((num > num2) ? Math.Max(0, num2 - 1) : num2);
 		AddSystemButton("glassboard://dock/apps", DockButton("▦", null, () =>
 		{
@@ -997,18 +1073,23 @@ public class DockWindow : GlassWindow
 		}
 		ArrangeDockItems();
 		double num4 = dock.IconSize + 16.0 + (double)(dock.ShowLabels ? 18 : 0);
+		// 倒影需要窗口高度预算（与按钮高度同步），否则倒影下缘被窗口硬切（用户看到"直接裁剪"而非渐隐）。
+		double reflPadH = (dock.Reflections && !dock.ShowLabels && DockGlassFullyTransparent()) ? (Math.Max(6.0, Math.Floor(dock.IconSize * 0.50)) + 1.0) : 0.0;
 		// 悬停放大需要的顶部空间由窗口上方的透明延展区提供：窗口高度 = 玻璃高度 + zoomExtra，
 		// 玻璃与图标位置完全不动，只有悬停图标放大时伸入透明带。dock 的视觉位置永远不受 Zoom 影响。
 		double zoomS = Math.Min(2.0, 1.0 + (dock.Zoom - 1.0) * MotionLevel);
 		// 注意：基线必须是常数 14.0（GlassWindow 构造时 Root.Margin=14），不能读 Root.Margin.Top——
 		// Refresh 每轮会把它改成 14+zoomExtra，下次 Refresh 就会把 zoomExtra 递归算塌成 0。
-		double zoomExtra = Math.Max(0.0, Math.Min(40.0, Math.Ceiling((0.8 * num4 - (num4 - dock.IconSize) * 0.5) * (zoomS - 1.0) - (14.0 + (num4 - dock.IconSize) * 0.5)) + 2.0));
+		// 按钮高度 = num4 + reflPadH（有倒影时更高），放大原点 (0.5,0.8) 在按钮上，顶部上升量按按钮全高计算。
+		double zoomExtra = Math.Max(0.0, Math.Min(56.0, Math.Ceiling((0.8 * (num4 + reflPadH) - (num4 - dock.IconSize) * 0.5) * (zoomS - 1.0) - (14.0 + (num4 - dock.IconSize) * 0.5)) + 2.0));
 		// 水平方向同理：放大图标把邻居向两侧推开，推开量由窗口左右对称的透明延展区吸收，
-		// 玻璃条宽度与位置不受 Zoom 影响。局部推开最大约每侧 20px，40 的延展上限足够。
+		// 玻璃条宽度与位置不受 Zoom 影响。放大上限约每侧 31px，40 的延展上限足够。
 		double hExtra = Math.Max(0.0, Math.Min(40.0, Math.Ceiling((zoomS - 1.0) * (dock.IconSize + 16.0) * 0.9)));
 		Root.Margin = new Thickness(14.0 + hExtra * 0.5, 14.0 + zoomExtra, 14.0 + hExtra * 0.5, Root.Margin.Bottom);
-		Width = Math.Min(rect.Width - 20.0, dock.WidthFor((num == 0) ? 1 : num2) + hExtra);
-		Height = 28.0 + num4 + dock.Spacing * 2.0 + 6.0 + zoomExtra;
+		// 宽度按内容实测（不再用 WidthFor 公式估算——系统项计数与实际按钮数不一致时两端会多出大段留白）
+		Items.Measure(new System.Windows.Size(rect.Width, double.PositiveInfinity));
+		Width = Math.Min(rect.Width - 20.0, 28.0 + Items.DesiredSize.Width + hExtra);
+		Height = 28.0 + num4 + dock.Spacing * 2.0 + 6.0 + zoomExtra + reflPadH;
 		double num6;
 		if (dock.Alignment != 0)
 		{
@@ -1523,7 +1604,104 @@ public class DockWindow : GlassWindow
 			// WPF 的 Children[i]=x 赋值会抛「索引已经在使用」；必须先移除再插入。
 			sp.Children.RemoveAt(0);
 			sp.Children.Insert(0, image);
+			// 移除旧倒影（若有）后补齐新图标倒影：倒影是 Convert 一次性生成，
+			// 绑定旧图标元素的旧倒影在新图标替换后不会自动更新。
+			for (int i = sp.Children.Count - 1; i >= 0; i--)
+			{
+				if (sp.Children[i] is System.Windows.Controls.Image ri && (string)ri.Tag == "icon-reflection")
+				{
+					sp.Children.RemoveAt(i);
+				}
+			}
+			if (C.Prefs.Dock.Reflections && !C.Prefs.Dock.ShowLabels && DockGlassFullyTransparent())
+			{
+				// 异步回填真实图标后补齐倒影（构建时是文字占位符没有倒影）
+				AddIconReflection(sp, image, C.Prefs.Dock.IconSize);
+			}
 			notifyIcons[entry.Path] = image;
+		}
+	}
+
+	// 倒影仅在 Dock 玻璃全透明（UI 透明度 100%，内部不透明度 0）时启用；
+	// 统一面板开启时读全局统一值（那里拉到 100% 也算），否则读 Dock 自己的值。
+	private static long reflJudgeMs;
+	private bool DockGlassFullyTransparent()
+	{
+		// 统一模式读 GlobalStyle 原始值（Prefs.OpacityPercent 被 ApplyGlobalStyle clamp 到 ≥10，
+		// 读它会永远 false）；非统一读 Dock 自己的值。0=全透明（UI 100%）。
+		double effective = C.Prefs.GlobalStyle.Unify ? C.Prefs.GlobalStyle.OpacityPercent : C.Prefs.Dock.OpacityPercent;
+		long nowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
+		if (nowMs - reflJudgeMs > 1000)
+		{
+			reflJudgeMs = nowMs;
+			Store.Trace("REFL judge effective=" + effective.ToString("F1") + " unify=" + (C.Prefs.GlobalStyle.Unify ? "true" : "false") + " dock=" + C.Prefs.Dock.OpacityPercent.ToString("F1") + " globalRaw=" + C.Prefs.GlobalStyle.OpacityPercent.ToString("F1") + " globalClamped=" + (C.Prefs.OpacityPercent.HasValue ? C.Prefs.OpacityPercent.Value.ToString("F1") : "null"));
+		}
+		return effective <= 0.5;
+	}
+
+	// 图标倒影：位图管线镜像（TransformedBitmap 翻转+裁剪）+ 自上而下渐隐。
+	// 不用 VisualBrush（按钮 BitmapCache 下会空白）、不用 RenderTransform 翻转（与 ClipToBounds 组合在分层窗口渲染异常）。
+	private void AddIconReflection(StackPanel sp, System.Windows.Controls.Image img, double iconSize)
+	{
+		double reflHeight = Math.Max(6.0, Math.Floor(iconSize * 0.50));
+		LinearGradientBrush reflMask = new LinearGradientBrush
+		{
+			StartPoint = new System.Windows.Point(0.5, 0.0),
+			EndPoint = new System.Windows.Point(0.5, 1.0)
+		};
+		// 倒影蒙版按环境明暗取色：浅色主题（亮背景）用黑色渐隐；深色主题/暗壁纸用白色渐隐，
+		// 否则黑色倒影叠在暗背景上完全不可见（用户反馈「全透明时看不到倒影」的视觉根因之一）。
+		byte maskC = 0; // 倒影统一深色（macOS 风格），白色倒影在亮色壁纸上不可见
+		reflMask.GradientStops.Add(new GradientStop(System.Windows.Media.Color.FromArgb(128, maskC, maskC, maskC), 0.0));
+		reflMask.GradientStops.Add(new GradientStop(System.Windows.Media.Color.FromArgb(0, maskC, maskC, maskC), 1.0));
+		System.Windows.Controls.Image reflImg = new System.Windows.Controls.Image
+		{
+			Width = iconSize,
+			Height = reflHeight,
+			Stretch = Stretch.Fill,
+			Margin = new Thickness(0.0, 1.0, 0.0, 0.0),
+			IsHitTestVisible = false,
+			OpacityMask = reflMask,
+			Tag = "icon-reflection"
+		};
+		// 绑定源图标：异步回填/换源时倒影自动重算（一次性 Convert 在源为空或未就绪时会永久缺失）。
+		System.Windows.Data.Binding reflBind = new System.Windows.Data.Binding("Source")
+		{
+			Source = img,
+			Converter = new FlipReflectConverter(0.50)
+		};
+		reflImg.SetBinding(System.Windows.Controls.Image.SourceProperty, reflBind);
+		sp.Children.Add(reflImg);
+	}
+
+	// 矢量元素（Path/Canvas 等内置线条图标）渲染为位图：
+	// 4x 超采样（96 画布渲染 24 系图标）再缩放，线条更饱满清晰，且能走位图倒影管线。
+	private System.Windows.Controls.Image Bitmapize(FrameworkElement el, double size)
+	{
+		try
+		{
+			// 用元素自身设计尺寸渲染（Glyph 返回 size×size 的 Grid+Viewbox），
+			// 之前固定 24 会把整套内容压成 24px 再摊到 96 画布上，显示出来只有 1/4 大小。
+			double ew = double.IsNaN(el.Width) ? size : el.Width;
+			double eh = double.IsNaN(el.Height) ? size : el.Height;
+			el.Measure(new System.Windows.Size(ew, eh));
+			el.Arrange(new Rect(0.0, 0.0, ew, eh));
+			RenderTargetBitmap rtb = new RenderTargetBitmap((int)Math.Ceiling(ew), (int)Math.Ceiling(eh), 96.0, 96.0, PixelFormats.Pbgra32);
+			rtb.Render(el);
+			rtb.Freeze();
+			System.Windows.Controls.Image image = new System.Windows.Controls.Image
+			{
+				Source = rtb,
+				Width = size,
+				Height = size,
+				Stretch = Stretch.Uniform
+			};
+			RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+			return image;
+		}
+		catch
+		{
+			return null;
 		}
 	}
 
@@ -1558,7 +1736,10 @@ public class DockWindow : GlassWindow
 				action();
 			}
 		}, iconSize + 16.0);
-		button.Height = iconSize + 16.0 + (double)(o.ShowLabels ? 18 : 0);
+		// 有倒影时按钮加高：图标+倒影（图标 50%）总高度超过 iconSize+16，
+		// StackPanel 溢出会把图标挤偏/裁边（用户反馈「裁剪原有图标」）。
+		double reflPad = (o.Reflections && !o.ShowLabels && DockGlassFullyTransparent()) ? (Math.Max(6.0, Math.Floor(iconSize * 0.50)) + 1.0) : 0.0;
+		button.Height = iconSize + 16.0 + (double)(o.ShowLabels ? 18 : 0) + reflPad;
 		button.Margin = new Thickness(o.Spacing / 2.0, 0.0, o.Spacing / 2.0, 0.0);
 		// 悬浮提示：无背景纯文字名称（跟随玻璃文字颜色），不带气泡底板
 		button.ToolTip = DockTip(tip);
@@ -1691,11 +1872,30 @@ public class DockWindow : GlassWindow
 			RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
 			element = image;
 		}
+		// 矢量系统图标（Feather/线条 Path）渲染为位图：获得与应用图标一致的倒影管线，
+		// 且 4x 超采样后放大更饱满清晰（细线图标在全透明亮壁纸上不再"隐形"）。
+		if (element != null && !(element is System.Windows.Controls.Image) && !(element is TextBlock))
+		{
+			System.Windows.Controls.Image bmpEl = Bitmapize(element, iconSize);
+			if (bmpEl != null)
+			{
+				element = bmpEl;
+			}
+		}
 		StackPanel stackPanel = new StackPanel
 		{
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		stackPanel.Children.Add(element);
+		double runReflPad = reflPad;
+		if (reflPad > 0.0)
+		{
+			// 有倒影时运行指示贴着图标下缘（倒影之上），不与倒影重叠
+			if (element is System.Windows.Controls.Image img)
+			{
+				AddIconReflection(stackPanel, img, iconSize);
+			}
+		}
 		TextBlock dockLabel = null;
 		if (o.ShowLabels)
 		{
@@ -1829,7 +2029,7 @@ public class DockWindow : GlassWindow
 				Background = runMarkerBrush,
 				HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Bottom,
-				Margin = new Thickness(0.0, 0.0, 0.0, RunMarkerBottomMargin),
+				Margin = new Thickness(0.0, 0.0, 0.0, RunMarkerBottomMargin + runReflPad),
 				RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
 				RenderTransform = new ScaleTransform(1.0, 1.0),
 				Visibility = Visibility.Collapsed
@@ -1844,7 +2044,7 @@ public class DockWindow : GlassWindow
 				Background = runMarkerBrush,
 				HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
 				VerticalAlignment = VerticalAlignment.Bottom,
-				Margin = new Thickness(0.0, 0.0, 0.0, RunMarkerBottomMargin),
+				Margin = new Thickness(0.0, 0.0, 0.0, RunMarkerBottomMargin + runReflPad),
 				RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
 				RenderTransform = new ScaleTransform(1.0, 1.0),
 				Visibility = Visibility.Collapsed
@@ -1890,8 +2090,10 @@ public class DockWindow : GlassWindow
 		button.RenderTransform = zoomTf;
 		button.RenderTransformOrigin = new System.Windows.Point(0.5, 0.8);
 		button.UseLayoutRounding = true;
-		// 位图缓存：图标纹理交 GPU 缩放，RenderTransform 动画不再逐帧 CPU 光栅化
-		button.CacheMode = new BitmapCache(2.0);
+		// 不再用 BitmapCache：RenderTransform 缩放时 WPF 每帧按新分辨率重新光栅化纹理，
+		// 快速来回划动时 GPU 纹理反复重建/上传，与视频壁纸的合成带宽互相争抢 → 渐进式卡顿
+		// （移出 Dock 动画停表后恢复）。当前帧驱动 + 指数平滑下 CPU 光栅缩放成本可忽略。
+		button.CacheMode = null;
 		// 苹果式邻近放大：注册进帧驱动引擎（OnDockZoomMove 记录光标，OnZoomFrameTick 统一驱动）
 		zoomNodes.Add(new ZoomNode
 		{
@@ -1905,11 +2107,11 @@ public class DockWindow : GlassWindow
 			// 系统内置图标只用普通名称提示（ToolTip），不弹卡片。
 			DispatcherTimer previewTimer = new DispatcherTimer
 			{
-				Interval = TimeSpan.FromMilliseconds(450.0)
+				Interval = TimeSpan.FromMilliseconds(300.0)
 			};
 			DispatcherTimer leaveTimer = new DispatcherTimer
 			{
-				Interval = TimeSpan.FromMilliseconds(220.0)
+				Interval = TimeSpan.FromMilliseconds(350.0)
 			};
 			previewPopup = null;
 			bool previewKeep = false;
@@ -2299,38 +2501,58 @@ public class DockWindow : GlassWindow
 		EnsureZoomFrame();
 	}
 
+	private bool zoomRenderingHooked;
+	private bool zoomAnimating;
+	private bool zoomShadowStripped;
+	// 恢复被缩放动画摘掉的软渲染阴影（与 SetGlassOpacity 的判定条件保持一致）
+	private void RestoreZoomShadow()
+	{
+		if (!zoomShadowStripped)
+		{
+			return;
+		}
+		zoomShadowStripped = false;
+		ApplySurfaceShadow(true);
+	}
 	private void EnsureZoomFrame()
 	{
-		if (zoomFrameTimer == null)
+		// CompositionTarget.Rendering：每帧渲染前恰好回调一次，与渲染管线严格同步
+		// （DispatcherTimer 会与渲染帧错位：一帧内 tick 两次或整帧错过=浪费 pass/掉帧）。
+		if (!zoomRenderingHooked)
 		{
-			zoomFrameTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Render, Dispatcher)
-			{
-				Interval = TimeSpan.FromMilliseconds(15.0)
-			};
-			zoomFrameTimer.Tick += OnZoomFrameTick;
+			zoomRenderingHooked = true;
+			CompositionTarget.Rendering += OnZoomFrameTick;
 		}
-		if (!zoomFrameTimer.IsEnabled)
-		{
-			zoomClock.Restart();
-			zoomLastSec = 0.0;
-			zoomFrameTimer.Start();
-		}
+		zoomAnimating = true;
+		zoomClock.Restart();
+		zoomLastSec = 0.0;
 	}
 
 	// 帧循环：smoothstep 计算目标 → 指数平滑插值 → 缩放 + 水平推开 → 收敛自停。
 	private void OnZoomFrameTick(object sender, EventArgs e)
 	{
-		double now = zoomClock.Elapsed.TotalSeconds;
+		if (!zoomAnimating)
+		{
+			return;
+		}
+		double now = ((RenderingEventArgs)e).RenderingTime.TotalSeconds;
 		double dt = Math.Min(0.05, Math.Max(0.001, now - zoomLastSec));
 		zoomLastSec = now;
 		if (!MotionEnabled || zoomNodes.Count == 0)
 		{
-			zoomFrameTimer.Stop();
+			zoomAnimating = false;
 			return;
 		}
 		if (DockInputBusy || dockPressActive || dragging || dockIconDragging || externalDockDrag)
 		{
 			return;
+		}
+		// 动画期间摘掉软渲染阴影（DropShadowEffect 每帧 CPU 模糊整窗，是划动掉帧的最大来源）；
+		// 收敛后恢复。阴影摘挂一次性的，只在开关沿触发。
+		if (!zoomShadowStripped)
+		{
+			zoomShadowStripped = true;
+			ApplySurfaceShadow(false);
 		}
 		double amp = Math.Min(1.0, (C.Prefs.Dock.Zoom - 1.0) * MotionLevel);
 		double radius = Math.Max(40.0, C.Prefs.Dock.IconSize * 1.6);
@@ -2362,7 +2584,7 @@ public class DockWindow : GlassWindow
 		// “缩小”方向不钳制：指数衰减本身就是平滑的（时间连续、无台阶），快速落下
 		// 是自然的重力感——鼠标快速滑过后图标立即回落，而不是悬空一会儿再慢慢降。
 		double k = 1.0 - Math.Exp(-dt / 0.030);
-		double maxD = dt * 8.0;
+		double maxD = dt * 14.0;
 		foreach (ZoomNode n in zoomNodes)
 		{
 			double d = (n.Target - n.Current) * k;
@@ -2393,28 +2615,39 @@ public class DockWindow : GlassWindow
 				zoomReorderPending = false;
 			}
 		}
-		// 3) 局部推开：放大图标只把左右直接邻居推开（各让一半扩展量），邻居再把
-		// 自己的微小扩展传给更外圈——推移量随距离几何衰减，远处图标纹丝不动。
-		// 不再出现“整个 dock 一起移位、两翼反向漂移”的刚性推开。
+		// 3) 局部让位：放大图标把左右直接邻居轻轻推开（每侧约放大溢出量的一半），
+		// Shift 做指数平滑——让位柔和不抖动；远处图标完全不动。
 		double slotW = C.Prefs.Dock.IconSize + 16.0;
 		foreach (ZoomNode n in zoomNodes)
 		{
-			n.Shift.X = 0.0;
+			n.ShiftTargetX = 0.0;
 		}
 		for (int i = 0; i < zoomNodes.Count; i++)
 		{
-			double ext = Math.Max(0.0, zoomNodes[i].Current - 1.0) * slotW * 0.55;
+			double ext = Math.Max(0.0, zoomNodes[i].Current - 1.0) * slotW * 0.25;
 			if (ext <= 0.0001)
 			{
 				continue;
 			}
 			if (i > 0)
 			{
-				zoomNodes[i - 1].Shift.X -= ext * 0.5;
+				zoomNodes[i - 1].ShiftTargetX -= ext * 0.5;
 			}
 			if (i < zoomNodes.Count - 1)
 			{
-				zoomNodes[i + 1].Shift.X += ext * 0.5;
+				zoomNodes[i + 1].ShiftTargetX += ext * 0.5;
+			}
+		}
+		double kShift = 1.0 - Math.Exp(-dt / 0.055);
+		foreach (ZoomNode n in zoomNodes)
+		{
+			n.Shift.X += (n.ShiftTargetX - n.Shift.X) * kShift;
+			// ZIndex 仅在穿越阈值时更新一次，避免每帧 27 次 SetZIndex 引发不必要的子元素重排
+			int z = (n.Current > 1.05) ? 1 : 0;
+			if (n.Z != z)
+			{
+				n.Z = z;
+				System.Windows.Controls.Panel.SetZIndex(n.Button, z);
 			}
 		}
 		bool settle = true;
@@ -2424,17 +2657,22 @@ public class DockWindow : GlassWindow
 			{
 				settle = false;
 			}
+			if (Math.Abs(n.Shift.X - n.ShiftTargetX) > 0.25)
+			{
+				settle = false;
+			}
 			if (Math.Abs(n.Scale.ScaleX - n.Current) > 0.0005)
 			{
 				n.Scale.ScaleX = n.Current;
 				n.Scale.ScaleY = n.Current;
 			}
 		}
-		// 4) 全部稳定 → 停表，零空闲开销；下次 MouseMove 自动唤醒
+		// 4) 全部稳定 → 停帧（常驻 Rendering 订阅靠 flag 早退，零空闲开销）；下次 MouseMove 自动唤醒
 		if (settle)
 		{
-			zoomFrameTimer.Stop();
+			zoomAnimating = false;
 			zoomHoverActive = false;
+			RestoreZoomShadow();
 		}
 		// —— 诊断落盘（默认关闭）：zoom-diag.on 存在时每帧写一行 ——
 		if (now - zoomDiagCheckedSec > 0.5)
@@ -4002,8 +4240,16 @@ public class DockWindow : GlassWindow
 		};
 		previewSlots = new System.Collections.Generic.List<System.Windows.Controls.Image>();
 		previewSlotWindows = new System.Collections.Generic.List<IntPtr>();
+		// 缩略图上限 4 张：Electron/多进程应用窗口很多，每个 DWM 缩略图注册都是一次同步 IPC，
+		// 全量注册会让 UI 线程阻塞上百 ms（跨图标切换预览时卡顿的主因）。
+		int previewCap = 0;
 		foreach (RunningWindow window in windows)
 		{
+			if (previewCap >= 4)
+			{
+				break;
+			}
+			previewCap++;
 			row.Children.Add(PreviewCard(window, light, palette.hover));
 		}
 		root.Children.Add(row);
@@ -4354,11 +4600,26 @@ public class DockWindow : GlassWindow
 		}
 		if (previewThumbs != null)
 		{
-			foreach (IntPtr thumb in previewThumbs)
-			{
-				DwmUnregisterThumbnail(thumb);
-			}
+			// 注销挪到后台线程：每个 DwmUnregisterThumbnail 都是同步 IPC，全量注销会阻塞 UI 线程几十 ms
+			System.Collections.Generic.List<IntPtr> oldThumbs = new System.Collections.Generic.List<IntPtr>(previewThumbs);
 			previewThumbs.Clear();
+			previewThumbs = null;
+			if (oldThumbs.Count > 0)
+			{
+				Task.Run(delegate
+				{
+					try
+					{
+						foreach (IntPtr thumb in oldThumbs)
+						{
+							DwmUnregisterThumbnail(thumb);
+						}
+					}
+					catch
+					{
+					}
+				});
+			}
 		}
 		if (previewHosts != null)
 		{
@@ -4368,10 +4629,6 @@ public class DockWindow : GlassWindow
 			}
 			previewHosts.Clear();
 			previewHosts = null;
-		}
-		if (previewThumbs != null)
-		{
-			previewThumbs = null;
 		}
 		previewSlots = null;
 		previewSlotWindows = null;
@@ -4665,7 +4922,14 @@ public class DockWindow : GlassWindow
 
 	private bool StartPointerItem(FrameworkElement owner, string key, string name, Action click, System.Windows.Point point, Action beforeDrag)
 	{
-		if (!IsVisible || !LayoutKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+		bool known = LayoutKeys.Contains(key, StringComparer.OrdinalIgnoreCase);
+		if (!known && !DockLayoutRules.SystemItem(key))
+		{
+			// 运行任务快照的进程路径可能与固定条目路径不一致（Electron 多进程应用），
+			// 固定应用本身应始终可交互，否则这类图标会失去按下反馈/拖拽。
+			known = DockOrderRules.Ordered(C.Prefs).Any((Entry a) => string.Equals(a.Path, key, StringComparison.OrdinalIgnoreCase));
+		}
+		if (!IsVisible || !known)
 		{
 			return false;
 		}

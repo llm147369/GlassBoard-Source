@@ -114,6 +114,10 @@ public class DockOptions
 	[DataMember]
 	public bool IconRipple = true;
 
+	// 图标倒影：图标下方渐隐的镜像投影（带文字标签时自动不显示）
+	[DataMember]
+	public bool Reflections = true;
+
 	[DataMember]
 	public MaterialOptions Material = new MaterialOptions();
 
@@ -164,6 +168,7 @@ public class DockOptions
 		ShowShortcutOverlays = false;
 		SharperIcons = false;
 		IconRipple = true;
+		Reflections = true;
 		HideDelay = 900.0;
 		EdgeRange = 12.0;
 		BlurRadius = 18.0;
@@ -217,7 +222,8 @@ public class DockOptions
 			// 收纳开启：Dock 上只剩应用面板 + 控制中心 + 运行列表（快捷功能不受收纳影响）
 			return 1 + (ShowControlCenter ? 1 : 0) + (ShowRunningList ? 1 : 0) + quick;
 		}
-		return 1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 1 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0) + quick;
+		// 此电脑与回收站成对显示（DockWindow.Refresh 里 ShowComputer 分支同时加两个按钮）
+		return 1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 2 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0) + quick;
 	}
 
 	public int VisiblePinned(double availableWidth, int count)

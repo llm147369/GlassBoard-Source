@@ -60,8 +60,9 @@ public static class VideoWallpaper
 		{
 			// Wallpaper Engine 持续清理壁纸 WorkerW 内的外来窗口（每帧移出/销毁），
 			// 同时运行会导致视频壁纸无法稳定显示——互斥并给出明确提示。
+			// 判定以 WorkerW 里的壁纸窗口为准：仅后台服务/残留进程不会误报。
 			Store.Trace("VIDEOWALL blocked by Wallpaper Engine");
-			PostStatus(status, "检测到 Wallpaper Engine 正在运行：两者会争夺壁纸层，请先在 WPE 中退出，再开启视频壁纸。");
+			PostStatus(status, "检测到 Wallpaper Engine 的壁纸正在运行：两者会争夺壁纸层，请在 WPE 中停止壁纸（托盘图标退出）后再开启。");
 			return;
 		}
 		// Win10/精简系统常见：未装 WebView2 运行时。提前探测并给出明确指引，
@@ -202,19 +203,34 @@ public static class VideoWallpaper
 
 	private static bool IsWallpaperEngineRunning()
 	{
+		// 只有 WPE 的壁纸窗口真正挂在 WorkerW 里才算"接管壁纸层"。
+		// wallpaperservice64/32 是常驻服务（开机自启、退出 WPE 后仍在），
+		// wallpaper64.exe 退出后也可能残留——进程存在不等于壁纸被接管，按窗口证据判定。
 		try
 		{
-			foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcesses())
+			IntPtr wall = FindWallWorkerW();
+			if (wall == IntPtr.Zero)
 			{
-				string name = p.ProcessName;
-				if (string.Equals(name, "wallpaper64", StringComparison.OrdinalIgnoreCase)
-					|| string.Equals(name, "wallpaper32", StringComparison.OrdinalIgnoreCase)
-					|| string.Equals(name, "wallpaperservice64", StringComparison.OrdinalIgnoreCase)
-					|| string.Equals(name, "wallpaperservice32", StringComparison.OrdinalIgnoreCase))
-				{
-					return true;
-				}
+				return false;
 			}
+			bool found = false;
+			System.Text.StringBuilder clsBuf = new System.Text.StringBuilder(128);
+			EnumChildWindows(wall, delegate (IntPtr h, IntPtr lp)
+			{
+				clsBuf.Clear();
+				if (GetClassName(h, clsBuf, 128) > 0)
+				{
+					string cls = clsBuf.ToString();
+					if (cls.IndexOf("WPEDesktop", StringComparison.OrdinalIgnoreCase) >= 0
+						|| cls.IndexOf("WallpaperEngine", StringComparison.OrdinalIgnoreCase) >= 0)
+					{
+						found = true;
+						return false;
+					}
+				}
+				return true;
+			}, IntPtr.Zero);
+			return found;
 		}
 		catch
 		{
@@ -753,7 +769,7 @@ public class VideoWindow
 			string videoUrl = "https://vw.local/" + Uri.EscapeDataString(file);
 			string html = "<html style='margin:0;background:#000'><body style='margin:0;overflow:hidden'>" +
 				"<video id='v' src='" + videoUrl + "' playsinline preload='auto' style='width:100vw;height:100vh;object-fit:cover'></video>" +
-				"<script>var v=document.getElementById('v');v.muted=true;v.onerror=function(){window.chrome.webview.postMessage('error:'+(v.error?(v.error.code||0):0));};v.onloadeddata=function(){window.chrome.webview.postMessage('ready');};v.onplaying=function(){window.chrome.webview.postMessage('playing');};v.addEventListener('timeupdate',function(){try{if(v.duration-v.currentTime<=0.25){v.currentTime=0;}}catch(e){}});v.addEventListener('ended',function(){try{v.currentTime=0;v.play();}catch(e){}});var p=v.play();if(p&&p.catch){p.catch(function(e){window.chrome.webview.postMessage('playfail:'+e.name);});}</script></body></html>";
+				"<script>var v=document.getElementById('v');v.muted=true;v.onerror=function(){window.chrome.webview.postMessage('error:'+(v.error?(v.error.code||0):0));};v.onloadeddata=function(){window.chrome.webview.postMessage('ready');};var reported=false;v.onplaying=function(){if(!reported){reported=true;window.chrome.webview.postMessage('playing');}};v.addEventListener('timeupdate',function(){try{if(v.duration-v.currentTime<=0.25){v.currentTime=0;}}catch(e){}});v.addEventListener('ended',function(){try{v.currentTime=0;v.play();}catch(e){}});var p=v.play();if(p&&p.catch){p.catch(function(e){window.chrome.webview.postMessage('playfail:'+e.name);});}</script></body></html>";
 			Store.Trace("VIDEOWALL loading(webview2): " + path);
 			web.CoreWebView2.NavigateToString(html);
 			// 渲染进程窗口（Chrome_RenderWidgetHostHWND）异步创建，先静音一次，之后

@@ -101,9 +101,39 @@ public class GlassWindow : Window
 	// 否则深色 tint 压底后深色文字不可读（A6：修复 浓郁深色 等深 tint 材质发灰发暗）。
 	protected bool DarkSurface => GlassMaterials.DarkSurface(CurrentMaterial, LightTheme);
 
-	protected System.Windows.Media.Brush TextBrush => new SolidColorBrush(DarkSurface ? System.Windows.Media.Color.FromRgb(247, 247, 249) : System.Windows.Media.Color.FromRgb(25, 28, 34));
+	// 高频访问的文字画刷：缓存 + Freeze（冻结后免每帧重新校验/克隆，动画期少走两次分配与
+	// 冻结态画刷可直接上渲染通道；仅用于 Foreground/CaretBrush 等静态用途，绝不动画）。
+	private System.Windows.Media.Brush cachedTextBrush;
+	private bool cachedTextDark;
+	protected System.Windows.Media.Brush TextBrush
+	{
+		get
+		{
+			if (cachedTextBrush == null || cachedTextDark != DarkSurface)
+			{
+				cachedTextDark = DarkSurface;
+				cachedTextBrush = new SolidColorBrush(cachedTextDark ? System.Windows.Media.Color.FromRgb(247, 247, 249) : System.Windows.Media.Color.FromRgb(25, 28, 34));
+				cachedTextBrush.Freeze();
+			}
+			return cachedTextBrush;
+		}
+	}
 
-	protected System.Windows.Media.Brush MutedBrush => new SolidColorBrush(DarkSurface ? System.Windows.Media.Color.FromRgb(184, 188, 198) : System.Windows.Media.Color.FromRgb(65, 69, 77));
+	private System.Windows.Media.Brush cachedMutedBrush;
+	private bool cachedMutedDark;
+	protected System.Windows.Media.Brush MutedBrush
+	{
+		get
+		{
+			if (cachedMutedBrush == null || cachedMutedDark != DarkSurface)
+			{
+				cachedMutedDark = DarkSurface;
+				cachedMutedBrush = new SolidColorBrush(cachedMutedDark ? System.Windows.Media.Color.FromRgb(184, 188, 198) : System.Windows.Media.Color.FromRgb(65, 69, 77));
+				cachedMutedBrush.Freeze();
+			}
+			return cachedMutedBrush;
+		}
+	}
 
 	protected void ConfigureGlass(DockOptions options, MaterialOptions material = null)
 	{
@@ -412,6 +442,7 @@ public class GlassWindow : Window
 					cachedBackdrop = baked;
 					backdropKey = BackdropKeyOfRect(rect, dpi, light, blur, saturation, live);
 					AddBackdrop(baked);
+					RefreshBackdropStyle();
 				}));
 			}
 			catch (InvalidOperationException)
@@ -747,9 +778,11 @@ public class GlassWindow : Window
 			{
 				return;
 			}
+			// 后台烘焙：PrintWindow + BoxBlur 是 UI 线程重活（大面板一次数百毫秒）。
+			// 同步执行会让窗口显示后正在拖动/移动鼠标的操作明显卡顿——
+			// 控制中心打开 240ms 后恰逢本次防抖刷新，用户拖动窗口/移动鼠标会感到冻结。
 			int dpi = Native.DpiOf(hwnd);
-			CaptureRegion(rect, dpi);
-			RefreshBackdropStyle();
+			CaptureBackdropAsync(rect, dpi, Root.Margin, LightTheme, MaterialBlur, CurrentMaterial.Saturation, CurrentMaterial.LiveBlur);
 		}
 		catch (Exception ex)
 		{
@@ -1004,6 +1037,13 @@ public class GlassWindow : Window
 				Background = new LinearGradientBrush(Colors.Transparent, System.Windows.Media.Color.FromArgb((byte)Math.Max(0, (int)innerShadow.A - 22), innerShadow.R, innerShadow.G, innerShadow.B), 0.0)
 			});
 		}
+	}
+
+	// 子窗口动画期间临时摘掉软渲染阴影（DropShadowEffect 每帧 CPU 模糊整窗代价极高，是划动
+	// 掉帧的最大来源），收敛后恢复；条件与 SetGlassOpacity 中 Surface.Effect 的判定保持一致。
+	protected void ApplySurfaceShadow(bool on)
+	{
+		Surface.Effect = ((on && GlassPercent > 0.0 && CurrentMaterial.Shadow && !SlowRender) ? surfaceShadow : null);
 	}
 
 	// 统一圆角下发：大面板/组件/Dock 共用 Dock.Radius。改圆角必须同步 Surface、底图层
