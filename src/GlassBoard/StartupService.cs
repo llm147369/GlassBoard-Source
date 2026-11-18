@@ -81,6 +81,34 @@ public static class StartupService
 		Set(enabled, Mode);
 	}
 
+	// 自愈：程序被移动后，注册表 Run 键仍指向旧路径，会导致开机自启动静默失效。
+	// 每次启动检查 Run 键：若指向的 exe 路径与当前路径不一致（或文件已不存在），
+	// 自动更新为当前路径——用户移动程序后只需手动启动一次，自启动即恢复，无需进设置手动关开。
+	public static void Ensure()
+	{
+		try
+		{
+			string value = RunValue();
+			if (string.IsNullOrEmpty(value))
+			{
+				return; // 未开启自启动，不动
+			}
+			string oldPath = StartupRules.TargetOf(value);
+			string exe = Assembly.GetExecutingAssembly().Location;
+			if (oldPath != null && string.Equals(oldPath, exe, StringComparison.OrdinalIgnoreCase))
+			{
+				return; // 路径一致，无需修正
+			}
+			using RegistryKey registryKey = Registry.CurrentUser.CreateSubKey(RunKeyPath);
+			registryKey.SetValue(Name, StartupRules.Command(exe), RegistryValueKind.String);
+			Store.Trace("STARTUP self-heal old=" + (oldPath ?? "(无法解析)") + " new=" + exe);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+	}
+
 	public static void Set(bool enabled, int mode)
 	{
 		string exe = Assembly.GetExecutingAssembly().Location;

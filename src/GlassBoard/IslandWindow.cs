@@ -4073,6 +4073,21 @@ expandedRoot.Visibility = Visibility.Collapsed;
 		collapsedRoot.Visibility = Visibility.Visible;
 		EnsureShown();
 		Visibility = Visibility.Visible;
+		// 启用/显示后把窗口提到 Z 序最顶（一次性、不置顶）：窗口 Show 后默认可能落
+		// 在前台窗口（设置窗口/浏览器等）下方，用户看不到会误以为“启用没反应”。
+		// SetNoActivate 里的 SetWindowPos 在 Show 之前调用、对未显示窗口不生效，
+		// 这里等窗口真正入屏后再重排一次 Z。置顶与否仍由 AlwaysOnTop/ApplyTopmost 决定。
+		Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+		{
+			try
+			{
+				IntPtr hwnd = new WindowInteropHelper(this).Handle;
+				SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+			}
+			catch
+			{
+			}
+		}));
 		progressTimer.Start();
 		fullscreenTimer.Start();
 		RebuildCollapsed();

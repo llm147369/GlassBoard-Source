@@ -3083,14 +3083,48 @@ public class DockWindow : GlassWindow
 		}
 	}
 
+	// 托盘/后台进程常见 exe 后缀：同产品的「主程序 + Tray/Core/Helper…」据此归并。
+	private static readonly string[] ExeSuffixes = new string[15]
+	{
+		"TrayIcon", "Tray", "Agent", "Helper", "Service", "Daemon", "Worker", "Core",
+		"Main", "Background", "Bg", "Notifier", "Watcher", "Guard", "Updater"
+	};
+
+	// 去掉 exe 主名末尾的托盘/后台后缀：JianyingProTray→JianyingPro、FlClashCore→FlClash。
+	// 只去一层（常见场景），并保证结果至少 3 个字符，避免过度归并。
+	private static string StripExeSuffix(string name)
+	{
+		if (string.IsNullOrEmpty(name))
+		{
+			return "";
+		}
+		foreach (string suffix in ExeSuffixes)
+		{
+			if (name.Length > suffix.Length && name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+			{
+				string stripped = name.Substring(0, name.Length - suffix.Length);
+				if (stripped.Length >= 3)
+				{
+					return stripped;
+				}
+			}
+		}
+		return name;
+	}
+
+	// 分组键：按「安装目录 + 去后缀基名」聚合，而非完整路径。
+	// 同一产品的多个 exe（主程序 + Tray/后台）归为一个图标，对齐任务栏按 AppUserModelID 聚合同一产品的行为。
 	private static string TaskKey(RunningWindow window)
 	{
-		string fileName = Path.GetFileName(window.Path ?? "");
-		if (!string.IsNullOrEmpty(window.Path) && !fileName.Equals("ApplicationFrameHost.exe", StringComparison.OrdinalIgnoreCase))
+		string path = window.Path ?? "";
+		string fileName = Path.GetFileName(path);
+		if (string.IsNullOrEmpty(path) || fileName.Equals("ApplicationFrameHost.exe", StringComparison.OrdinalIgnoreCase))
 		{
-			return window.Path;
+			return "window:" + window.Handle.ToInt64();
 		}
-		return "window:" + window.Handle.ToInt64();
+		string dir = Path.GetDirectoryName(path) ?? "";
+		string baseName = StripExeSuffix(Path.GetFileNameWithoutExtension(path));
+		return "dir:" + dir.ToLowerInvariant() + "|" + baseName.ToLowerInvariant();
 	}
 
 	private void ReadTaskGroups()
@@ -3098,10 +3132,10 @@ public class DockWindow : GlassWindow
 		taskGroups = RunningWindows.SnapshotWithBackground().GroupBy(TaskKey, StringComparer.OrdinalIgnoreCase).OrderBy((IGrouping<string, RunningWindow> g) => g.Key, StringComparer.OrdinalIgnoreCase)
 			.Select((IGrouping<string, RunningWindow> g) =>
 			{
-				// 有效窗口句柄排前：Handle=0 的 background 项（无窗口进程）放在最后，
-				// 否则 OpenTask 的 windows[0] 会选中 Handle=0 项，激活失败直接走到重启分支。
-				List<RunningWindow> windows = g.OrderBy((RunningWindow w) => (w.Handle == IntPtr.Zero) ? 1 : 0).ThenBy((RunningWindow w) => w.Handle.ToInt64()).ToList();
-				string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(windows[0].Path ?? "");
+				// 主程序窗口排最前（非 Tray 优先，再按有无句柄）：名称与激活都取主程序，
+				// 避免 Tray 进程抢占显示名（JianyingProTray 应显示成 JianyingPro）。
+				List<RunningWindow> windows = g.OrderBy((RunningWindow w) => w.Tray ? 1 : 0).ThenBy((RunningWindow w) => (w.Handle == IntPtr.Zero) ? 1 : 0).ThenBy((RunningWindow w) => w.Handle.ToInt64()).ToList();
+				string fileNameWithoutExtension = StripExeSuffix(Path.GetFileNameWithoutExtension(windows[0].Path ?? ""));
 				Entry entry = C.Prefs.Apps.FirstOrDefault((Entry a) => !a.IsFolder && WindowActivationRules.Executables(a).Contains(windows[0].Path, StringComparer.OrdinalIgnoreCase));
 				return new TaskGroup
 				{
@@ -3667,114 +3701,82 @@ public class DockWindow : GlassWindow
 		ReadTaskGroups();
 		List<TaskGroup> groups = taskGroups.OrderBy((TaskGroup g) => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
 		(System.Windows.Media.Color bg, System.Windows.Media.Color ink, System.Windows.Media.Color line, System.Windows.Media.Color hover) = MenuTheme.Palette(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
-		StackPanel panel = new StackPanel
+		// 图标网格（仿 Windows 原生「隐藏图标」溢出面板）：每个运行程序一格，
+		// 左键=切回窗口，右键=任务栏式菜单，悬停 ToolTip 显示程序名。
+		WrapPanel panel = new WrapPanel
 		{
-			Margin = new Thickness(4.0)
+			Orientation = System.Windows.Controls.Orientation.Horizontal,
+			ItemWidth = 44.0,
+			ItemHeight = 44.0,
+			MaxWidth = 264.0,
+			Margin = new Thickness(3.0)
 		};
-		if (groups.Count == 0)
+		foreach (TaskGroup g in groups)
 		{
-			panel.Children.Add(new TextBlock
+			TaskGroup selected = g;
+			string suffix = selected.Windows.All((RunningWindow w) => w.Tray) ? "（托盘）" : ((selected.Windows.Count > 1) ? ("（" + selected.Windows.Count + " 个窗口）") : "");
+			System.Windows.Controls.Border row = new System.Windows.Controls.Border
 			{
-				Text = "暂无正在运行的程序",
-				Foreground = new System.Windows.Media.SolidColorBrush(ink),
-				FontSize = 12.5,
-				Margin = new Thickness(10.0, 6.0, 10.0, 8.0)
-			});
-		}
-		else
-		{
-			foreach (TaskGroup g in groups)
+				Width = 38.0,
+				Height = 38.0,
+				Margin = new Thickness(3.0),
+				CornerRadius = new CornerRadius(9.0),
+				Background = System.Windows.Media.Brushes.Transparent,
+				Cursor = System.Windows.Input.Cursors.Hand,
+				ToolTip = selected.Name + suffix
+			};
+			System.Windows.Controls.Image rowIcon = new System.Windows.Controls.Image
 			{
-				TaskGroup selected = g;
-				string suffix = selected.Windows.All((RunningWindow w) => w.Tray) ? "（托盘）" : ((selected.Windows.Count > 1) ? ("（" + selected.Windows.Count + " 个窗口）") : "");
-				System.Windows.Controls.Border row = new System.Windows.Controls.Border
+				Width = 24.0,
+				Height = 24.0,
+				Stretch = Stretch.Uniform,
+				HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			row.Child = rowIcon;
+			Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+			{
+				try
 				{
-					CornerRadius = new CornerRadius(6.0),
-					Background = System.Windows.Media.Brushes.Transparent,
-					Padding = new Thickness(10.0, 6.0, 10.0, 6.0),
-					Cursor = System.Windows.Input.Cursors.Hand
-				};
-				StackPanel content = new StackPanel
+					rowIcon.Source = RunningWindows.Icon(selected.Windows[0]);
+				}
+				catch
 				{
-					Orientation = System.Windows.Controls.Orientation.Horizontal
-				};
-				TextBlock nameBlock = new TextBlock
-				{
-					Text = selected.Name + suffix,
-					Foreground = new System.Windows.Media.SolidColorBrush(ink),
-					FontSize = 12.5,
-					VerticalAlignment = VerticalAlignment.Center,
-					Margin = new Thickness(9.0, 0.0, 0.0, 0.0),
-					MaxWidth = 240.0,
-					TextTrimming = TextTrimming.CharacterEllipsis
-				};
-				content.Children.Add(nameBlock);
-				Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
-				{
-					try
-					{
-						ImageSource iconSource = RunningWindows.Icon(selected.Windows[0]);
-						content.Children.Insert(0, new System.Windows.Controls.Image
-						{
-							Source = iconSource,
-							Width = 18.0,
-							Height = 18.0,
-							Stretch = Stretch.Uniform,
-							VerticalAlignment = VerticalAlignment.Center
-						});
-					}
-					catch
-					{
-					}
-				}));
-				row.Child = content;
-				row.MouseEnter += (object ss, System.Windows.Input.MouseEventArgs ee) =>
-				{
-					row.Background = new System.Windows.Media.SolidColorBrush(hover);
-				};
-				row.MouseLeave += (object ss, System.Windows.Input.MouseEventArgs ee) =>
-				{
-					row.Background = System.Windows.Media.Brushes.Transparent;
-				};
-				row.MouseLeftButtonUp += (object ss, MouseButtonEventArgs ee) =>
-				{
-					close();
-					OpenTask(selected, null);
-				};
+				}
+			}));
+			row.MouseEnter += (object ss, System.Windows.Input.MouseEventArgs ee) =>
+			{
+				row.Background = new System.Windows.Media.SolidColorBrush(hover);
+			};
+			row.MouseLeave += (object ss, System.Windows.Input.MouseEventArgs ee) =>
+			{
+				row.Background = System.Windows.Media.Brushes.Transparent;
+			};
+			row.MouseLeftButtonUp += (object ss, MouseButtonEventArgs ee) =>
+			{
+				close();
+				OpenTask(selected, null);
+			};
+				// 右键 = GlassBoard 自己的菜单（不唤起系统溢出面板）：任务栏式窗口操作 + 退出。
 				System.Windows.Controls.ContextMenu rowMenu = MenuTheme.Create(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
-				System.Windows.Controls.MenuItem openItem = new System.Windows.Controls.MenuItem
+				System.Windows.Controls.MenuItem AddMenu(string header, Action act)
 				{
-					Header = "打开主面板"
-				};
-				openItem.Click += (object ss, RoutedEventArgs ee) =>
-				{
-					close();
-					OpenTask(selected, null);
-				};
-				System.Windows.Controls.MenuItem quitItem = new System.Windows.Controls.MenuItem
-				{
-					Header = "退出程序"
-				};
-				quitItem.Click += (object ss, RoutedEventArgs ee) =>
-				{
-					close();
-					KillTask(selected);
-				};
-				// —— 任务栏式窗口切换：单窗口直接项，多窗口给「切换窗口」子菜单 ——
-				if (selected.Windows.Count == 1)
-				{
-					RunningWindow single = selected.Windows[0];
-					System.Windows.Controls.MenuItem showItem = new System.Windows.Controls.MenuItem
+					System.Windows.Controls.MenuItem mi = new System.Windows.Controls.MenuItem
 					{
-						Header = "显示窗口",
-						ToolTip = single.Title
+						Header = header
 					};
-					showItem.Click += (object ss, RoutedEventArgs ee) =>
+					mi.Click += (object ss, RoutedEventArgs ee) =>
 					{
 						close();
-						RunningWindows.ActivateHandle(single.Handle);
+						act();
 					};
-					rowMenu.Items.Add(showItem);
+					rowMenu.Items.Add(mi);
+					return mi;
+				}
+				RunningWindow primary = selected.Windows.FirstOrDefault((RunningWindow w) => w.Handle != IntPtr.Zero) ?? selected.Windows[0];
+				if (selected.Windows.Count == 1)
+				{
+					AddMenu("显示窗口", () => RunningWindows.ActivateHandle(primary.Handle));
 				}
 				else if (selected.Windows.Count > 1)
 				{
@@ -3800,26 +3802,61 @@ public class DockWindow : GlassWindow
 					}
 					rowMenu.Items.Add(switchItem);
 				}
-				rowMenu.Items.Add(openItem);
-				rowMenu.Items.Add(quitItem);
+				if (primary.Handle != IntPtr.Zero)
+				{
+					rowMenu.Items.Add(new Separator());
+					if (RunningWindows.IsMinimized(primary.Handle))
+					{
+						AddMenu("还原", () => RunningWindows.Restore(primary.Handle));
+					}
+					else
+					{
+						AddMenu("最小化", () => RunningWindows.Minimize(primary.Handle));
+					}
+					if (RunningWindows.IsMaximized(primary.Handle))
+					{
+						AddMenu("还原", () => RunningWindows.Restore(primary.Handle));
+					}
+					else
+					{
+						AddMenu("最大化", () => RunningWindows.Maximize(primary.Handle));
+					}
+					AddMenu("关闭窗口", () => RunningWindows.Close(primary.Handle));
+				}
+				rowMenu.Items.Add(new Separator());
+				AddMenu("退出程序", () => KillTask(selected));
 				row.ContextMenu = rowMenu;
 				panel.Children.Add(row);
 			}
-		}
-		ScrollViewer scroller = new ScrollViewer
+		FrameworkElement shellContent;
+		if (groups.Count == 0)
 		{
-			VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
-			MaxHeight = 380.0,
-			Content = panel
-		};
+			shellContent = new TextBlock
+			{
+				Text = "暂无正在运行的程序",
+				Foreground = new System.Windows.Media.SolidColorBrush(ink),
+				FontSize = 12.5,
+				Margin = new Thickness(16.0, 12.0, 16.0, 12.0)
+			};
+		}
+		else
+		{
+			ScrollViewer scroller = new ScrollViewer
+			{
+				VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+				MaxHeight = 380.0,
+				Content = panel
+			};
+			shellContent = scroller;
+		}
 		Border shell = new Border
 		{
 			CornerRadius = new CornerRadius(12.0),
 			Background = new System.Windows.Media.SolidColorBrush(bg),
 			BorderBrush = new System.Windows.Media.SolidColorBrush(line),
 			BorderThickness = new Thickness(1.0),
-			Child = scroller,
-			MinWidth = 220.0
+			Child = shellContent,
+			MinWidth = 48.0
 		};
 		System.Windows.Controls.Primitives.Popup popup = new System.Windows.Controls.Primitives.Popup
 		{
@@ -3850,6 +3887,9 @@ public class DockWindow : GlassWindow
 		shell.Measure(new System.Windows.Size(460.0, 380.0));
 		PositionRunningList(popup, shell, owner, shell.DesiredSize.Width, shell.DesiredSize.Height);
 		popup.IsOpen = true;
+		// 点击浮层外任意位置（含 Dock 本体）收起：StaysOpen=false 只对失焦可靠，
+		// 点 Dock 本身等场景会漏收，这里统一走全局鼠标钩子。
+		PanelDismissGuard.TrackPopup(popup, close);
 		return popup;
 	}
 
@@ -3881,24 +3921,32 @@ public class DockWindow : GlassWindow
 
 	private void KillTask(TaskGroup group)
 	{
-		List<int> pids = group.Windows.Select((RunningWindow w) => (int)w.ProcessId).Distinct().ToList();
+		List<int> pids = group.Windows.Select((RunningWindow w) => (int)w.ProcessId).Where((int p) => p > 0).Distinct().ToList();
 		Task.Run(delegate
 		{
-			foreach (int pid in pids)
+			// 1) 优雅关闭：对每个窗口句柄发 WM_CLOSE。托盘程序的隐藏窗口也能收到（比 CloseMainWindow
+			//    只认主窗口更可靠），程序有机会走正常退出流程清理自己的子进程/服务。
+			foreach (RunningWindow w in group.Windows)
 			{
 				try
 				{
-					using (Process process = Process.GetProcessById(pid))
+					if (w.Handle != IntPtr.Zero)
 					{
-						if (!process.CloseMainWindow() || !process.WaitForExit(1200))
-						{
-							process.Kill();
-						}
+						RunningWindows.Close(w.Handle);
 					}
 				}
-				catch
+				catch (Exception ex)
 				{
+					Store.Log(ex);
 				}
+			}
+			// 给优雅退出留时间
+			System.Threading.Thread.Sleep(500);
+			// 2) 强杀进程树：taskkill /F /T 连子进程一起杀（Steam→steamwebhelper 这类父子守护）。
+			//    失败（权限不足/服务进程）记日志，不再静默吞。
+			foreach (int pid in pids)
+			{
+				ForceKill(pid);
 			}
 			Dispatcher.BeginInvoke(new Action(delegate
 			{
@@ -3907,6 +3955,36 @@ public class DockWindow : GlassWindow
 				Refresh(capture: false);
 			}));
 		});
+	}
+
+	// 强杀单个进程及其子进程树；失败（权限不足/服务进程）记日志，不静默吞。
+	private static void ForceKill(int pid)
+	{
+		try
+		{
+			ProcessStartInfo psi = new ProcessStartInfo("taskkill", "/F /T /PID " + pid)
+			{
+				CreateNoWindow = true,
+				UseShellExecute = false,
+				WindowStyle = ProcessWindowStyle.Hidden
+			};
+			using (Process t = Process.Start(psi))
+			{
+				if (t == null)
+				{
+					return;
+				}
+				t.WaitForExit(6000);
+				if (t.ExitCode != 0)
+				{
+					Store.Trace("KILL taskkill failed pid=" + pid + " exit=" + t.ExitCode);
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 	}
 
 	// 系统入口图标的对应名称：悬浮提示与拖动标签都按各自的内容显示，不再统一成"系统入口"

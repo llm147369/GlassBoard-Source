@@ -194,6 +194,30 @@ public sealed class WidgetManager : IDisposable
 		}));
 	}
 
+	// 律动实时预览：只重建律动场景，不整窗 Sync。
+	public void PreviewVisualizer()
+	{
+		foreach (WidgetWindow value in windows.Values.ToList())
+		{
+			if (value.PanelId == WidgetRules.VisualizerPanelId)
+			{
+				value.UpdateVisualizerStyle();
+			}
+		}
+	}
+
+	// 律动位置实时预览：拖动偏移滑杆时只重算窗口位置，不重建场景。
+	public void PreviewVisualizerPosition()
+	{
+		foreach (WidgetWindow value in windows.Values.ToList())
+		{
+			if (value.PanelId == WidgetRules.VisualizerPanelId)
+			{
+				value.RepositionVisualizer();
+			}
+		}
+	}
+
 	public void SetVisible(bool visible)
 	{
 		foreach (WidgetWindow value in windows.Values)

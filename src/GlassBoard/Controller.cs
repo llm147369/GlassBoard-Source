@@ -4255,16 +4255,115 @@ public class Controller
 				};
 				if (k == "visualizer")
 				{
-					action2("律动样式", new string[6] { "极光镜像柱", "频谱曲线", "双螺旋", "粒子喷泉", "音轨条带", "雷达频谱" }, Prefs.Widgets.VisualizerStyle, (int v) =>
+					// 律动组件是无框装饰：样式/配色实时预览（只重建场景），锚点/偏移/尺寸改动才整窗刷新。
+					label("律动样式");
+					System.Windows.Controls.ComboBox styleCombo = new System.Windows.Controls.ComboBox
 					{
-						Prefs.Widgets.VisualizerStyle = v;
-					});
-					action2("律动配色", new string[10] { "极光蓝紫", "青绿", "粉红", "橙金", "紫红", "绿", "红", "纯白", "彩虹循环", "跟随强调色" }, Prefs.Widgets.VisualizerColor, (int v) =>
+						ItemsSource = new string[6] { "极光镜像柱", "频谱曲线", "双螺旋", "粒子喷泉", "音轨条带", "雷达频谱" },
+						SelectedIndex = Prefs.Widgets.VisualizerStyle,
+						MinHeight = 36.0
+					};
+					styleCombo.SelectionChanged += (object a, SelectionChangedEventArgs e) =>
 					{
-						Prefs.Widgets.VisualizerColor = v;
-					});
+						if (styleCombo.SelectedIndex >= 0)
+						{
+							Prefs.Widgets.VisualizerStyle = styleCombo.SelectedIndex;
+							PreviewVisualizer();
+						}
+					};
+					editor.Children.Add(styleCombo);
+					label("律动配色");
+					System.Windows.Controls.ComboBox colorCombo = new System.Windows.Controls.ComboBox
+					{
+						ItemsSource = new string[10] { "极光蓝紫", "青绿", "粉红", "橙金", "紫红", "绿", "红", "纯白", "彩虹循环", "跟随强调色" },
+						SelectedIndex = Prefs.Widgets.VisualizerColor,
+						MinHeight = 36.0
+					};
+					colorCombo.SelectionChanged += (object a, SelectionChangedEventArgs e) =>
+					{
+						if (colorCombo.SelectedIndex >= 0)
+						{
+							Prefs.Widgets.VisualizerColor = colorCombo.SelectedIndex;
+							PreviewVisualizer();
+						}
+					};
+					editor.Children.Add(colorCombo);
+					label("位置锚点");
+					System.Windows.Controls.ComboBox anchorCombo = new System.Windows.Controls.ComboBox
+					{
+						ItemsSource = new string[4] { "顶部", "左部", "右部", "下方（Dock 栏上方）" },
+						SelectedIndex = Prefs.Widgets.VisualizerAnchor,
+						MinHeight = 36.0
+					};
+					anchorCombo.SelectionChanged += (object a, SelectionChangedEventArgs e) =>
+					{
+						if (anchorCombo.SelectedIndex >= 0)
+						{
+							Prefs.Widgets.VisualizerAnchor = anchorCombo.SelectedIndex;
+							apply();
+						}
+					};
+					editor.Children.Add(anchorCombo);
+					TextBlock oxTitle = new TextBlock
+					{
+						Text = "水平偏移 · " + Math.Round(Prefs.Widgets.VisualizerOffsetX),
+						Margin = new Thickness(0.0, 12.0, 0.0, 6.0)
+					};
+					editor.Children.Add(oxTitle);
+					Slider oxSlider = new Slider
+					{
+						Minimum = -800.0,
+						Maximum = 800.0,
+						Value = Prefs.Widgets.VisualizerOffsetX,
+						TickFrequency = 1.0,
+						IsSnapToTickEnabled = true,
+						MinHeight = 36.0
+					};
+					oxSlider.ValueChanged += (object a, RoutedPropertyChangedEventArgs<double> e) =>
+					{
+						oxTitle.Text = "水平偏移 · " + Math.Round(oxSlider.Value);
+						Prefs.Widgets.VisualizerOffsetX = Math.Round(oxSlider.Value);
+						PreviewVisualizerPosition();
+					};
+					Action oxCommit = () =>
+					{
+						Prefs.Widgets.VisualizerOffsetX = Math.Round(oxSlider.Value);
+						Save();
+					};
+					oxSlider.PreviewMouseLeftButtonUp += (object a, MouseButtonEventArgs e) => oxCommit();
+					oxSlider.KeyUp += (object a, System.Windows.Input.KeyEventArgs e) => oxCommit();
+					editor.Children.Add(oxSlider);
+					TextBlock oyTitle = new TextBlock
+					{
+						Text = "垂直偏移 · " + Math.Round(Prefs.Widgets.VisualizerOffsetY),
+						Margin = new Thickness(0.0, 12.0, 0.0, 6.0)
+					};
+					editor.Children.Add(oyTitle);
+					Slider oySlider = new Slider
+					{
+						Minimum = -800.0,
+						Maximum = 800.0,
+						Value = Prefs.Widgets.VisualizerOffsetY,
+						TickFrequency = 1.0,
+						IsSnapToTickEnabled = true,
+						MinHeight = 36.0
+					};
+					oySlider.ValueChanged += (object a, RoutedPropertyChangedEventArgs<double> e) =>
+					{
+						oyTitle.Text = "垂直偏移 · " + Math.Round(oySlider.Value);
+						Prefs.Widgets.VisualizerOffsetY = Math.Round(oySlider.Value);
+						PreviewVisualizerPosition();
+					};
+					Action oyCommit = () =>
+					{
+						Prefs.Widgets.VisualizerOffsetY = Math.Round(oySlider.Value);
+						Save();
+					};
+					oySlider.PreviewMouseLeftButtonUp += (object a, MouseButtonEventArgs e) => oyCommit();
+					oySlider.KeyUp += (object a, System.Windows.Input.KeyEventArgs e) => oyCommit();
+					editor.Children.Add(oySlider);
 				// viz size sliders: component size = panel size (same as other widgets' width slider)
-				double defW = Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Width ?? 380.0;
+				double defW = Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Width ?? 450.0;
 				double defH = Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Height ?? 190.0;
 				TextBlock wTitle = new TextBlock
 				{
@@ -4281,11 +4380,15 @@ public class Controller
 				};
 				wSlider.ValueChanged += (object o2, RoutedPropertyChangedEventArgs<double> e2) =>
 				{
-					int v2 = (int)Math.Round(wSlider.Value);
-					Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Width = v2;
-					wTitle.Text = "\u7ec4\u4ef6\u5bbd\u5ea6 \u00b7 " + v2;
+					wTitle.Text = "\u7ec4\u4ef6\u5bbd\u5ea6 \u00b7 " + Math.Round(wSlider.Value);
+				};
+				Action wCommit = () =>
+				{
+					Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Width = (int)Math.Round(wSlider.Value);
 					apply();
 				};
+				wSlider.PreviewMouseLeftButtonUp += (object o2, MouseButtonEventArgs e2) => wCommit();
+				wSlider.KeyUp += (object o2, System.Windows.Input.KeyEventArgs e2) => wCommit();
 				editor.Children.Add(wSlider);
 				TextBlock hTitle = new TextBlock
 				{
@@ -4302,11 +4405,15 @@ public class Controller
 				};
 				hSlider.ValueChanged += (object o2, RoutedPropertyChangedEventArgs<double> e2) =>
 				{
-					int v2 = (int)Math.Round(hSlider.Value);
-					Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Height = v2;
-					hTitle.Text = "\u7ec4\u4ef6\u9ad8\u5ea6 \u00b7 " + v2;
+					hTitle.Text = "\u7ec4\u4ef6\u9ad8\u5ea6 \u00b7 " + Math.Round(hSlider.Value);
+				};
+				Action hCommit = () =>
+				{
+					Prefs.Widgets.Position(WidgetRules.Panel(Prefs.Widgets, k)).Height = (int)Math.Round(hSlider.Value);
 					apply();
 				};
+				hSlider.PreviewMouseLeftButtonUp += (object o2, MouseButtonEventArgs e2) => hCommit();
+				hSlider.KeyUp += (object o2, System.Windows.Input.KeyEventArgs e2) => hCommit();
 				editor.Children.Add(hSlider);
 					return;
 				}
@@ -5369,6 +5476,27 @@ public class Controller
 			widgets = new WidgetManager(this);
 		}
 		widgets.Sync();
+	}
+
+	// 律动实时预览：保存配置并只重建律动场景（样式/配色），不整窗刷新。
+	public void PreviewVisualizer()
+	{
+		Save();
+		if (widgets == null)
+		{
+			widgets = new WidgetManager(this);
+		}
+		widgets.PreviewVisualizer();
+	}
+
+	// 律动位置实时预览：拖动偏移滑杆时实时移动律动窗口，不落盘、不重建。
+	public void PreviewVisualizerPosition()
+	{
+		if (widgets == null)
+		{
+			widgets = new WidgetManager(this);
+		}
+		widgets.PreviewVisualizerPosition();
 	}
 
 	public void SetWidgetEnabled(string kind, bool value)

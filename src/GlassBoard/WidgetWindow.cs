@@ -162,6 +162,11 @@ public sealed class WidgetWindow : GlassWindow
 
 	private void InitializeBareDragging()
 	{
+		// 律动组件是独立无框装饰：点击不拖动、无任何交互。
+		if (PanelId == WidgetRules.VisualizerPanelId)
+		{
+			return;
+		}
 		Root.PreviewMouseLeftButtonDown += (object a, MouseButtonEventArgs e) =>
 		{
 			if (BareShell && !M.C.Prefs.Widgets.Locked && e.ClickCount == 1 && e.ButtonState == MouseButtonState.Pressed)
@@ -830,7 +835,17 @@ public sealed class WidgetWindow : GlassWindow
 		resizeGrip.Visibility = ((BareShell || widgets.Locked) ? Visibility.Collapsed : Visibility.Visible);
 		Polish.Apply(this, LightTheme);
 		Rect rect = DesktopWindowPolicy.WorkArea(this);
-		Width = Math.Max(Math.Min(240.0, rect.Width - 30.0), Math.Min(widgets.Position(PanelId).Width ?? Math.Min(450.0, rect.Width * 0.32), rect.Width - 30.0));
+		if (PanelId == WidgetRules.VisualizerPanelId)
+		{
+			// 律动组件：宽高完全由 DIY 滑杆决定，不参与 FitContent 内容自适应。
+			WidgetPanelPosition vizSize = widgets.Position(PanelId);
+			Width = Math.Max(240.0, Math.Min(vizSize.Width ?? 450.0, rect.Width - 30.0));
+			Height = Math.Max(72.0, Math.Min(vizSize.Height ?? 190.0, rect.Height - 30.0));
+		}
+		else
+		{
+			Width = Math.Max(Math.Min(240.0, rect.Width - 30.0), Math.Min(widgets.Position(PanelId).Width ?? Math.Min(450.0, rect.Width * 0.32), rect.Width - 30.0));
+		}
 		if (flag)
 		{
 			Build();
@@ -843,7 +858,14 @@ public sealed class WidgetWindow : GlassWindow
 		WidgetPanelPosition widgetPanelPosition = widgets.Position(PanelId);
 		double? num = widgetPanelPosition.Left;
 		double? num2 = widgetPanelPosition.Top;
-		if (PanelId == 0)
+		if (PanelId == WidgetRules.VisualizerPanelId)
+		{
+			// 律动组件：按锚点定位到工作区四边（不落盘 Left/Top，位置完全由锚点+偏移决定）。
+			VisualizerAnchor(out double vx, out double vy, rect, widgets);
+			num = vx;
+			num2 = vy;
+		}
+		else if (PanelId == 0)
 		{
 			num = num ?? M.C.Prefs.Placement.WidgetLeft;
 			num2 = num2 ?? M.C.Prefs.Placement.WidgetTop;
@@ -858,8 +880,56 @@ public sealed class WidgetWindow : GlassWindow
 		UpdateWeather();
 	}
 
+	// 律动组件锚点定位：算出应处的 Left/Top（锚点边固定，尺寸变化时锚点边不动）。
+	private void VisualizerAnchor(out double left, out double top, Rect rect, WidgetOptions widgets)
+	{
+		double ox = widgets.VisualizerOffsetX;
+		double oy = widgets.VisualizerOffsetY;
+		double centerX = rect.Left + (rect.Width - Width) / 2.0;
+		double centerY = rect.Top + (rect.Height - Height) / 2.0;
+		switch (widgets.VisualizerAnchor)
+		{
+		case 0:
+			left = centerX + ox;
+			top = rect.Top + oy;
+			break;
+		case 1:
+			left = rect.Left + ox;
+			top = centerY + oy;
+			break;
+		case 2:
+			left = rect.Right - Width + ox;
+			top = centerY + oy;
+			break;
+		default:
+			// 下方：Dock 栏上方，留 12px 间距保证不重合（底边固定，向上生长）。
+			left = centerX + ox;
+			top = M.C.Dock.Top - Height - 12.0 + oy;
+			break;
+		}
+	}
+
+	// 律动组件偏移实时预览：只重算位置，不重建场景、不整窗刷新。
+	public void RepositionVisualizer()
+	{
+		if (PanelId != WidgetRules.VisualizerPanelId)
+		{
+			return;
+		}
+		Rect rect = DesktopWindowPolicy.WorkArea(this);
+		VisualizerAnchor(out double left, out double top, rect, M.C.Prefs.Widgets);
+		Left = FeatureRules.Position(left, rect.Left, rect.Width, Width);
+		Top = FeatureRules.Position(top, rect.Top, rect.Height, Height);
+	}
+
 	private void FitContent()
 	{
+		// 律动组件尺寸完全由 DIY 宽/高滑杆决定（Viewbox Stretch.Fill 拉伸画布），
+		// 不做内容自适应，否则调宽度会按比例连带改高度、位置跟着漂移。
+		if (PanelId == WidgetRules.VisualizerPanelId)
+		{
+			return;
+		}
 		if (stack == null || contentScale == null || building || resizing)
 		{
 			return;
@@ -999,76 +1069,117 @@ public sealed class WidgetWindow : GlassWindow
 			notePicker = null;
 			noteTitle = (noteBody = null);
 			currentNote = null;
-			stack = new StackPanel
+			if (PanelId == WidgetRules.VisualizerPanelId)
 			{
-				Margin = (BareShell ? new Thickness(2.0) : new Thickness(16.0, Kinds.SequenceEqual(new string[1] { "clock" }) ? 16 : 25, 16.0, 16.0))
-			};
-			// Viewbox 用 RenderTransform 缩放：文字被“栅格化后再放大”，组件越大越糊。
-			// 改用 Grid + LayoutTransform：缩放发生在布局阶段，文字按新尺寸重新布局并
-			// 重新栅格化，任何放大倍数下都保持原生清晰度（resize 重排是低频操作）。
-			contentScale = new Grid
-			{
-				HorizontalAlignment = HorizontalAlignment.Center,
-				VerticalAlignment = VerticalAlignment.Top
-			};
-			contentScale.Children.Add(stack);
-			contentScale.SizeChanged += (object s, System.Windows.SizeChangedEventArgs e) => RescaleContent();
-			viewport = new ScrollViewer
-			{
-				Content = contentScale,
-				VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-				HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-			};
-			ContentGrid.Children.Add(viewport);
-			foreach (string kind in Kinds)
-			{
-				StackPanel stackPanel = new StackPanel();
-				Border border = new Border
-				{
-					Background = Polish.Card(LightTheme),
-					BorderBrush = Polish.Line(LightTheme),
-					BorderThickness = new Thickness(1.0),
-					CornerRadius = new CornerRadius(22.0),
-					Tag = kind,
-					Padding = (StyleFor(kind).Frameless ? new Thickness(4.0) : new Thickness(18.0)),
-					Margin = new Thickness(0.0, 0.0, 0.0, 14.0),
-					Child = stackPanel
-				};
-				stack.Children.Add(border);
-				if (!StyleFor(kind).Frameless)
-				{
-					Header(stackPanel, kind);
-				}
-				switch (kind)
-				{
-				case "clock":
-					ClockDesign(stackPanel);
-					HookClockFrame();
-					break;
-				case "weather":
-					Weather(stackPanel);
-					break;
-				case "music":
-					Music(stackPanel);
-					break;
-				case "visualizer":
-					Visualizer(stackPanel);
-					break;
-				default:
-					Notes(stackPanel);
-					break;
-				}
-				PaintCard(border, kind);
+				BuildVisualizerPanel();
 			}
-			if (stack.Children.Count > 0)
+			else
 			{
-				((Border)stack.Children[stack.Children.Count - 1]).Margin = new Thickness(0.0);
+				stack = new StackPanel
+				{
+					Margin = (BareShell ? new Thickness(2.0) : new Thickness(16.0, Kinds.SequenceEqual(new string[1] { "clock" }) ? 16 : 25, 16.0, 16.0))
+				};
+				// Viewbox 用 RenderTransform 缩放：文字被“栅格化后再放大”，组件越大越糊。
+				// 改用 Grid + LayoutTransform：缩放发生在布局阶段，文字按新尺寸重新布局并
+				// 重新栅格化，任何放大倍数下都保持原生清晰度（resize 重排是低频操作）。
+				contentScale = new Grid
+				{
+					HorizontalAlignment = HorizontalAlignment.Center,
+					VerticalAlignment = VerticalAlignment.Top
+				};
+				contentScale.Children.Add(stack);
+				contentScale.SizeChanged += (object s, System.Windows.SizeChangedEventArgs e) => RescaleContent();
+				viewport = new ScrollViewer
+				{
+					Content = contentScale,
+					VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+					HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+				};
+				ContentGrid.Children.Add(viewport);
+				foreach (string kind in Kinds)
+				{
+					StackPanel stackPanel = new StackPanel();
+					Border border = new Border
+					{
+						Background = Polish.Card(LightTheme),
+						BorderBrush = Polish.Line(LightTheme),
+						BorderThickness = new Thickness(1.0),
+						CornerRadius = new CornerRadius(22.0),
+						Tag = kind,
+						Padding = (StyleFor(kind).Frameless ? new Thickness(4.0) : new Thickness(18.0)),
+						Margin = new Thickness(0.0, 0.0, 0.0, 14.0),
+						Child = stackPanel
+					};
+					stack.Children.Add(border);
+					if (!StyleFor(kind).Frameless)
+					{
+						Header(stackPanel, kind);
+					}
+					switch (kind)
+					{
+					case "clock":
+						ClockDesign(stackPanel);
+						HookClockFrame();
+						break;
+					case "weather":
+						Weather(stackPanel);
+						break;
+					case "music":
+						Music(stackPanel);
+						break;
+					case "visualizer":
+						Visualizer(stackPanel);
+						break;
+					default:
+						Notes(stackPanel);
+						break;
+					}
+					PaintCard(border, kind);
+				}
+				if (stack.Children.Count > 0)
+				{
+					((Border)stack.Children[stack.Children.Count - 1]).Margin = new Thickness(0.0);
+				}
 			}
 		}
 		finally
 		{
 			building = false;
 		}
+	}
+
+	// 律动独立面板：Viewbox 直接填满窗口，尺寸完全由 DIY 宽/高滑杆决定。
+	private void BuildVisualizerPanel()
+	{
+		contentScale = new Grid
+		{
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch
+		};
+		vizStyle = M.C.Prefs.Widgets.VisualizerStyle;
+		vizPalette = M.C.Prefs.Widgets.VisualizerColor;
+		vizCanvas = new Canvas
+		{
+			Width = 380.0,
+			Height = 190.0
+		};
+		Viewbox box = new Viewbox
+		{
+			Stretch = Stretch.Fill,
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch,
+			Child = vizCanvas
+		};
+		contentScale.Children.Add(box);
+		viewport = new ScrollViewer
+		{
+			Content = contentScale,
+			VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+			HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+		};
+		ContentGrid.Children.Add(viewport);
+		BuildVizScene();
+		StartVizLoop();
 	}
 
 	private ContextMenu WidgetMenu(string kind)
@@ -1312,6 +1423,11 @@ public sealed class WidgetWindow : GlassWindow
 
 	private void RootWidgetMenu()
 	{
+		// 律动组件独立无框：无右键菜单。
+		if (PanelId == WidgetRules.VisualizerPanelId)
+		{
+			return;
+		}
 		ContextMenu contextMenu = MenuTheme.Create(LightTheme, M.C.Prefs.Dock.Accent, M.C.Prefs.Widgets.Material.Tint, (int)WidgetSizing.Background(M.C.Prefs.Widgets, M.C.Prefs.Widgets.Position(PanelId)));
 		MenuItem menuItem = new MenuItem
 		{
@@ -1878,18 +1994,25 @@ public sealed class WidgetWindow : GlassWindow
 		};
 		parent.Children.Add(box);
 		BuildVizScene();
-		if (!vizAttached)
+		StartVizLoop();
+	}
+
+	// 启动 15ms 帧循环 + WASAPI 采集（引用计数，律动与灵动岛共用）。
+	private void StartVizLoop()
+	{
+		if (vizAttached)
 		{
-			vizAttached = true;
-			IslandAudio.AudioLevels += OnVizLevels;
-			IslandAudio.Acquire();
-			vizTimer = new DispatcherTimer(DispatcherPriority.Render)
-			{
-				Interval = TimeSpan.FromMilliseconds(15.0)
-			};
-			vizTimer.Tick += (object s, EventArgs e) => VizTick();
-			vizTimer.Start();
+			return;
 		}
+		vizAttached = true;
+		IslandAudio.AudioLevels += OnVizLevels;
+		IslandAudio.Acquire();
+		vizTimer = new DispatcherTimer(DispatcherPriority.Render)
+		{
+			Interval = TimeSpan.FromMilliseconds(15.0)
+		};
+		vizTimer.Tick += (object s, EventArgs e) => VizTick();
+		vizTimer.Start();
 	}
 
 	private void DetachViz()
@@ -1918,6 +2041,18 @@ public sealed class WidgetWindow : GlassWindow
 			vizTimer.Stop();
 			vizTimer = null;
 		}
+	}
+
+	// 实时预览入口：DIY 里切换律动样式/配色时只重建场景，不整窗重建。
+	public void UpdateVisualizerStyle()
+	{
+		if (vizCanvas == null)
+		{
+			return;
+		}
+		vizStyle = M.C.Prefs.Widgets.VisualizerStyle;
+		vizPalette = M.C.Prefs.Widgets.VisualizerColor;
+		BuildVizScene();
 	}
 
 	// 采集线程回调 → 只存目标值；绘制在 UI 帧循环里做平滑。

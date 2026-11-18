@@ -643,6 +643,20 @@ public static class RunningWindows
 			{
 				return true;
 			}
+			// 传统控制台窗口（cmd/powershell 等）：终端不是「运行的程序」，不进运行列表。
+			if (className == "ConsoleWindowClass")
+			{
+				return true;
+			}
+			// AMD 显卡驱动组件（RadeonSoftware 面板等）：驱动后台/设置界面不算用户程序。
+			if (!string.IsNullOrEmpty(value3))
+			{
+				string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+				if (!string.IsNullOrEmpty(pf) && value3.StartsWith(pf + "\\AMD", StringComparison.OrdinalIgnoreCase))
+				{
+					return true;
+				}
+			}
 			next.Add(new RunningWindow
 			{
 				Handle = handle,
@@ -735,7 +749,12 @@ public static class RunningWindows
 	// 附属/运行时进程名（Windows 自带、框架运行时、内嵌解释器——永远不进运行列表）。
 	private static readonly HashSet<string> SubprocessExeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 	{
-		"node", "VBCSCompiler", "WeChatAppEx", "msedge", "msedgewebview2", "nahimicNotifSys", "crashpad_handler", "identity_helper", "StartMenuExperienceHost", "SearchHost", "SearchApp", "ShellExperienceHost", "TextInputHost", "Widgets", "WidgetService", "CrossDeviceService", "PhoneExperienceHost", "MicrosoftStartFeedProvider", "WidgetBoard", "GameBar", "GameBarFTServer", "aha_doctor"
+		"node", "VBCSCompiler", "WeChatAppEx", "msedge", "msedgewebview2", "nahimicNotifSys", "crashpad_handler", "identity_helper", "StartMenuExperienceHost", "SearchHost", "SearchApp", "ShellExperienceHost", "TextInputHost", "Widgets", "WidgetService", "CrossDeviceService", "PhoneExperienceHost", "MicrosoftStartFeedProvider", "WidgetBoard", "GameBar", "GameBarFTServer", "aha_doctor",
+		// 后台开发/服务工具（跨机器通用，一律不进运行列表）
+		"adb", "windows-mcp",
+		// 脚本解释器：python/pythonw 是通用宿主，进程名无信息量；纯后台/托盘形态一律过滤。
+		// 用户主动运行的 Python GUI 应用有可见主窗口（走 ScanWindowsCore，不受此处影响）仍会正常显示。
+		"python", "pythonw", "python3"
 	};
 
 	// 系统自带的安装区（OEM 预装/驱动/商店应用后台——永不进运行列表）。
@@ -748,6 +767,10 @@ public static class RunningWindows
 		}
 		string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
 		if (!string.IsNullOrEmpty(pf) && path.StartsWith(pf + "\\WindowsApps", StringComparison.OrdinalIgnoreCase))
+		{
+			return true;
+		}
+		if (!string.IsNullOrEmpty(pf) && path.StartsWith(pf + "\\AMD", StringComparison.OrdinalIgnoreCase))
 		{
 			return true;
 		}
@@ -920,7 +943,7 @@ public static class RunningWindows
 				return true;
 			}
 			string exeName = Path.GetFileNameWithoutExtension(value3);
-			if (SystemSoftwareExeNames.Contains(exeName))
+			if (SystemSoftwareExeNames.Contains(exeName) || SubprocessExeNames.Contains(exeName))
 			{
 				return true;
 			}

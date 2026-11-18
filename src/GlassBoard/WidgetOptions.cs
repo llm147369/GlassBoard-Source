@@ -46,6 +46,18 @@ public class WidgetOptions
 	[DataMember]
 	public int VisualizerColor;
 
+	// 律动组件位置锚点：0 顶部 1 左 2 右 3 下方（Dock 栏上方，默认）。律动组件为独立无框装饰，
+	// 不参与拖动，位置由此锚点 + 偏移决定。
+	[DataMember]
+	public int VisualizerAnchor = 3;
+
+	// 律动组件锚点偏移（物理像素语义）：正=右/下，负=左/上。
+	[DataMember]
+	public double VisualizerOffsetX;
+
+	[DataMember]
+	public double VisualizerOffsetY;
+
 	[DataMember]
 	public bool CompactMusic;
 
@@ -120,6 +132,9 @@ public class WidgetOptions
 		MusicMode = "system";
 		Playlist = new List<string>();
 		Panels = new List<WidgetPanelPosition>();
+		VisualizerAnchor = 3;
+		VisualizerOffsetX = 0.0;
+		VisualizerOffsetY = 0.0;
 	}
 
 	public void Normalize()
@@ -148,15 +163,17 @@ public class WidgetOptions
 		WeatherPanel = Panel(WeatherPanel);
 		MusicPanel = Panel(MusicPanel);
 		NotesPanel = Panel(NotesPanel);
-		VisualizerPanel = Panel(VisualizerPanel);
 		VisualizerStyle = Math.Max(0, Math.Min(5, VisualizerStyle));
 		VisualizerColor = Math.Max(0, Math.Min(9, VisualizerColor));
+		VisualizerAnchor = Math.Max(0, Math.Min(3, VisualizerAnchor));
+		VisualizerOffsetX = LayoutRules.Clamp(VisualizerOffsetX, -4000.0, 4000.0, 0.0);
+		VisualizerOffsetY = LayoutRules.Clamp(VisualizerOffsetY, -4000.0, 4000.0, 0.0);
 		MusicMode = ((MusicMode == "local") ? "local" : "system");
 		Playlist = (Playlist ?? new List<string>()).Where((string p) => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 		TrackIndex = ((Playlist.Count != 0) ? Math.Max(0, Math.Min(Playlist.Count - 1, TrackIndex)) : 0);
 		RepeatMode = Math.Max(0, Math.Min(2, RepeatMode));
 		Panels = (from p in Panels ?? new List<WidgetPanelPosition>()
-			where p != null && p.Id >= 0 && p.Id < 4
+			where p != null && p.Id >= 0 && p.Id <= 4
 			group p by p.Id into g
 			select g.First()).ToList();
 		foreach (WidgetPanelPosition panel in Panels)
@@ -219,6 +236,10 @@ public class WidgetOptions
 		foreach (WidgetStyle style in Styles)
 		{
 			style.Normalize();
+			if (style.Kind == "visualizer")
+			{
+				style.Frameless = true;
+			}
 		}
 	}
 
@@ -236,6 +257,10 @@ public class WidgetOptions
 				Kind = kind
 			};
 			Styles.Add(widgetStyle);
+		}
+		if (kind == "visualizer")
+		{
+			widgetStyle.Frameless = true;
 		}
 		return widgetStyle;
 	}

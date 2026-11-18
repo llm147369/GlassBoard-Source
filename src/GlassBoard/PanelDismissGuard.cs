@@ -22,6 +22,10 @@ public static class PanelDismissGuard
 
 	private static readonly List<(Window win, Action dismiss)> Windows = new();
 
+	// 弹出层（Popup，如运行列表/右键菜单的下拉浮层）单独追踪：点击浮层外任何位置（含 Dock 本体）都应收起，
+	// 不享受 Window 的「点击本进程其它窗口不收起」豁免。
+	private static readonly List<(System.Windows.Controls.Primitives.Popup popup, Action dismiss)> Popups = new();
+
 	private static IntPtr hook;
 
 	private static DispatcherTimer heartbeat;
@@ -54,7 +58,46 @@ public static class PanelDismissGuard
 			};
 			heartbeat.Tick += delegate
 			{
-				if (Windows.Count == 0)
+				if (Windows.Count == 0 && Popups.Count == 0)
+				{
+					return;
+				}
+				if (hook != IntPtr.Zero)
+				{
+					UnhookWindowsHookEx(hook);
+				}
+				hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
+			};
+			heartbeat.Start();
+		}
+	}
+
+	// 追踪一个 Popup：点击浮层外任意位置时触发 dismiss（Popup 本身的位置由 InOpenPopup 判定）。
+	public static void TrackPopup(System.Windows.Controls.Primitives.Popup popup, Action dismiss)
+	{
+		Popups.Add((popup, dismiss));
+		popup.Closed += (object s, EventArgs e) =>
+		{
+			Popups.RemoveAll(p => ReferenceEquals(p.popup, popup));
+			if (Windows.Count == 0 && Popups.Count == 0 && hook != IntPtr.Zero)
+			{
+				UnhookWindowsHookEx(hook);
+				hook = IntPtr.Zero;
+			}
+		};
+		if (hook == IntPtr.Zero)
+		{
+			hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
+		}
+		if (heartbeat == null)
+		{
+			heartbeat = new DispatcherTimer(DispatcherPriority.Background)
+			{
+				Interval = TimeSpan.FromSeconds(5.0)
+			};
+			heartbeat.Tick += delegate
+			{
+				if (Windows.Count == 0 && Popups.Count == 0)
 				{
 					return;
 				}
@@ -122,6 +165,29 @@ public static class PanelDismissGuard
 					{
 					}
 					dismiss();
+				}));
+			}
+			// 弹出层（运行列表等）：点击浮层外任何位置（含 Dock 本体、桌面、其它应用）都收起。
+			// 判定用 inPopup（是否落在任意打开的 Popup 内）：落在本浮层或其右键菜单内不收起，其余一律收起。
+			for (int j = 0; j < Popups.Count; j++)
+			{
+				(System.Windows.Controls.Primitives.Popup popup, Action dismiss) = Popups[j];
+				if (!popup.IsOpen || inPopup)
+				{
+					continue;
+				}
+				popup.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(delegate
+				{
+					try
+					{
+						if (popup.IsOpen)
+						{
+							dismiss();
+						}
+					}
+					catch
+					{
+					}
 				}));
 			}
 		}

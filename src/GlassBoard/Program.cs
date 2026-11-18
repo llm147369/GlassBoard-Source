@@ -91,6 +91,9 @@ public static class Program
 		// GlassBoard.Updater.exe）。旧版卸载只删安装目录，更新器缓存里的旧版程序会在
 		// 重启后被旧计划任务恢复出来——"装了新版、重启又变回 0.9.17"的元凶。
 		CleanLegacyUpdater();
+		// 自愈开机自启动路径：程序被移动后 Run 键指向旧路径会导致自启动失效，
+		// 这里每次启动自动修正为当前路径（未开启自启动时无操作）。
+		StartupService.Ensure();
 		if (args.Length != 0 && Array.Exists(args, (string a) => a == "--startup"))
 		{
 			StartupMode = true;

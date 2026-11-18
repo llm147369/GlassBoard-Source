@@ -10,6 +10,10 @@ public static class WidgetRules
 
 	public static readonly string[] Names = new string[5] { "时钟", "天气", "音乐", "备忘录", "音乐律动" };
 
+	// 律动组件固定专属面板 id：它是独立无框装饰，不参与融合/分离，位置由锚点决定。
+	// 普通组件用 0-3，律动独占 4，天然独立成窗。
+	public const int VisualizerPanelId = 4;
+
 	public static bool Enabled(WidgetOptions o, string kind)
 	{
 		return kind switch
@@ -30,7 +34,7 @@ public static class WidgetRules
 			"music" => o.MusicPanel, 
 			"weather" => o.WeatherPanel, 
 			"clock" => o.ClockPanel, 
-			"visualizer" => o.VisualizerPanel, 
+			"visualizer" => VisualizerPanelId, 
 			_ => o.NotesPanel, 
 		};
 	}
@@ -53,7 +57,7 @@ public static class WidgetRules
 			o.NotesPanel = panel;
 			break;
 		case "visualizer":
-			o.VisualizerPanel = panel;
+			// 律动组件固定专属面板，忽略融合/分离操作。
 			break;
 		}
 	}
