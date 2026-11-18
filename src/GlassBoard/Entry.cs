@@ -33,6 +33,11 @@ public class Entry
 	[DataMember(EmitDefaultValue = false)]
 	public string WindowTarget;
 
+	// MSIX/UWP 应用的 AppUserModelID（如 OpenAI.Codex_xxx!App）。
+	// 桌面快捷方式 TargetPath 为空时靠它启动，并在运行列表里匹配已打开窗口。
+	[DataMember(EmitDefaultValue = false)]
+	public string Aumid;
+
 
 	// 大面板软件分组（主分组；空 = 未分组）
 	[DataMember(EmitDefaultValue = false)]

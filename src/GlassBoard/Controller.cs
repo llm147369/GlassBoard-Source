@@ -953,6 +953,12 @@ public class Controller
 				Board.CollapseSmooth();
 				return;
 			}
+			// 老配置里 MSIX 快捷方式只有空的 LaunchTarget；点击时补一次解析，
+			// 拿到 AUMID 才能用激活器启动（普通 .lnk 走原来的 ShellExecute）。
+			if (string.IsNullOrWhiteSpace(entry.Aumid) && string.IsNullOrWhiteSpace(entry.LaunchTarget) && !string.IsNullOrEmpty(entry.Path) && entry.Path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+			{
+				LaunchInfoService.Enrich(entry);
+			}
 			// 自动记住位置：入口源文件（桌面快捷方式等）被移动/删除后，回退到导入时解析出的目标位置。
 			string launchPath = entry.Path;
 			if (!File.Exists(launchPath) && !Directory.Exists(launchPath) && !string.IsNullOrWhiteSpace(entry.LaunchTarget) && (File.Exists(entry.LaunchTarget) || Directory.Exists(entry.LaunchTarget)))
@@ -975,10 +981,37 @@ public class Controller
 					Board.CollapseSmooth();
 					return;
 				}
-				Process process = Process.Start(new ProcessStartInfo(launchPath)
+				Process process = null;
+				if (!string.IsNullOrWhiteSpace(entry.Aumid))
 				{
-					UseShellExecute = true
-				});
+					int aumidPid = Native.ActivateApplication(entry.Aumid);
+					if (aumidPid > 0)
+					{
+						try
+						{
+							process = Process.GetProcessById(aumidPid);
+						}
+						catch
+						{
+						}
+					}
+					if (process == null)
+					{
+						// 激活器不可用时的兜底：AppsFolder 解析名同样能拉起 MSIX 应用。
+						Store.Trace("LAUNCH aumid shell fallback=" + entry.Aumid);
+						Process.Start(new ProcessStartInfo("explorer.exe", "shell:AppsFolder\\" + entry.Aumid)
+						{
+							UseShellExecute = true
+						});
+					}
+				}
+				if (process == null)
+				{
+					process = Process.Start(new ProcessStartInfo(launchPath)
+					{
+						UseShellExecute = true
+					});
+				}
 				// 记录本次启动的进程：窗口路径匹配失败（提权/UWP/启动器转主程序）时，
 				// 用它兜底实现"再点 Dock 图标最小化"。
 				if (process != null)
@@ -2516,7 +2549,7 @@ public class Controller
 			});
 			stackPanel2.Children.Add(new TextBlock
 			{
-				Text = "开启统一后：透明度在 Dock、大面板、组件三个区域读写同一组全局值（圆角请在 Dock DIY 页调整，统一开启时同步三处）；统一开启时 Dock 与大面板的独立透明度灰显，与「统一透明度」同值。关闭统一后下方统一滑杆停用，请到 Dock DIY 或桌面组件页分别调整。大面板在设置打开期间自动收起，透明度 / 材质改动于下次打开大面板时生效。",
+				Text = "开启统一后：Dock 与组件的透明度读写同一组全局值（圆角请在 Dock DIY 页调整）；「大面板透明度」始终独立，不受统一开关影响，方便在亮色壁纸上单独把面板调厚。关闭统一后下方统一滑杆停用，请到 Dock DIY 或桌面组件页分别调整。大面板在设置打开期间自动收起，透明度 / 材质改动于下次打开大面板时生效。",
 				FontSize = 12.0,
 				TextWrapping = TextWrapping.Wrap,
 				Foreground = System.Windows.Media.Brushes.LightGray,
@@ -2660,14 +2693,10 @@ public class Controller
 				Prefs.Placement.PanelWidth = (Prefs.Placement.PanelHeight = null);
 				Save();
 			});
-			uBoard = func2(stackPanel2, "大面板透明度", 0.0, 100.0, 100.0 - (g.Unify ? g.OpacityPercent : (Prefs.OpacityPercent ?? 72.0)), 5.0, "%", (double num3) =>
+			uBoard = func2(stackPanel2, "大面板透明度（独立）", 0.0, 100.0, 100.0 - (Prefs.OpacityPercent ?? 72.0), 5.0, "%", (double num3) =>
 			{
-				if (g.Unify)
-				{
-					g.OpacityPercent = 100.0 - num3;
-					liveGlobal();
-					return;
-				}
+				// 大面板透明度始终只写面板自己的值，即使开启「统一外观」也不跟随 Dock/组件，
+				// 否则亮色壁纸上无法单独把面板调厚，图标文字会完全看不清。
 				Opacity(100.0 - num3);
 				Save();
 			});
@@ -2825,9 +2854,9 @@ public class Controller
 			{
 				uOpacity.IsEnabled = enabled;
 				uOpacity.Opacity = (enabled ? 1.0 : 0.45);
-				uBoard.IsEnabled = !enabled;
-				uBoard.Opacity = (enabled ? 0.45 : 1.0);
-				uBoard.Value = 100.0 - (enabled ? g.OpacityPercent : (Prefs.OpacityPercent ?? 72.0));
+				uBoard.IsEnabled = true;
+				uBoard.Opacity = 1.0;
+				uBoard.Value = 100.0 - (Prefs.OpacityPercent ?? 72.0);
 				opacity.IsEnabled = !enabled;
 				opacity.Opacity = (enabled ? 0.45 : 1.0);
 				opacity.Value = 100.0 - (enabled ? g.OpacityPercent : draft.OpacityPercent);
@@ -4670,6 +4699,7 @@ public class Controller
 			{
 				if (!File.Exists(path) && !Directory.Exists(path))
 				{
+					Store.Trace("DOCK pin missing=" + path);
 					continue;
 				}
 				entry = new Entry
@@ -4709,6 +4739,7 @@ public class Controller
 		EndBoardEdit(before, "拖入 Dock 固定");
 		Dock.Refresh(capture: false);
 		Board.Render();
+		Store.Trace("DOCK pin result paths=" + dockPinResult.Paths.Count + " skipped=" + dockPinResult.Skipped);
 		Board.SetStatus((dockPinResult.Paths.Count == 0) ? "未添加入口" : ("已放入 Dock " + dockPinResult.Paths.Count + " 个 · Ctrl+Z 撤销" + ((dockPinResult.Skipped > 0) ? ("；已达 20 个上限，跳过 " + dockPinResult.Skipped + " 个") : "")));
 		return dockPinResult;
 	}

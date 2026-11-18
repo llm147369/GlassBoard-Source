@@ -2995,6 +2995,10 @@ public class DockWindow : GlassWindow
 			if (!DockInputBusy)
 			{
 				string[] array = DockPayload(e.Data);
+				if (array.Length == 0)
+				{
+					Store.Trace("DOCK drop empty formats=" + DropFormats(e.Data));
+				}
 				if (array.Length != 0)
 				{
 					e.Handled = true;
@@ -3068,7 +3072,10 @@ public class DockWindow : GlassWindow
 		ClosePreview();
 		if (taskWheel.Running)
 		{
-			RunningWindows.Scan();
+			// 进入运行列表时强制取新快照；缓存窗口内直接 ReadTaskGroups 会先显示上一拍的程序，
+			// 随后再被后台刷新替换，看起来就是“每次结果不一样”。
+			RunningWindows.Scan(force: true);
+			RunningWindows.EnsureTrayReady();
 			ReadTaskGroups();
 		}
 		ResetDockHover();
@@ -3129,12 +3136,16 @@ public class DockWindow : GlassWindow
 
 	private void ReadTaskGroups()
 	{
-		taskGroups = RunningWindows.SnapshotWithBackground().GroupBy(TaskKey, StringComparer.OrdinalIgnoreCase).OrderBy((IGrouping<string, RunningWindow> g) => g.Key, StringComparer.OrdinalIgnoreCase)
+		// 运行列表只收「有可见窗口」或「确实占用系统托盘」的程序。
+		// SnapshotWithBackground 还会把无窗口的后台进程（服务、更新器、常驻引擎等）算进来，
+		// 与任务栏托盘的可见程序严重不一致。
+		taskGroups = RunningWindows.Snapshot().GroupBy(TaskKey, StringComparer.OrdinalIgnoreCase).OrderBy((IGrouping<string, RunningWindow> g) => g.Key, StringComparer.OrdinalIgnoreCase)
 			.Select((IGrouping<string, RunningWindow> g) =>
 			{
 				// 主程序窗口排最前（非 Tray 优先，再按有无句柄）：名称与激活都取主程序，
 				// 避免 Tray 进程抢占显示名（JianyingProTray 应显示成 JianyingPro）。
-				List<RunningWindow> windows = g.OrderBy((RunningWindow w) => w.Tray ? 1 : 0).ThenBy((RunningWindow w) => (w.Handle == IntPtr.Zero) ? 1 : 0).ThenBy((RunningWindow w) => w.Handle.ToInt64()).ToList();
+				// 同组内主窗口按面积优先：透明标题栏/小浮层即使漏进来，也不会抢走程序名和图标。
+				List<RunningWindow> windows = g.OrderBy((RunningWindow w) => w.Tray ? 1 : 0).ThenByDescending((RunningWindow w) => w.Area).ThenBy((RunningWindow w) => (w.Handle == IntPtr.Zero) ? 1 : 0).ThenBy((RunningWindow w) => w.Handle.ToInt64()).ToList();
 				string fileNameWithoutExtension = StripExeSuffix(Path.GetFileNameWithoutExtension(windows[0].Path ?? ""));
 				Entry entry = C.Prefs.Apps.FirstOrDefault((Entry a) => !a.IsFolder && WindowActivationRules.Executables(a).Contains(windows[0].Path, StringComparer.OrdinalIgnoreCase));
 				return new TaskGroup
@@ -3150,7 +3161,7 @@ public class DockWindow : GlassWindow
 
 	private string TaskSignature()
 	{
-		return string.Join("|", from w in RunningWindows.SnapshotWithBackground()
+		return string.Join("|", from w in RunningWindows.Snapshot()
 			orderby w.Handle.ToInt64()
 			select w.Handle.ToInt64() + ":" + w.Path + ":" + w.Title);
 	}
@@ -3385,6 +3396,18 @@ public class DockWindow : GlassWindow
 		return (data.GetData(System.Windows.DataFormats.FileDrop) as string[]) ?? new string[0];
 	}
 
+	private static string DropFormats(System.Windows.IDataObject data)
+	{
+		try
+		{
+			return string.Join("|", data.GetFormats(false));
+		}
+		catch
+		{
+			return "";
+		}
+	}
+
 	private DockDropTarget ExternalDockTarget(double x)
 	{
 		List<System.Windows.Controls.Button> list = (from b in Items.Children.OfType<System.Windows.Controls.Button>()
@@ -3395,6 +3418,10 @@ public class DockWindow : GlassWindow
 
 	private void DockExternalOver(object sender, System.Windows.DragEventArgs e)
 	{
+		if (e.RoutedEvent == System.Windows.DragDrop.PreviewDragEnterEvent && DockPayload(e.Data).Length == 0)
+		{
+			Store.Trace("DOCK over rejected formats=" + DropFormats(e.Data));
+		}
 		if (DockInputBusy || DockPayload(e.Data).Length == 0)
 		{
 			e.Effects = System.Windows.DragDropEffects.None;
@@ -3697,9 +3724,13 @@ public class DockWindow : GlassWindow
 				created.IsOpen = false;
 			}
 		};
-		RunningWindows.Scan();
+		// 每次打开都取新快照，并确保托盘索引已就绪：可见窗口和托盘常驻程序
+		// 必须来自同一拍数据，否则会出现“这次 7 个、下次 2 个”。
+		RunningWindows.Scan(force: true);
+		RunningWindows.EnsureTrayReady();
 		ReadTaskGroups();
 		List<TaskGroup> groups = taskGroups.OrderBy((TaskGroup g) => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
+		Store.Trace("RUNNINGLIST groups=" + groups.Count);
 		(System.Windows.Media.Color bg, System.Windows.Media.Color ink, System.Windows.Media.Color line, System.Windows.Media.Color hover) = MenuTheme.Palette(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
 		// 图标网格（仿 Windows 原生「隐藏图标」溢出面板）：每个运行程序一格，
 		// 左键=切回窗口，右键=任务栏式菜单，悬停 ToolTip 显示程序名。

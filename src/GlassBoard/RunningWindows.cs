@@ -54,6 +54,8 @@ public static class RunningWindows
 		public string Target;
 
 		public string Arguments;
+
+		public string Aumid;
 	}
 
 	private static readonly List<RunningWindow> windows = new List<RunningWindow>();
@@ -486,13 +488,13 @@ public static class RunningWindows
 		return "";
 	}
 
-	public static void Scan()
+	public static void Scan(bool force = false)
 	{
 		Stopwatch timer = Stopwatch.StartNew();
 		int tick = Environment.TickCount;
 		lock (scanGate)
 		{
-			if (tick - windowsScanTick >= 0 && tick - windowsScanTick < WindowsFreshMs)
+			if (!force && tick - windowsScanTick >= 0 && tick - windowsScanTick < WindowsFreshMs)
 			{
 				return; // 1.2 秒内的重复调用直接吃缓存（右键菜单 / 点击 / 刷新共用）
 			}
@@ -509,6 +511,42 @@ public static class RunningWindows
 		if (timer.ElapsedMilliseconds > 60)
 		{
 			Store.Trace("SCAN slow ms=" + timer.ElapsedMilliseconds);
+		}
+	}
+
+	// 等待托盘索引至少完成过一次扫描（冷启动/运行列表首次打开时用）。
+	// 托盘扫描一直是异步的，若此时直接读 Snapshot，只有可见窗口、没有托盘常驻程序，
+	// 看起来就是"程序少了一大半"。超时后继续用已有数据，不阻塞界面。
+	public static void EnsureTrayReady(int timeoutMs = 350)
+	{
+		bool fresh;
+		lock (scanGate)
+		{
+			int age = Environment.TickCount - trayScanTick;
+			fresh = trayScanTick != int.MinValue && age >= 0 && age < TrayFreshMs;
+		}
+		if (fresh)
+		{
+			return;
+		}
+		KickTrayRefresh();
+		int start = Environment.TickCount;
+		while (Environment.TickCount - start < timeoutMs)
+		{
+			lock (scanGate)
+			{
+				int age2 = Environment.TickCount - trayScanTick;
+				if (trayScanTick != int.MinValue && age2 >= 0 && age2 < TrayFreshMs)
+				{
+					return;
+				}
+				// 已有上一轮托盘数据时不必等本轮：合并读取不会丢项。
+				if (trayWindows.Count > 0)
+				{
+					return;
+				}
+			}
+			Thread.Sleep(15);
 		}
 	}
 
@@ -597,6 +635,12 @@ public static class RunningWindows
 			{
 				return true;
 			}
+			// WS_EX_NOACTIVATE / WS_EX_TRANSPARENT：标题栏浮层、壁纸/游戏覆盖层、桌面宠物等。
+			// 这些窗口会随鼠标/播放状态闪现，混进运行列表会让每次打开看到的程序不一样。
+			if ((windowLong & 0x08000000) != 0 || (windowLong & 0x20) != 0)
+			{
+				return true;
+			}
 			try
 			{
 				if (DwmGetWindowAttribute(handle, 14, out int value2, 4) == 0 && value2 != 0)
@@ -648,6 +692,18 @@ public static class RunningWindows
 			{
 				return true;
 			}
+			long area = 0L;
+			if (GetWindowRect(handle, out RECT windowRect))
+			{
+				int width = windowRect.Right - windowRect.Left;
+				int height = windowRect.Bottom - windowRect.Top;
+				// 细长标题栏（如 Qt 的 _q_titlebar）和不可见小浮窗不是用户程序窗口。
+				if (width < 80 || height < 50)
+				{
+					return true;
+				}
+				area = (long)width * (long)height;
+			}
 			// AMD 显卡驱动组件（RadeonSoftware 面板等）：驱动后台/设置界面不算用户程序。
 			if (!string.IsNullOrEmpty(value3))
 			{
@@ -663,19 +719,18 @@ public static class RunningWindows
 				ProcessId = id,
 				Path = value3,
 				Title = stringBuilder.ToString(),
-				AppUserModelId = Aumid(id)
+				AppUserModelId = Aumid(id),
+				Area = area
 			});
 			return true;
 		}, IntPtr.Zero);
-		List<RunningWindow> tray;
+		// 可见窗口与托盘隐藏窗口分开存放，读取时再合并（见 Snapshot）。
+		// 之前在这里把 trayWindows 的副本塞进 windows，窗口扫描和托盘扫描并发时
+		// 托盘扫描可能先按旧快照判定"该 pid 已存在"，随后窗口扫描整体换入后托盘项就丢了，
+		// 表现为运行列表一会儿 6 个、一会儿 2 个。
 		lock (scanGate)
 		{
-			tray = trayWindows.ToList();
 			windowsScanTick = Environment.TickCount;
-		}
-		MergeTrayIntoWindows(next, tray);
-		lock (scanGate)
-		{
 			windows.Clear();
 			windows.AddRange(next);
 		}
@@ -690,19 +745,6 @@ public static class RunningWindows
 			RenderDiagnostics.Trace("RUN scan windows=" + next.Count + " sample=" + sample);
 		}
 		KickTrayRefresh();
-	}
-
-	// 托盘窗口合并进窗口列表（同 pid 去重，不覆盖可见窗口）。
-	private static void MergeTrayIntoWindows(List<RunningWindow> into, List<RunningWindow> tray)
-	{
-		HashSet<uint> taken = new HashSet<uint>(into.Select((RunningWindow w) => w.ProcessId));
-		foreach (RunningWindow w in tray)
-		{
-			if (taken.Add(w.ProcessId))
-			{
-				into.Add(w);
-			}
-		}
 	}
 
 	// 托盘隐藏窗口单独后台扫描（8 秒节流 + 单飞限制；绝不占 UI 线程）。
@@ -730,7 +772,6 @@ public static class RunningWindows
 				{
 					trayScanTick = Environment.TickCount;
 				}
-				MergeTrayIntoWindows();
 			}
 			catch (Exception ex)
 			{
@@ -893,10 +934,14 @@ public static class RunningWindows
 		HashSet<uint> hostPids = TrayHostPids();
 		string windowsDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
 		HashSet<uint> taken = new HashSet<uint>();
-		List<RunningWindow> current = Snapshot();
-		foreach (RunningWindow w in current)
+		// 只按「有可见窗口」的 pid 去重；不能拿 Snapshot()（含托盘项）来判重，
+		// 否则上一轮的托盘项会让本轮 found 为空，托盘图标会整批消失。
+		lock (scanGate)
 		{
-			taken.Add(w.ProcessId);
+			foreach (RunningWindow w in windows)
+			{
+				taken.Add(w.ProcessId);
+			}
 		}
 		string[] systemClasses = new string[12] { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "DV2ControlHost", "ForegroundStaging", "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow", "Shell_ToastWindow", "Default IME", "IME", "MSCTFIME UI" };
 		EnumWindows((IntPtr handle, IntPtr value) =>
@@ -922,6 +967,12 @@ public static class RunningWindows
 			}
 			GetWindowThreadProcessId(handle, out var id);
 			if (id == ownPid || id == 0u || taken.Contains(id))
+			{
+				return true;
+			}
+			// 隐藏的标题栏/覆盖层即使属于托盘宿主进程，也不是用户程序窗口。
+			int trayExStyle = GetWindowLong(handle, -20);
+			if ((trayExStyle & 0x08000000) != 0 || (trayExStyle & 0x20) != 0)
 			{
 				return true;
 			}
@@ -971,6 +1022,11 @@ public static class RunningWindows
 			{
 				return true;
 			}
+			// Qt 系（Telegram/QQ）的 _q_titlebar 是无内容标题栏，不能当程序名。
+			if (title.StartsWith("_q_", StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
 			// 托盘归属判定：标题/进程名匹配托盘图标名，或进程持有托盘宿主窗口（WS_EX_TOOLWINDOW 的
 			// 托盘主窗口也放行——大退驻留的 QQ/微信/剪映等主隐藏窗口常带该样式，之前被一票否决导致"后台在跑但 Dock 不显示"）。
 			if (!MatchesTray(title, exeName, tray) && !hostPids.Contains(id))
@@ -993,27 +1049,6 @@ public static class RunningWindows
 		{
 			trayWindows.Clear();
 			trayWindows.AddRange(found);
-		}
-	}
-
-	// 托盘扫描完成后把托盘窗口合并进主窗口列表（同 pid 去重）。
-	private static void MergeTrayIntoWindows()
-	{
-		List<RunningWindow> tray;
-		lock (scanGate)
-		{
-			tray = trayWindows.ToList();
-		}
-		lock (scanGate)
-		{
-			HashSet<uint> taken = new HashSet<uint>(windows.Select((RunningWindow w) => w.ProcessId));
-			foreach (RunningWindow w in tray)
-			{
-				if (taken.Add(w.ProcessId))
-				{
-					windows.Add(w);
-				}
-			}
 		}
 	}
 
@@ -1221,6 +1256,7 @@ public static class RunningWindows
 		{
 			entry.LaunchTarget = value.Target;
 			entry.LaunchArguments = value.Arguments;
+			entry.Aumid = value.Aumid;
 			return;
 		}
 		LaunchInfoService.Enrich(entry);
@@ -1228,7 +1264,8 @@ public static class RunningWindows
 		{
 			Stamp = dateTime,
 			Target = entry.LaunchTarget,
-			Arguments = entry.LaunchArguments
+			Arguments = entry.LaunchArguments,
+			Aumid = entry.Aumid
 		});
 	}
 
@@ -1245,6 +1282,7 @@ public static class RunningWindows
 		}
 		Resolve(entry);
 		string[] paths = WindowActivationRules.Executables(entry);
+		string aumid = entry.Aumid ?? "";
 		HashSet<string> fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		string[] array = paths;
 		foreach (string text in array)
@@ -1256,7 +1294,7 @@ public static class RunningWindows
 			}
 		}
 		return (from w in SnapshotWithBackground()
-			where !string.IsNullOrEmpty(w.Path) && (paths.Contains(w.Path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(w.Path)))
+			where !string.IsNullOrEmpty(w.Path) && (paths.Contains(w.Path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(w.Path)) || (!string.IsNullOrEmpty(aumid) && string.Equals(w.AppUserModelId, aumid, StringComparison.OrdinalIgnoreCase)))
 			orderby w.Handle.ToInt64()
 			select w).ToList();
 	}
@@ -1308,7 +1346,22 @@ public static class RunningWindows
 	{
 		lock (scanGate)
 		{
-			return windows.ToList();
+			// 可见窗口优先；同一进程的托盘隐藏窗口不再重复出现。
+			List<RunningWindow> list = new List<RunningWindow>(windows.Count + trayWindows.Count);
+			HashSet<uint> visible = new HashSet<uint>();
+			foreach (RunningWindow w in windows)
+			{
+				list.Add(w);
+				visible.Add(w.ProcessId);
+			}
+			foreach (RunningWindow w in trayWindows)
+			{
+				if (!visible.Contains(w.ProcessId))
+				{
+					list.Add(w);
+				}
+			}
+			return list;
 		}
 	}
 
@@ -1317,7 +1370,39 @@ public static class RunningWindows
 	{
 		lock (scanGate)
 		{
-			return windows.Concat(background).ToList();
+			List<RunningWindow> list = new List<RunningWindow>(windows.Count + trayWindows.Count + background.Count);
+			HashSet<uint> pids = new HashSet<uint>();
+			HashSet<string> paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			foreach (RunningWindow w in windows)
+			{
+				list.Add(w);
+				pids.Add(w.ProcessId);
+				if (!string.IsNullOrEmpty(w.Path))
+				{
+					paths.Add(w.Path);
+				}
+			}
+			foreach (RunningWindow w in trayWindows)
+			{
+				if (!pids.Contains(w.ProcessId))
+				{
+					list.Add(w);
+					pids.Add(w.ProcessId);
+					if (!string.IsNullOrEmpty(w.Path))
+					{
+						paths.Add(w.Path);
+					}
+				}
+			}
+			foreach (RunningWindow w in background)
+			{
+				if (!pids.Contains(w.ProcessId) && (string.IsNullOrEmpty(w.Path) || paths.Add(w.Path)))
+				{
+					list.Add(w);
+					pids.Add(w.ProcessId);
+				}
+			}
+			return list;
 		}
 	}
 
