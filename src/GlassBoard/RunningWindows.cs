@@ -1699,7 +1699,7 @@ public static class RunningWindows
 	private static IntPtr FindMainWindowOf(IntPtr handle)
 	{
 		IntPtr best = IntPtr.Zero;
-		long bestArea = 0L;
+		long bestScore = 0L;
 		try
 		{
 			GetWindowThreadProcessId(handle, out uint targetPid);
@@ -1750,9 +1750,15 @@ public static class RunningWindows
 					return true;
 				}
 				long area = (long)w * (long)hh;
-				if (area > bestArea)
+				// 有标题的窗口优先：主窗通常有标题，而 Electron 应用的空壳窗/辅助窗
+				// （如 QQ NT 最小化的 Chrome_WidgetWin_0）标题为空但还原面积可能比主窗更大，
+				// 纯面积排序会选中空壳。标题优先 + 面积降序双层比较。
+				StringBuilder tb = new StringBuilder(128);
+				GetWindowText(h, tb, 128);
+				long score = (tb.Length > 0 ? (1L << 40) : 0L) + area;
+				if (score > bestScore)
 				{
-					bestArea = area;
+					bestScore = score;
 					best = h;
 				}
 				return true;
@@ -1788,6 +1794,137 @@ public static class RunningWindows
 		{
 			return 0L;
 		}
+	}
+
+	// 窗口选择评分：有标题优先（主窗特征），再按还原面积降序。用于主窗排序/选择，
+	// 避免选中 Electron 空壳窗（标题为空但还原面积更大的最小化壳）。
+	private static long WindowScore(IntPtr h)
+	{
+		try
+		{
+			StringBuilder tb = new StringBuilder(128);
+			GetWindowText(h, tb, 128);
+			return (tb.Length > 0 ? (1L << 40) : 0L) + NormalArea(h);
+		}
+		catch (Exception)
+		{
+			return NormalArea(h);
+		}
+	}
+
+	// Electron 托盘应用（QQ NT 等）"大退"恢复：主窗隐藏后应用层锁定，外部 ShowWindow
+	// 三段链只能唤醒 Win32 壳（"半死窗口"，点击无响应）。官方等效路径=重放 Electron
+	// 托盘点击消息：Electron_NotifyIconHostWindow + WM_APP+1(0x8001)，wParam=图标 ID
+	// （从 2 起）、lParam=WM_LBUTTONDOWN(0x201)/UP(0x202)。协议固定于 Electron 源码
+	// shell/browser/ui/win/notify_icon_host.cc（kNotifyIconMessage = WM_APP + 1）。
+	// 实测 QQ NT：主托盘图标 id=3 命中，主窗弹出且聊天列表可点（等效托盘点击）。
+	private static readonly Dictionary<string, int> TrayIconIdCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+	private static IntPtr FindNotifyIconHost(string exePath)
+	{
+		IntPtr found = IntPtr.Zero;
+		string targetName = "";
+		try
+		{
+			targetName = System.IO.Path.GetFileNameWithoutExtension(exePath ?? "");
+		}
+		catch (Exception)
+		{
+		}
+		if (targetName.Length == 0)
+		{
+			return IntPtr.Zero;
+		}
+		try
+		{
+			EnumWindows(delegate (IntPtr h, IntPtr value)
+			{
+				if (!IsWindow(h))
+				{
+					return true;
+				}
+				StringBuilder cls = new StringBuilder(64);
+				GetClassName(h, cls, 64);
+				if (cls.ToString() != "Electron_NotifyIconHostWindow")
+				{
+					return true;
+				}
+				// QQ NT 等多进程 Electron 应用：主窗可能属于渲染子进程，托盘宿主窗
+				// 属于 browser 主进程——按 exe 文件名跨进程匹配，不能只查主窗的 pid。
+				GetWindowThreadProcessId(h, out uint pid);
+				try
+				{
+					using (System.Diagnostics.Process p = System.Diagnostics.Process.GetProcessById((int)pid))
+					{
+						if (string.Equals(p.ProcessName, targetName, StringComparison.OrdinalIgnoreCase))
+						{
+							found = h;
+							return false;
+						}
+					}
+				}
+				catch (Exception)
+				{
+				}
+				return true;
+			}, IntPtr.Zero);
+		}
+		catch (Exception)
+		{
+		}
+		return found;
+	}
+
+	private static bool TrayWakeElectron(IntPtr notifyHost, List<IntPtr> watchWindows, string cacheKey)
+	{
+		int startId = 2;
+		int endId = 8;
+		if (!string.IsNullOrEmpty(cacheKey) && TrayIconIdCache.TryGetValue(cacheKey, out int cachedId))
+		{
+			// 先试上次成功的图标 ID（QQ=3），失败再全量遍历。
+			PostMessage(notifyHost, 0x8001u, (IntPtr)cachedId, (IntPtr)0x0201);
+			Thread.Sleep(60);
+			PostMessage(notifyHost, 0x8001u, (IntPtr)cachedId, (IntPtr)0x0202);
+			for (int t = 0; t < 10; t++)
+			{
+				Thread.Sleep(150);
+				foreach (IntPtr w in watchWindows)
+				{
+					if (IsWindowVisible(w) && !IsIconic(w))
+					{
+						return true;
+					}
+				}
+			}
+			startId = 2;
+		}
+		for (int iconId = startId; iconId <= endId; iconId++)
+		{
+			if (!string.IsNullOrEmpty(cacheKey) && TrayIconIdCache.ContainsKey(cacheKey) && TrayIconIdCache[cacheKey] == iconId)
+			{
+				continue; // 缓存 id 刚试过没成功，跳过避免重复触发
+			}
+			PostMessage(notifyHost, 0x8001u, (IntPtr)iconId, (IntPtr)0x0201);
+			Thread.Sleep(60);
+			PostMessage(notifyHost, 0x8001u, (IntPtr)iconId, (IntPtr)0x0202);
+			for (int t = 0; t < 12; t++)
+			{
+				Thread.Sleep(150);
+				foreach (IntPtr w in watchWindows)
+				{
+					if (IsWindowVisible(w) && !IsIconic(w))
+					{
+						if (!string.IsNullOrEmpty(cacheKey))
+						{
+							TrayIconIdCache[cacheKey] = iconId;
+						}
+						Store.Trace("ACTIVATE electron-tray wake ok iconId=" + iconId + " hwnd=" + w.ToInt64());
+						return true;
+					}
+				}
+			}
+		}
+		return false;
 	}
 
 	public static bool Activate(Entry entry)
@@ -1861,7 +1998,8 @@ public static class RunningWindows
 			List<RunningWindow> hiddenMain = ForHidden(entry).Where((RunningWindow w) => !IsWindowVisible(w.Handle) || IsIconic(w.Handle)).ToList();
 			if (hiddenMain.Count > 0)
 			{
-				hiddenMain.Sort((RunningWindow a, RunningWindow b) => NormalArea(b.Handle).CompareTo(NormalArea(a.Handle)));
+				// 标题优先 + 面积降序：主窗通常有标题，Electron 空壳窗标题为空（见 FindMainWindowOf 注释）。
+				hiddenMain.Sort((RunningWindow a, RunningWindow b) => WindowScore(b.Handle).CompareTo(WindowScore(a.Handle)));
 				list = hiddenMain;
 				Store.Trace("ACTIVATE hidden-main prefer count=" + hiddenMain.Count + " first=" + hiddenMain[0].Handle.ToInt64());
 			}
@@ -1882,10 +2020,44 @@ public static class RunningWindows
 				}
 				if (hidden.Count > 0)
 				{
-					IntPtr main = FindMainWindowOf(hidden[0].Handle);
+					// Electron 托盘应用（QQ NT 等）优先走托盘点击重放（应用自己解锁，
+					// 等效用户点托盘图标）；失败再走三段唤醒链。
+					IntPtr notifyHost = FindNotifyIconHost(hidden[0].Path ?? "");
+					bool trayWoke = false;
+					if (notifyHost != IntPtr.Zero)
+					{
+						string cacheKey = ProcessPath(hidden[0].ProcessId) ?? "";
+						List<IntPtr> watch = new List<IntPtr>();
+						foreach (RunningWindow w in hidden)
+						{
+							watch.Add(w.Handle);
+						}
+						trayWoke = TrayWakeElectron(notifyHost, watch, cacheKey);
+						if (!trayWoke)
+						{
+							Store.Trace("ACTIVATE electron-tray wake failed");
+						}
+					}
+					IntPtr main = IntPtr.Zero;
+					if (!trayWoke)
+					{
+						main = FindMainWindowOf(hidden[0].Handle);
+					}
+					if (main == IntPtr.Zero && trayWoke)
+					{
+						// 托盘唤醒成功：主窗已可见，直接用它作为激活目标。
+						foreach (RunningWindow w in hidden)
+						{
+							if (IsWindowVisible(w.Handle) && !IsIconic(w.Handle))
+							{
+								main = w.Handle;
+								break;
+							}
+						}
+					}
 					if (main != IntPtr.Zero)
 					{
-						if (!IsWindowVisible(main))
+						if (!IsWindowVisible(main) && !trayWoke)
 						{
 							// 隐藏主窗：同步 ShowWindow 显示→真实最小化→恢复（见 ACTIVATE_R hiddenShown 注释）。
 							PostMessage(main, 0x0112u, (IntPtr)0xF120, IntPtr.Zero);
@@ -1895,6 +2067,13 @@ public static class RunningWindows
 							ShowWindow(main, 6);
 							Thread.Sleep(550);
 							ShowWindow(main, 9);
+							int visPoll = 0;
+							while (!IsWindowVisible(main) && visPoll < 10)
+							{
+								Thread.Sleep(100);
+								visPoll++;
+							}
+							Store.Trace("ACTIVATE hidden-chain done visible=" + IsWindowVisible(main) + " iconic=" + IsIconic(main));
 						}
 						Store.Trace("ACTIVATE hidden-main restore hwnd=" + main.ToInt64());
 						list.Add(new RunningWindow
@@ -1962,21 +2141,40 @@ public static class RunningWindows
 		return true;
 	}
 
-	// 微信 4.0 大退主窗恢复：模拟微信全局热键 Ctrl+Alt+W（微信自己注册、自己处理，
-	// 等效托盘点击——托盘点击是唯一能解锁 Qt 层"大退锁定"的官方路径，外部 ShowWindow
-	// 恢复链实测无效）。热键无效时回退 Process.Start 单实例转发。全程后台线程执行。
+	// 微信 4.0 大退主窗恢复：首选 weixin:// 协议（微信官方外部唤起路径，实测等效托盘点击，
+	// 大退状态下恢复主窗且聊天列表直接可点）。曾用全局热键 Ctrl+Alt+W，但微信输入法 WeType
+	// 注册了同一热键（语音输入），注入会一并唤醒语音面板——热键降级为协议失败时的兜底，
+	// 且仅在 WeType 未运行时使用。全程后台线程执行。
+	private static bool WeTypeRunning()
+	{
+		try
+		{
+			foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcesses())
+			{
+				if (p.ProcessName.StartsWith("wetype", StringComparison.OrdinalIgnoreCase))
+				{
+					return true;
+				}
+			}
+		}
+		catch (Exception)
+		{
+		}
+		return false;
+	}
+
 	private static void WechatHotkeyRestore(Entry entry, string launchTarget)
 	{
-		// 1) 模拟 Ctrl+Alt+W
-		keybd_event(0x11, 0, 0u, UIntPtr.Zero);
-		keybd_event(0x12, 0, 0u, UIntPtr.Zero);
-		Thread.Sleep(30);
-		keybd_event(0x57, 0, 0u, UIntPtr.Zero);
-		Thread.Sleep(60);
-		keybd_event(0x57, 0, 2u, UIntPtr.Zero);
-		keybd_event(0x12, 0, 2u, UIntPtr.Zero);
-		keybd_event(0x11, 0, 2u, UIntPtr.Zero);
-		// 2) 轮询 2.5s 等主窗恢复（微信处理热键需要几百 ms）
+		// 1) weixin:// 协议唤起
+		Store.Trace("ACTIVATE wechat protocol wake");
+		try
+		{
+			System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("weixin://") { UseShellExecute = true });
+		}
+		catch (Exception)
+		{
+		}
+		// 2) 轮询 2.5s 等主窗恢复（微信处理协议唤起需要几百 ms）
 		for (int i = 0; i < 25; i++)
 		{
 			Thread.Sleep(100);
@@ -1984,13 +2182,38 @@ public static class RunningWindows
 			RunningWindow main = wins.FirstOrDefault((RunningWindow w) => IsWindowVisible(w.Handle) && !IsIconic(w.Handle));
 			if (main != null)
 			{
-				Store.Trace("ACTIVATE wechat hotkey restore ok hwnd=" + main.Handle.ToInt64());
+				Store.Trace("ACTIVATE wechat protocol restore ok hwnd=" + main.Handle.ToInt64());
 				RestoreAndForeground(main.Handle);
 				return;
 			}
 		}
-		// 3) 热键无效（用户在微信设置里关了热键）→ 回退单实例启动转发
-		Store.Trace("ACTIVATE wechat hotkey restore failed → single-instance launch fallback");
+		// 3) 协议失败：WeType 未运行时回退热键 Ctrl+Alt+W（WeType 运行时热键会误触语音输入，跳过）
+		if (!WeTypeRunning())
+		{
+			Store.Trace("ACTIVATE wechat protocol failed → hotkey fallback");
+			keybd_event(0x11, 0, 0u, UIntPtr.Zero);
+			keybd_event(0x12, 0, 0u, UIntPtr.Zero);
+			Thread.Sleep(30);
+			keybd_event(0x57, 0, 0u, UIntPtr.Zero);
+			Thread.Sleep(60);
+			keybd_event(0x57, 0, 2u, UIntPtr.Zero);
+			keybd_event(0x12, 0, 2u, UIntPtr.Zero);
+			keybd_event(0x11, 0, 2u, UIntPtr.Zero);
+			for (int i = 0; i < 25; i++)
+			{
+				Thread.Sleep(100);
+				List<RunningWindow> wins = ForHidden(entry);
+				RunningWindow main = wins.FirstOrDefault((RunningWindow w) => IsWindowVisible(w.Handle) && !IsIconic(w.Handle));
+				if (main != null)
+				{
+					Store.Trace("ACTIVATE wechat hotkey restore ok hwnd=" + main.Handle.ToInt64());
+					RestoreAndForeground(main.Handle);
+					return;
+				}
+			}
+		}
+		// 4) 全失败：单实例启动转发兜底
+		Store.Trace("ACTIVATE wechat protocol/hotkey failed → single-instance launch fallback");
 		try
 		{
 			string target = string.IsNullOrEmpty(launchTarget) ? entry.Path : launchTarget;
