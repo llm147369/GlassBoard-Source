@@ -5,7 +5,7 @@
 Windows 桌面启动台：毛玻璃 Dock 栏、应用启动台、控制中心、桌面组件（时钟/天气/音乐/律动）、灵动岛、壁纸引擎（静态 + 自定义视频动态壁纸）。.NET Framework 4.8，WPF + WinForms，C# LangVersion 14。
 
 - 仓库：https://github.com/llm147369/GlassBoard-Source（remote 已配好）
-- 当前版本：**v0.9.21.13**（2026-11-15）
+- 当前版本：**v0.9.22.0**（2026-11-20）
 - 工作目录：本仓库根目录（便携版运行目录与源码仓库是同一个目录，`GlassBoard.exe` 在根目录直接运行）
 
 ## 常用命令链
@@ -80,7 +80,8 @@ gh release upload vX.Y.Z "publish\GlassBoard_vX.Y.Z_User.zip" --clobber
 | GlassMaterials.cs | BoxBlur/Bake/BakeLive/折射（CPU 位图管线） |
 | VideoWallpaper.cs | 视频动态壁纸（WebView2 + WorkerW 挂载 + watchdog） |
 | IslandWindow.cs / IslandOptions.cs / IslandLyrics.cs | 灵动岛 + 歌词引擎（三源并行抢答 + 锚点插值） |
-| WidgetWindow.cs / WidgetRules.cs / WidgetOptions.cs | 桌面组件（含音乐律动 6 样式 + 10 配色） |
+| WidgetWindow.cs / WidgetRules.cs / WidgetOptions.cs | 桌面组件（含音乐律动 6 样式 + 10 配色 + 设备电量） |
+| DeviceBattery.cs | 设备电量引擎：内置 BatteryCore（电脑/鼠标/键盘）+ BatteryHub --json 可选扩展轮询（BatteryHub\ 目录，*.exe 已 force-add 进 git） |
 | IslandAudio.cs | NAudio WASAPI 采集（引用计数共享，律动+灵动岛共用，静默看门狗） |
 | MusicEngine.cs | GSMTC 音乐会话（Position 锚点插值） |
 | RunningWindows.cs | 窗口枚举/激活/最小化（入口点击语义） |
