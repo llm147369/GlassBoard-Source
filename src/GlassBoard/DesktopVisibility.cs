@@ -714,9 +714,13 @@ public static class DesktopVisibility
 		shownTick.Clear();
 	}
 
-	// 用户正在与任务栏区域交互：前台是开始菜单/搜索/任务栏本身，或鼠标悬停在已显示的任务栏上。
-	// 此时 Explorer 的状态机正在驱动显示动画，任何 SW_HIDE/AppBar 变更都会拉扯它
-	// （开始菜单与搜索卡顿、动态壁纸黑屏），必须完全放手。
+	// 用户正在与开始菜单/搜索/通知面板等系统 UI 交互：此时 Explorer 的状态机正在驱动
+	// 显示动画，任何 SW_HIDE/AppBar 变更都会拉扯它（开始菜单与搜索卡顿、动态壁纸黑屏），
+	// 必须完全放手。
+	// 注意：不含"鼠标悬停已显示任务栏"分支——OnReveal/Maintain 仅在强制隐藏模式
+	// （taskbarHidden==true）运行，该模式下任务栏弹出即应压回；鼠标悬停放手是为
+	// ABS_AUTOHIDE 自动隐藏模式服务的，那种模式 taskbarHidden==false 根本不进这里，
+	// 悬停放手只会让弹出来的任务栏永远压不回去（"隐藏失效"根因）。
 	private static bool TaskbarInteractionActive()
 	{
 		IntPtr foreground = GetForegroundWindow();
@@ -726,16 +730,6 @@ public static class DesktopVisibility
 			if (cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd" || cls == "Windows.UI.Core.CoreWindow" || cls == "StartMenuDocked" || cls == "SearchApp" || cls == "Shell_CharmWindow")
 			{
 				return true;
-			}
-		}
-		if (GetCursorPos(out POINT pt))
-		{
-			foreach (IntPtr item in Taskbars())
-			{
-				if (IsWindowVisible(item) && GetWindowRect(item, out RECT rect) && pt.X >= rect.Left && pt.X < rect.Right && pt.Y >= rect.Top && pt.Y < rect.Bottom)
-				{
-					return true;
-				}
 			}
 		}
 		// 键盘 Win 键 / 其它程序弹出开始菜单、搜索、通知面板时，前台窗口仍是原来的应用，
@@ -765,6 +759,36 @@ public static class DesktopVisibility
 		return Environment.TickCount - lastInteractionTick < 8000;
 	}
 
+	// 前台窗口是否为"普通应用全屏"（覆盖某台显示器完整区域）：
+	// 全屏应用里鼠标触底触发任务栏弹出时，不视为"用户想用任务栏"，立即压回。
+	// 开始菜单/搜索/系统面板不算——它们的弹出动画需要任务栏窗口在场，保持原有放手逻辑。
+	private static bool FullscreenAppActive()
+	{
+		IntPtr foreground = GetForegroundWindow();
+		if (foreground == IntPtr.Zero || !IsWindowVisible(foreground))
+		{
+			return false;
+		}
+		string cls = Class(foreground);
+		if (cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd" || cls == "Progman" || cls == "WorkerW" || cls == "Windows.UI.Core.CoreWindow" || cls == "SearchApp" || cls == "StartMenuDocked" || cls == "Shell_CharmWindow" || cls == "DV2ControlHost" || cls == "ImmersiveLauncher" || cls == "Shell_SystemDialogProxy" || cls == "MultitaskingViewFrame" || cls == "XamlExplorerHostIslandWindow")
+		{
+			return false;
+		}
+		if (!GetWindowRect(foreground, out RECT rect))
+		{
+			return false;
+		}
+		foreach (System.Windows.Forms.Screen screen in System.Windows.Forms.Screen.AllScreens)
+		{
+			System.Drawing.Rectangle bounds = screen.Bounds;
+			if (rect.Left <= bounds.Left && rect.Top <= bounds.Top && rect.Right >= bounds.Right && rect.Bottom >= bounds.Bottom)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	// 任务栏被 Explorer 重新显示时立即压回（WinEvent 回调线程，仅罕见事件）。
 	private static void OnReveal(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
 	{
@@ -783,27 +807,30 @@ public static class DesktopVisibility
 			{
 				return;
 			}
-			if (TaskbarInteractionActive())
+			bool fullscreenApp = FullscreenAppActive();
+			if (TaskbarInteractionActive() && !fullscreenApp)
 			{
 				// 用户在任务栏上（悬停显示/开始菜单打开）：交给 Explorer 的 ABS_AUTOHIDE
 				// 状态机自行管理，鼠标离开后它会自己收起，不再 SW_HIDE 拉扯。
+				// 全屏应用前台时除外：触底弹出属于误触，直接压回。
 				lastInteractionTick = Environment.TickCount;
 				return;
 			}
-			if (InteractionGraceActive())
+			if (InteractionGraceActive() && !fullscreenApp)
 			{
 				return;
 			}
-			if (!ThrottledRehide(hwnd))
+			if (!ThrottledRehide(hwnd) && !fullscreenApp)
 			{
 				return;
 			}
-			if (RecentlyShown(hwnd))
+			if (RecentlyShown(hwnd) && !fullscreenApp && TaskbarInteractionActive())
 			{
-				// 刚显示 900ms 内：菜单弹出动画进行中，不打断
+				// 刚显示 900ms 内且系统面板（开始菜单/搜索）交互中：菜单弹出动画进行中，不打断。
+				// 鼠标触底误弹（无系统面板交互）与全屏应用前台时不适用：任务栏闪现即压回，不留残影。
 				return;
 			}
-			Store.Trace("TASKBAR reveal " + cls + " -> re-hide");
+			Store.Trace("TASKBAR reveal " + cls + " -> re-hide" + (fullscreenApp ? " (fullscreen app)" : ""));
 			ShowWindowAsync(hwnd, 0);
 		}
 		catch (Exception ex)
@@ -882,15 +909,17 @@ public static class DesktopVisibility
 			List<IntPtr> bars = Taskbars();
 			if (taskbarHidden == true)
 			{
+				bool fullscreenApp = FullscreenAppActive();
 				// 用户正在打开/使用开始菜单、搜索或任务栏：完全放手（Explorer 状态机正在
 				// 驱动显示动画，此时 SW_HIDE 或工作区变化会让开始菜单卡顿、动态壁纸黑屏）。
-				if (TaskbarInteractionActive())
+				// 全屏应用前台时除外：触底弹出任务栏属于误触，保持压制。
+				if (TaskbarInteractionActive() && !fullscreenApp)
 				{
 					lastInteractionTick = Environment.TickCount;
 					return;
 				}
 				// 交互刚结束的宽限期：等 Explorer 的自动隐藏动画收尾，不立即压制。
-				if (InteractionGraceActive())
+				if (InteractionGraceActive() && !fullscreenApp)
 				{
 					return;
 				}
@@ -911,9 +940,10 @@ public static class DesktopVisibility
 					Store.Log(ex);
 				}
 				// 任务栏窗口被 explorer 重建为可见时重新隐藏（带启动宽限、显示宽限与节流）。
+				// 全屏应用前台时跳过 900ms 显示宽限：触底弹出一律立即压回。
 				foreach (IntPtr item in bars)
 				{
-					if (IsWindowVisible(item) && !ShellBooting(item) && ThrottledHide(item) && !RecentlyShown(item))
+					if (IsWindowVisible(item) && !ShellBooting(item) && ThrottledHide(item) && (fullscreenApp || !RecentlyShown(item)))
 					{
 						ShowWindowAsync(item, 0);
 					}

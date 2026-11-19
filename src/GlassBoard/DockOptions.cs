@@ -50,6 +50,10 @@ public class DockOptions
 	[DataMember]
 	public bool ShowComputer = false;
 
+	// 回收站独立开关（此前与"此电脑"成对显示，现拆分；默认显示，支持拖文件到图标删除）
+	[DataMember]
+	public bool ShowRecycle = true;
+
 	// 收纳整合总开关：开启后此电脑/设置/电源/网络入口从 Dock 收起（收进应用面板与控制中心），
 	// 关闭后各独立开关照常生效
 	[DataMember]
@@ -149,6 +153,7 @@ public class DockOptions
 		MaxPinned = 9;
 		ComputerStyle = 0;
 		ShowComputer = false;
+		ShowRecycle = true;
 		Consolidate = true;
 		ShowLabels = false;
 		ShowSeparator = true;
@@ -222,8 +227,8 @@ public class DockOptions
 			// 收纳开启：Dock 上只剩应用面板 + 控制中心 + 运行列表（快捷功能不受收纳影响）
 			return 1 + (ShowControlCenter ? 1 : 0) + (ShowRunningList ? 1 : 0) + quick;
 		}
-		// 此电脑与回收站成对显示（DockWindow.Refresh 里 ShowComputer 分支同时加两个按钮）
-		return 1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 2 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0) + quick;
+		// 此电脑与回收站各自独立开关（DockWindow.Refresh 分别加按钮）
+		return 1 + (ShowSettings ? 1 : 0) + (ShowComputer ? 1 : 0) + (ShowRecycle ? 1 : 0) + (ShowControlCenter ? 1 : 0) + (ShowPower ? 1 : 0) + (ShowNetwork ? 1 : 0) + (ShowRunningList ? 1 : 0) + quick;
 	}
 
 	public int VisiblePinned(double availableWidth, int count)

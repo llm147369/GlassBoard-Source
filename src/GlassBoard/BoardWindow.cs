@@ -43,6 +43,17 @@ public class BoardWindow : GlassWindow
 
 	private int columns = 7;
 
+	// 分页模式：page 当前页（0 起），capacity 每页容量 = 列数 × 可容纳行数
+	private int page;
+	private int capacity = 35;
+	private TextBlock Pager;
+
+	// 上次滚轮切页时刻（UTC），滚轮切页防抖：触控板/高分辨率滚轮一次手势会连发多个小 Delta 事件
+	private DateTime lastPageWheelUtc = DateTime.MinValue;
+
+	// 面板最近一次 Open 的时间戳（UTC）：桌面自动导入错峰——开启动画期间不执行导入刷新，避免抢 UI 线程抽帧
+	public DateTime OpenStamp { get; private set; } = DateTime.MinValue;
+
 	private Point dragStart;
 
 
@@ -127,6 +138,7 @@ public class BoardWindow : GlassWindow
 	private string currentGroup = "全部";
 	private bool syncingGroups;
 	private Border groupMore;
+	private Border groupDragTarget;
 
 	internal string CurrentGroup
 	{
@@ -229,12 +241,12 @@ public class BoardWindow : GlassWindow
 				}
 				else if (e.Key == Key.Next)
 				{
-					tileScroller?.PageDown();
+					ChangePage(1);
 					e.Handled = true;
 				}
 				else if (e.Key == Key.Prior)
 				{
-					tileScroller?.PageUp();
+					ChangePage(-1);
 					e.Handled = true;
 				}
 				else if (e.Key == Key.Return && Search.IsKeyboardFocusWithin && !editing)
@@ -246,6 +258,34 @@ public class BoardWindow : GlassWindow
 					}
 				}
 			}
+		};
+		PreviewMouseWheel += (object s, MouseWheelEventArgs e) =>
+		{
+			// 分页模式：滚轮上/下切页（拖动进行中不切，防止拖拽落点页错乱）
+			if (activeDrag || ModalBusy || Tiles == null)
+			{
+				return;
+			}
+			if (e.Delta == 0 || LayoutRules.Pages(Filtered().Count, capacity) <= 1)
+			{
+				return;
+			}
+			// 触控板/高分辨率滚轮一次手势会连发多个事件，200ms 防抖避免一次手势翻多页
+			if ((DateTime.UtcNow - lastPageWheelUtc).TotalMilliseconds < 200.0)
+			{
+				e.Handled = true;
+				return;
+			}
+			lastPageWheelUtc = DateTime.UtcNow;
+			if (e.Delta > 0)
+			{
+				ChangePage(-1);
+			}
+			else
+			{
+				ChangePage(1);
+			}
+			e.Handled = true;
 		};
 		Drop += ExternalDrop;
 		// 点击外部收起改为鼠标钩子驱动（不再依赖失焦）：Win+D 无鼠标点击，永不误收；
@@ -367,8 +407,25 @@ public class BoardWindow : GlassWindow
 			currentGroup = "全部";
 		}
 		columns = BoardIconRules.Columns(Width - 104.0, C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
+		int rows = BoardIconRules.Rows(Height - PageChrome(), C.Prefs.BoardIconSize, C.Prefs.BoardIconGap);
+		capacity = columns * rows;
 		Build();
 		Search.Text = text;
+	}
+
+	// 非磁贴区的垂直占用：外边距 42 + 搜索行 55 + 状态行 32 + 分组栏（可见时约 34）+ 批量操作栏（编辑时约 44）
+	private double PageChrome()
+	{
+		double chrome = 42.0 + 55.0 + 32.0;
+		if (!C.Prefs.BoardHideGroups)
+		{
+			chrome += 34.0;
+		}
+		if (editing)
+		{
+			chrome += 44.0;
+		}
+		return chrome;
 	}
 
 	public void RefreshIcons()
@@ -570,8 +627,18 @@ public class BoardWindow : GlassWindow
 		}
 	}
 
+	protected override void AnimateOpen()
+	{
+		// 大面板窗口保持完全静止：不位移、不缩放、不淡入。
+		// 入场动效全部交给图标（Render 的对角遮罩揭示），避免窗口动画与内容动画叠加造成"闪"与抽帧。
+		BeginAnimation(UIElement.OpacityProperty, null);
+		Root.RenderTransform = Transform.Identity;
+		Opacity = 1.0;
+	}
+
 	public void Open()
 	{
+		OpenStamp = DateTime.UtcNow;
 		idleRelease.Stop();
 		if (trimTimer != null)
 		{
@@ -792,7 +859,7 @@ public class BoardWindow : GlassWindow
 		{
 			SetSelectionMode(!editing);
 			Search.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
-			Render();
+			BuildForSize();
 		};
 		Grid.SetColumn(editSelection, 2);
 		grid.Children.Add(editSelection);
@@ -980,7 +1047,7 @@ public class BoardWindow : GlassWindow
 				HideInsertMarker();
 				List<string> seq = CurrentPageSequence().Where((string p) => !DraggedEntries(e.Data).Any((string d) => string.Equals(d, p, StringComparison.OrdinalIgnoreCase))).ToList();
 				seq.AddRange(DraggedEntries(e.Data));
-				if (!C.ReorderView(seq.ToArray()))
+				if (!CommitPageReorder(seq.ToArray()))
 				{
 					Render();
 				}
@@ -1020,7 +1087,7 @@ public class BoardWindow : GlassWindow
 			if (DraggedEntries(e.Data).Length != 0)
 			{
 				HideInsertMarker();
-				if (!C.ReorderView(CurrentPageSequence()))
+				if (!CommitPageReorder(CurrentPageSequence()))
 				{
 					Render();
 				}
@@ -1063,6 +1130,14 @@ public class BoardWindow : GlassWindow
 		grid3.Children.Add(Empty);
 		Grid grid4 = new Grid();
 		Grid.SetRow(grid4, 4);
+		grid4.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = new GridLength(1.0, GridUnitType.Star)
+		});
+		grid4.ColumnDefinitions.Add(new ColumnDefinition
+		{
+			Width = GridLength.Auto
+		});
 		layout.Children.Add(grid4);
 		Status = new TextBlock
 		{
@@ -1070,10 +1145,22 @@ public class BoardWindow : GlassWindow
 			Foreground = MutedBrush,
 			FontSize = 11.0,
 			TextTrimming = TextTrimming.CharacterEllipsis,
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness(0.0, 0.0, 8.0, 0.0)
+		};
+		Grid.SetColumn(Status, 0);
+		grid4.Children.Add(Status);
+		Pager = new TextBlock
+		{
+			Text = "1 / 1",
+			Foreground = MutedBrush,
+			FontSize = 11.0,
 			VerticalAlignment = VerticalAlignment.Center
 		};
-		grid4.Children.Add(Status);
-		Render(animate: true);
+		Grid.SetColumn(Pager, 1);
+		grid4.Children.Add(Pager);
+		// 打开面板时窗口级入场动画（AnimateOpen）统一负责；内容不单独播动画，避免多层叠加不一致
+		Render(animate: false);
 	}
 
 	// 同步分组栏：芯片显示 全部/未分组/全部自定义分组；分组集合变化时重建芯片
@@ -1120,6 +1207,57 @@ public class BoardWindow : GlassWindow
 				{
 					SelectGroup(capture);
 				};
+				// 拖图标到分组芯片 = 进入该分组（"全部"里拖=添加到该组；具体分组里拖=移动过去；拖到"未分组"=移出分组）
+				chip.AllowDrop = true;
+				chip.DragOver += (object s, DragEventArgs e) =>
+				{
+					if (DraggedEntries(e.Data).Length == 0)
+					{
+						return;
+					}
+					e.Effects = DragDropEffects.Move;
+					e.Handled = true;
+					if (!ReferenceEquals(groupDragTarget, chip))
+					{
+						ClearGroupDragHighlight();
+						groupDragTarget = chip;
+						chip.Background = new SolidColorBrush(IconPacks.AccentColor(C.Prefs.Dock.Accent));
+						chip.BorderThickness = new Thickness(1.0);
+						chip.BorderBrush = new SolidColorBrush(IconPacks.AccentColor(C.Prefs.Dock.Accent));
+						if (chip.Child is TextBlock label)
+						{
+							label.Foreground = Brushes.White;
+						}
+					}
+				};
+				chip.DragLeave += (object s, DragEventArgs e) =>
+				{
+					if (ReferenceEquals(groupDragTarget, chip))
+					{
+						ClearGroupDragHighlight();
+					}
+				};
+				chip.Drop += (object s, DragEventArgs e) =>
+				{
+					string[] dragged = DraggedEntries(e.Data);
+					e.Handled = true;
+					ClearGroupDragHighlight();
+					if (dragged.Length == 0)
+					{
+						return;
+					}
+					if (capture == "全部")
+					{
+						SetStatus("「全部」是虚拟分类，请拖到具体分组");
+						return;
+					}
+					if (string.Equals(capture, currentGroup, StringComparison.OrdinalIgnoreCase))
+					{
+						SetStatus("图标已在「" + capture + "」分组");
+						return;
+					}
+					C.TransferEntries(dragged, currentGroup, capture);
+				};
 				groupChips.Children.Add(chip);
 			}
 		}
@@ -1163,9 +1301,86 @@ public class BoardWindow : GlassWindow
 			selected.Clear();
 		}
 		currentGroup = g;
+		page = 0;
 		tileScroller?.ScrollToVerticalOffset(0.0);
 		SyncGroups();
 		Render(animate: true);
+	}
+
+	// 拖拽分组高亮复位：恢复芯片为当前选中态标准样式
+	private void ClearGroupDragHighlight()
+	{
+		if (groupDragTarget == null)
+		{
+			return;
+		}
+		Border chip = groupDragTarget;
+		groupDragTarget = null;
+		bool sel = string.Equals(chip.Tag as string, currentGroup);
+		chip.Background = (sel ? Polish.Card(LightTheme) : Brushes.Transparent);
+		chip.BorderBrush = (sel ? new SolidColorBrush(IconPacks.AccentColor(C.Prefs.Dock.Accent)) : Polish.Line(LightTheme));
+		if (chip.Child is TextBlock label)
+		{
+			label.Foreground = (sel ? Polish.Ink(LightTheme) : Polish.Muted(LightTheme));
+		}
+	}
+
+	// 滚轮/键盘切页：delta +1 下一页、-1 上一页；越界或未变化时不重渲
+	private void ChangePage(int delta)
+	{
+		if (Tiles == null)
+		{
+			return;
+		}
+		int pages = LayoutRules.Pages(Filtered().Count, capacity);
+		int target = Math.Max(0, Math.Min(pages - 1, page + delta));
+		if (target == page)
+		{
+			return;
+		}
+		page = target;
+		tileScroller?.ScrollToVerticalOffset(0.0);
+		Render(animate: true);
+	}
+
+	// 分页提交：把当前页的容器顺序写回完整视图序列（分组过滤后的 Path 列表），再交给 Controller 重排
+	private bool CommitPageReorder(string[] pageSeq)
+	{
+		string[] full = BuildFullViewSequence(pageSeq);
+		if (full == null)
+		{
+			return false;
+		}
+		return C.ReorderView(full);
+	}
+
+	// 以 Filtered() 视图为底，把当前页切片替换为拖放后的顺序；切片路径集合不一致时返回 null 放弃提交
+	private string[] BuildFullViewSequence(string[] pageSeq)
+	{
+		List<Entry> view = Filtered();
+		int start = page * capacity;
+		if (start < 0 || start + pageSeq.Length > view.Count)
+		{
+			return null;
+		}
+		HashSet<string> seqSet = new HashSet<string>(pageSeq, StringComparer.OrdinalIgnoreCase);
+		for (int i = 0; i < pageSeq.Length; i++)
+		{
+			if (!seqSet.Remove(view[start + i].Path))
+			{
+				return null;
+			}
+		}
+		if (seqSet.Count != 0)
+		{
+			return null;
+		}
+		List<string> full = view.Select((Entry a) => a.Path).ToList();
+		for (int j = 0; j < pageSeq.Length; j++)
+		{
+			full[start + j] = pageSeq[j];
+		}
+		return full.ToArray();
 	}
 
 	// 入口是否属于当前分组视图（分组栏隐藏或"全部"时恒真）
@@ -1671,10 +1886,64 @@ public class BoardWindow : GlassWindow
 			Status.Text = pendingStatus;
 		}
 		Status.Text = "共 " + list.Count + " 个入口" + ((C.Prefs.BoardHideGroups || currentGroup == "全部") ? "" : (" · 分组「" + currentGroup + "」")) + " · 拖动图标可调整顺序 · Esc 收起";
-		int num2 = 0;
-		foreach (Entry item in list)
+		int pages = LayoutRules.Pages(list.Count, capacity);
+		page = Math.Max(0, Math.Min(page, pages - 1));
+		if (Pager != null)
 		{
-			Tiles.Children.Add(Tile(item, num2++, animate));
+			Pager.Text = (page + 1) + " / " + pages;
+		}
+		List<Entry> pageList = list.Skip(page * capacity).Take(capacity).ToList();
+		foreach (Entry item in pageList)
+		{
+			Tiles.Children.Add(Tile(item));
+		}
+		// 图标动效：整页图标沿"左上 → 右下"对角线依次刷出（OpacityMask 线性渐变遮罩扫描）。
+		// 窗口静止；这里只有 2 条 GradientStop.Offset 动画，没有 per-tile 时钟，
+		// 帧率稳定不抽帧，方向感清晰且每次打开/切页都一致。
+		// 初始状态同步落位、动画延迟到下一渲染帧启动：打开面板时 Render 在 Show() 之前执行，
+		// 若当场启动动画，等窗口显示出来动画已播完，用户先看到完整内容 → "闪一下"。
+		Tiles.RenderTransform = null;
+		LinearGradientBrush reveal = Tiles.OpacityMask as LinearGradientBrush;
+		if (reveal == null || reveal.IsFrozen)
+		{
+			reveal = new LinearGradientBrush
+			{
+				StartPoint = new Point(0.0, 0.0),
+				EndPoint = new Point(1.0, 1.0)
+			};
+			reveal.GradientStops.Add(new GradientStop(Color.FromArgb(255, 0, 0, 0), 0.0));
+			reveal.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0, 0, 0), 0.35));
+			Tiles.OpacityMask = reveal;
+		}
+		GradientStop revealed = reveal.GradientStops[0];
+		GradientStop hidden = reveal.GradientStops[1];
+		revealed.BeginAnimation(GradientStop.OffsetProperty, null);
+		hidden.BeginAnimation(GradientStop.OffsetProperty, null);
+		if (animate && MotionEnabled)
+		{
+			// 起始：不透明区整体位于画面之外 → 图标全部隐藏，随遮罩扫过从左上方依次显现
+			revealed.Offset = -0.4;
+			hidden.Offset = -0.05;
+			Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(delegate
+			{
+				CubicEase easing = new CubicEase
+				{
+					EasingMode = EasingMode.EaseOut
+				};
+				revealed.BeginAnimation(GradientStop.OffsetProperty, new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(240.0))
+				{
+					EasingFunction = easing
+				});
+				hidden.BeginAnimation(GradientStop.OffsetProperty, new DoubleAnimation(1.35, TimeSpan.FromMilliseconds(240.0))
+				{
+					EasingFunction = easing
+				});
+			}));
+		}
+		else
+		{
+			revealed.Offset = 1.0;
+			hidden.Offset = 1.35;
 		}
 	}
 
@@ -1790,7 +2059,6 @@ public class BoardWindow : GlassWindow
 
 	private FrameworkElement BuildMediaCard(Entry entry)
 	{
-		string ext = Path.GetExtension(entry.Path);
 		bool isVideo = MediaThumb.IsVideo(entry.Path);
 		Grid host = new Grid
 		{
@@ -1826,19 +2094,7 @@ public class BoardWindow : GlassWindow
 		}
 		else
 		{
-			ImageSource src = null;
-			if (string.Equals(ext, ".svg", StringComparison.OrdinalIgnoreCase))
-			{
-				src = MediaThumb.SvgPreview(entry.Path, 480);
-			}
-			else
-			{
-				src = MediaThumb.LoadFile(entry.Path, 480);
-				if (src == null)
-				{
-					src = ShellThumbnail.Get(entry.Path, 480);
-				}
-			}
+			ImageSource src = MediaThumb.LoadPreview(entry.Path, 480);
 			if (src != null)
 			{
 				System.Windows.Controls.Image img = new System.Windows.Controls.Image
@@ -1853,13 +2109,44 @@ public class BoardWindow : GlassWindow
 			}
 			else
 			{
-				host.Children.Add(new TextBlock
+				// 缓存未命中：先放占位，后台线程解码大图，解码完成再替换——避免 UI 线程冻结抽帧
+				TextBlock loading = new TextBlock
 				{
-					Text = "无法生成预览",
+					Text = "预览加载中…",
 					Foreground = new SolidColorBrush(Color.FromRgb(150, 155, 170)),
 					FontSize = 13.0,
 					HorizontalAlignment = HorizontalAlignment.Center,
 					VerticalAlignment = VerticalAlignment.Center
+				};
+				host.Children.Add(loading);
+				System.Windows.Controls.Image pendingImg = new System.Windows.Controls.Image
+				{
+					MaxWidth = 424.0,
+					MaxHeight = 238.0,
+					Stretch = Stretch.Uniform
+				};
+				RenderOptions.SetBitmapScalingMode(pendingImg, BitmapScalingMode.HighQuality);
+				host.Children.Add(pendingImg);
+				string previewPath = entry.Path;
+				ThreadPool.QueueUserWorkItem(delegate
+				{
+					ImageSource loaded = MediaThumb.LoadPreview(previewPath, 480);
+					System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+					{
+						// 预览已关闭或已切换到别的磁贴则丢弃结果
+						if (mediaPreviewPopup != null && mediaPreviewPopup.IsOpen && ReferenceEquals(mediaPreviewPopup.Child, host))
+						{
+							if (loaded == null)
+							{
+								loading.Text = "无法生成预览";
+							}
+							else
+							{
+								loading.Visibility = Visibility.Collapsed;
+								pendingImg.Source = loaded;
+							}
+						}
+					}));
 				});
 			}
 		}
@@ -1978,9 +2265,12 @@ public class BoardWindow : GlassWindow
 			panel.Children.RemoveAt(0);
 		}
 		panel.Children.Insert(0, image);
+		// 图标回填加 120ms 淡入：异步回调逐个替换占位块时不再"突突"跳动
+		image.Opacity = 0.0;
+		image.BeginAnimation(OpacityProperty, new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(120.0)));
 	}
 
-	private FrameworkElement Tile(Entry a, int index, bool animate)
+	private FrameworkElement Tile(Entry a)
 	{
 		bool isSelected = editing && selected.Contains(a.Path);
 		SolidColorBrush selectedBrush = new SolidColorBrush(Color.FromArgb(48, 111, 167, byte.MaxValue));
@@ -2015,7 +2305,16 @@ public class BoardWindow : GlassWindow
 					System.Windows.Controls.ContextMenu menu = C.Menu(a, C.Prefs.BoardMaterial.Tint, (int)(C.Prefs.OpacityPercent ?? 72.0));
 					menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
 					menu.PlacementTarget = tile;
+					menu.Closed += delegate
+					{
+						// 内置菜单关闭后收起面板（无论点没点项）：回退菜单本身是兜底路径，直接收起最直观
+						CollapseSmooth();
+					};
 					menu.IsOpen = true;
+				}, delegate
+				{
+					// 点击了系统菜单动作：面板自动收起（与 Dock 打开应用后面板收起的体验一致）
+					CollapseSmooth();
 				});
 			}));
 		};
@@ -2042,12 +2341,15 @@ public class BoardWindow : GlassWindow
 		}
 		else
 		{
-			stackPanel.Children.Add(new TextBlock
+			// 占位用无字体灰块（圆角方块）：▣ 字符会触发 Segoe UI Symbol 字体 fallback，
+			// 首次渲染字体加载/替换帧会造成面板首开抽帧；灰块与真图标同尺寸，回填时视觉平滑
+			stackPanel.Children.Add(new Border
 			{
-				Text = "▣",
-				Foreground = TextBrush,
-				FontSize = C.Prefs.BoardIconSize * 0.84,
-				Height = C.Prefs.BoardIconSize,
+				Width = C.Prefs.BoardIconSize * 0.72,
+				Height = C.Prefs.BoardIconSize * 0.72,
+				CornerRadius = new CornerRadius(C.Prefs.BoardIconSize * 0.16),
+				Background = TextBrush,
+				Opacity = 0.28,
 				HorizontalAlignment = HorizontalAlignment.Center,
 				Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
 			});
@@ -2134,25 +2436,6 @@ public class BoardWindow : GlassWindow
 			hover(obj: false);
 			OnMediaTileLeave();
 		};
-		if (animate && MotionEnabled)
-		{
-			CubicEase easingFunction = new CubicEase
-			{
-				EasingMode = EasingMode.EaseOut
-			};
-			TimeSpan value = TimeSpan.FromMilliseconds(Math.Min(index, 14) * 12);
-			tile.Opacity = 0.0;
-			tile.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(190.0))
-			{
-				BeginTime = value,
-				EasingFunction = easingFunction
-			});
-			lift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(9.0 * MotionLevel, 0.0, TimeSpan.FromMilliseconds(230.0))
-			{
-				BeginTime = value,
-				EasingFunction = easingFunction
-			});
-		}
 		tile.MouseLeftButtonDown += (object s, MouseButtonEventArgs e) =>
 		{
 			dragStart = e.GetPosition(this);
@@ -2247,7 +2530,7 @@ public class BoardWindow : GlassWindow
 			if (array.Length != 0)
 			{
 				HideInsertMarker();
-				if (!C.ReorderView(CurrentPageSequence()))
+				if (!CommitPageReorder(CurrentPageSequence()))
 				{
 					Render();
 				}
@@ -2725,8 +3008,9 @@ public class BoardWindow : GlassWindow
 			{
 				iconsDirty = false;
 				columns = num;
-				Tiles.Columns = num;
-				Render();
+				// 图标大小/间距变化会同时改变每页容量（行数），必须整重建：BuildForSize 重算 capacity，
+				// Render 内会钳制 page，分页立即生效，不必等下次打开面板
+				BuildForSize();
 			}
 		}
 		catch (Exception ex)

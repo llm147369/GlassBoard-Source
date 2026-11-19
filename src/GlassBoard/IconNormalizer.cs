@@ -59,13 +59,20 @@ namespace GlassBoard
 				return;
 			}
 			int drop = glyphCache.Count - 500;
+			// 不能在 foreach 枚举 Dictionary 的同时 Remove（会抛 InvalidOperationException
+			// "集合已修改"）：先收集待删 key，枚举结束后再统一删除。
+			List<ImageSource> victims = new List<ImageSource>(drop);
 			foreach (KeyValuePair<ImageSource, ImageSource> pair in glyphCache)
 			{
-				glyphCache.Remove(pair.Key);
-				if (--drop <= 0)
+				victims.Add(pair.Key);
+				if (victims.Count >= drop)
 				{
 					break;
 				}
+			}
+			for (int i = 0; i < victims.Count; i++)
+			{
+				glyphCache.Remove(victims[i]);
 			}
 		}
 

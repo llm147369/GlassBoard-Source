@@ -114,13 +114,141 @@ public static class RunningWindows
 	private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, StringBuilder lParam);
 
 	[DllImport("user32.dll")]
-	private static extern bool IsWindowVisible(IntPtr window);
+	public static extern bool IsWindowVisible(IntPtr window);
 
 	[DllImport("user32.dll")]
 	private static extern bool IsWindow(IntPtr window);
 
 	[DllImport("user32.dll")]
-	private static extern bool IsIconic(IntPtr window);
+	public static extern bool IsIconic(IntPtr window);
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct WINDOWPLACEMENT
+	{
+		public int length;
+		public int flags;
+		public int showCmd;
+		public int ptMinPositionX;
+		public int ptMinPositionY;
+		public int ptMaxPositionX;
+		public int ptMaxPositionY;
+		public RECT rcNormalPosition;
+	}
+
+	[DllImport("user32.dll")]
+	private static extern bool GetWindowPlacement(IntPtr window, ref WINDOWPLACEMENT placement);
+
+	/// <summary>
+	/// 主窗尺寸判定：排除启动过渡窗（微信 4.0 的 176x199 空白过渡窗、托盘小窗等）。
+	/// 低于 400x300 的可见窗口不当作可激活的主窗。
+	/// 最小化窗口的 GetWindowRect 会返回 -32000 处的小矩形（最小化图标位置），
+	/// 此时改用 GetWindowPlacement 的 rcNormalPosition（还原尺寸）判定。
+	/// </summary>
+	public static bool IsMainWindowSize(IntPtr window)
+	{
+		int width;
+		int height;
+		if (IsIconic(window))
+		{
+			WINDOWPLACEMENT placement = default(WINDOWPLACEMENT);
+			placement.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+			if (!GetWindowPlacement(window, ref placement))
+			{
+				return false;
+			}
+			width = placement.rcNormalPosition.Right - placement.rcNormalPosition.Left;
+			height = placement.rcNormalPosition.Bottom - placement.rcNormalPosition.Top;
+		}
+		else
+		{
+			if (!GetWindowRect(window, out RECT r))
+			{
+				return false;
+			}
+			width = r.Right - r.Left;
+			height = r.Bottom - r.Top;
+		}
+		return width >= 400 && height >= 300;
+	}
+
+	// 定向枚举入口进程的"隐藏主窗"（大退到托盘的应用：主窗隐藏后不在常规可见快照里，
+	// 点击 Dock 图标时用此方法找回并强制显示，恢复原会话而不是重开新窗）。
+	public static List<RunningWindow> ForHidden(Entry entry)
+	{
+		List<RunningWindow> hidden = new List<RunningWindow>();
+		if (entry == null || entry.IsFolder || Directory.Exists(entry.Path))
+		{
+			return hidden;
+		}
+		Resolve(entry);
+		string[] paths = WindowActivationRules.Executables(entry);
+		HashSet<string> fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		foreach (string text in paths)
+		{
+			string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(text);
+			if (!string.IsNullOrEmpty(fileNameWithoutExtension) && !GenericExeNames.Any((string n) => n.Equals(fileNameWithoutExtension, StringComparison.OrdinalIgnoreCase)))
+			{
+				fallbackNames.Add(fileNameWithoutExtension);
+			}
+		}
+		int own = Process.GetCurrentProcess().Id;
+		Dictionary<uint, string> byPid = new Dictionary<uint, string>();
+		EnumWindows((IntPtr handle, IntPtr value) =>
+		{
+			GetWindowThreadProcessId(handle, out uint pid);
+			if (pid == 0 || pid == (uint)own)
+			{
+				return true;
+			}
+			if (!byPid.TryGetValue(pid, out string path))
+			{
+				try
+				{
+					path = ProcessPath(pid);
+				}
+				catch
+				{
+					path = null;
+				}
+				byPid[pid] = path;
+			}
+			if (string.IsNullOrEmpty(path) || !(paths.Contains(path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(path))))
+			{
+				return true;
+			}
+			StringBuilder clsBuilder = new StringBuilder(128);
+			GetClassName(handle, clsBuilder, clsBuilder.Capacity);
+			string cls = clsBuilder.ToString();
+			if (cls.Contains("Message") || cls.Contains("Tray") || cls.Contains("Hook") || cls.Contains("Notify") || cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd" || cls == "IME" || cls == "MSCTFIME UI" || cls == "Default IME" || cls == "ConsoleWindowClass")
+			{
+				return true;
+			}
+			StringBuilder titleBuilder = new StringBuilder(1024);
+			GetWindowText(handle, titleBuilder, titleBuilder.Capacity);
+			if (string.IsNullOrWhiteSpace(titleBuilder.ToString()))
+			{
+				return true;
+			}
+			if (!IsMainWindowSize(handle))
+			{
+				return true;
+			}
+			hidden.Add(new RunningWindow
+			{
+				Handle = handle,
+				ProcessId = pid,
+				Path = path,
+				Title = titleBuilder.ToString(),
+				AppUserModelId = Aumid(pid)
+			});
+			return true;
+		}, IntPtr.Zero);
+		if (hidden.Count > 0)
+		{
+			Store.Trace("ACTIVATE hidden-scan count=" + hidden.Count + " first=" + hidden[0].Handle.ToInt64() + " title=" + hidden[0].Title + " iconic=" + IsIconic(hidden[0].Handle) + " visible=" + IsWindowVisible(hidden[0].Handle));
+		}
+		return hidden;
+	}
 
 	[DllImport("user32.dll")]
 	private static extern bool IsZoomed(IntPtr window);
@@ -138,7 +266,32 @@ public static class RunningWindows
 	private static extern bool ShowWindowAsync(IntPtr window, int command);
 
 	[DllImport("user32.dll")]
+	private static extern bool ShowWindow(IntPtr window, int command);
+
+	[DllImport("user32.dll")]
 	private static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
+
+	[DllImport("user32.dll")]
+	private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+
+	[DllImport("user32.dll")]
+	private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+
+	[DllImport("user32.dll")]
+	private static extern bool SetCursorPos(int x, int y);
+
+	[DllImport("user32.dll")]
+	private static extern bool GetCursorPos(out POINT point);
+
+	[DllImport("user32.dll")]
+	private static extern int GetSystemMetrics(int index);
+
+	private struct POINT
+	{
+		public int X;
+
+		public int Y;
+	}
 
 	[DllImport("user32.dll")]
 	private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
@@ -1332,12 +1485,110 @@ public static class RunningWindows
 		{
 			return false;
 		}
+		// 恢复与前台抢占可能耗时（托盘应用的恢复轮询、前台重试最长数百毫秒），
+		// 统一后台线程执行：点击图标立即返回，UI 不卡（Pavise 类托盘应用场景）。
+		Task.Run(delegate
+		{
+			try
+			{
+				RestoreAndForeground(handle);
+			}
+			catch (Exception)
+			{
+			}
+		});
+		return true;
+	}
+
+	private static void RestoreAndForeground(IntPtr handle)
+	{
 		if (IsIconic(handle))
 		{
 			ShowWindowAsync(handle, 9);
-			// 等窗口完成恢复动画再抢前台，否则 SetForegroundWindow 会被忽略（微信场景）。
+			// 等窗口完成恢复动画再抢前台（微信/Pavise 等恢复慢，60ms 不够：
+			// 恢复动画期间 SetForegroundWindow 必被拒）。轮询直到恢复或超时。
+			int restoreWait = 0;
+			while (IsIconic(handle) && restoreWait < 250)
+			{
+				Thread.Sleep(20);
+				restoreWait += 20;
+			}
+			if (IsIconic(handle))
+			{
+				// 托盘类应用会拦截 SC_RESTORE（窗口始终停在被托管状态）：改 SW_SHOWNORMAL 强制显示。
+				ShowWindowAsync(handle, 1);
+				restoreWait = 0;
+				while (IsIconic(handle) && restoreWait < 250)
+				{
+					Thread.Sleep(20);
+					restoreWait += 20;
+				}
+				if (IsIconic(handle))
+				{
+					// 仍然无效：该句柄只是遗留的"最小化壳"，应用真正的 UI 主窗体被自己隐藏了。
+					// 通用兜底：找同进程最大的非工具类顶层窗口强制显示（Pavise 场景）。
+					IntPtr main = FindMainWindowOf(handle);
+					Store.Trace("ACTIVATE_R mainFallback hwnd=" + main.ToInt64());
+					if (main != IntPtr.Zero)
+					{
+						ShowWindowAsync(main, 1);
+						handle = main;
+						restoreWait = 0;
+						while (!IsWindowVisible(handle) && restoreWait < 250)
+						{
+							Thread.Sleep(20);
+							restoreWait += 20;
+						}
+					}
+				}
+			}
+			Store.Trace("ACTIVATE_R restoreDone iconic=" + IsIconic(handle) + " visible=" + IsWindowVisible(handle));
 			Thread.Sleep(60);
 		}
+		if (!IsWindowVisible(handle))
+		{
+			// 隐藏窗口（微信 4.0 "大退"=隐藏主窗，不是最小化）：Win32 层可见但应用框架状态机
+			// （Qt/Electron）仍在"隐藏"态，客户区点击坐标映射错乱（"半死窗口"：标题栏按钮正常、
+			// 聊天列表点不动）。
+			// 实测有效唤醒序列（等价用户手动操作）：先显示 → 真实最小化 → 恢复。两次状态翻转
+			// 强制框架内部几何与 Win32 层对齐。隐藏窗口直接 SW_MINIMIZE 无效（无状态变化），
+			// 必须先显示。
+			// 注意：必须用同步 ShowWindow（SendMessage 语义）而非 ShowWindowAsync（PostMessage
+			// 语义）——异步连发时三个命令在目标消息队列里连续处理，框架状态机来不及逐状态
+			// 走完，等效于"只显示"，唤醒不生效。
+			PostMessage(handle, 0x0112u, (IntPtr)0xF120, IntPtr.Zero);
+			Thread.Sleep(80);
+			ShowWindow(handle, 1);
+			Thread.Sleep(350);
+			ShowWindow(handle, 6);
+			Thread.Sleep(550);
+			ShowWindow(handle, 9);
+			int visWait = 0;
+			while (!IsWindowVisible(handle) && visWait < 500)
+			{
+				Thread.Sleep(20);
+				visWait += 20;
+			}
+			Store.Trace("ACTIVATE_R hiddenShown visible=" + IsWindowVisible(handle));
+			Thread.Sleep(60);
+		}
+		// 几何抖动：1px 位移强制 WM_WINDOWPOSCHANGED，让框架内部几何与 Win32 层重新对齐
+		// （隐藏恢复后的窗口客户区坐标映射可能错乱，1px 抖动肉眼无感）。
+		if (GetWindowRect(handle, out RECT shakeRect))
+		{
+			int sw = shakeRect.Right - shakeRect.Left;
+			int sh = shakeRect.Bottom - shakeRect.Top;
+			if (sw > 40 && sh > 40)
+			{
+				SetWindowPos(handle, IntPtr.Zero, shakeRect.Left + 1, shakeRect.Top, sw, sh, 0x0014u);
+				Thread.Sleep(60);
+				SetWindowPos(handle, IntPtr.Zero, shakeRect.Left, shakeRect.Top, sw, sh, 0x0014u);
+				Thread.Sleep(60);
+			}
+		}
+		// 伪造鼠标激活：WM_MOUSEACTIVATE（HTCLIENT + WM_LBUTTONDOWN）让框架走应用层激活路径
+		// （托盘点击恢复的本质=窗口激活，此消息等价于用户点击客户区）。
+		PostMessage(handle, 0x0021u, (IntPtr)handle, (IntPtr)((long)0x0201 << 16 | 1));
 		IntPtr lastActivePopup = GetLastActivePopup(handle);
 		IntPtr intPtr = ((lastActivePopup != IntPtr.Zero && IsWindowVisible(lastActivePopup)) ? lastActivePopup : handle);
 		// AttachThreadInput+BringWindowToTop 链：让本线程短暂拥有前台线程的输入权限，
@@ -1352,13 +1603,37 @@ public static class RunningWindows
 		bool flag = num != 0 && num != currentThreadId && AttachThreadInput(currentThreadId, num, attachOrDetach: true);
 		BringWindowToTop(intPtr);
 		SetWindowPos(intPtr, IntPtr.Zero, 0, 0, 0, 0, 3u);
+		// Windows 前台锁定：SetForegroundWindow 通常只允许前台进程调用。
+		// 通用破解：模拟一次 Alt 键，系统会重置前台锁定状态。
+		keybd_event(18, 0, 0u, UIntPtr.Zero);
+		keybd_event(18, 0, 2u, UIntPtr.Zero);
 		bool flag2 = Native.SetForegroundWindow(intPtr);
+		int fgTries = 0;
+		while (!flag2 && fgTries < 3)
+		{
+			// 部分应用恢复/创建窗口后短时间拒绝前台请求，BringWindowToTop 后重试。
+			Thread.Sleep(50);
+			keybd_event(18, 0, 0u, UIntPtr.Zero);
+			keybd_event(18, 0, 2u, UIntPtr.Zero);
+			BringWindowToTop(intPtr);
+			flag2 = Native.SetForegroundWindow(intPtr);
+			fgTries++;
+		}
 		if (!flag2)
 		{
-			// 部分应用（微信）恢复后短时间拒绝前台请求，稍候重试一次。
-			Thread.Sleep(40);
-			flag2 = Native.SetForegroundWindow(intPtr);
+			// 最终兜底：任务栏同款强切（未文档化 API，强制前台+恢复）。
+			SwitchToThisWindow(intPtr, true);
+			flag2 = GetForegroundWindow() == intPtr;
 		}
+		if (!flag2)
+		{
+			// 前台锁无法突破（此环境前台进程为第三方桌面壳，SetForegroundWindow 全被拒）：
+			// 注入一次真实鼠标点击到目标窗口标题栏，Windows 视为真实输入 → 目标窗口
+			// 获得激活 + 键盘焦点（与用户亲手点击等价）。点击后恢复鼠标原位。
+			ClickToActivate(intPtr);
+			flag2 = GetForegroundWindow() == intPtr;
+		}
+		Store.Trace("ACTIVATE_R foreground " + (flag2 ? "ok" : "blocked") + " hwnd=" + intPtr.ToInt64() + " fg=" + GetForegroundWindow().ToInt64());
 		if (flag)
 		{
 			AttachThreadInput(currentThreadId, num, attachOrDetach: false);
@@ -1375,12 +1650,186 @@ public static class RunningWindows
 			FlashWindowEx(ref info);
 			Store.Trace("WINDOW_SWITCH foreground request blocked handle=" + intPtr);
 		}
-		return true;
+	}
+
+	/// <summary>
+	/// 终极激活兜底：前台锁无法突破时，注入一次真实鼠标点击到目标窗口标题栏
+	/// （Windows 将注入输入视为真实用户操作 → 目标窗口获得激活+键盘焦点）。
+	/// 点标题栏左 1/4 处避开右侧按钮，点击后恢复鼠标原位。
+	/// </summary>
+	private static void ClickToActivate(IntPtr handle)
+	{
+		try
+		{
+			if (!GetWindowRect(handle, out RECT rect))
+			{
+				return;
+			}
+			int w = rect.Right - rect.Left;
+			int h = rect.Bottom - rect.Top;
+			if (w < 60 || h < 40)
+			{
+				return;
+			}
+			int x = rect.Left + w / 4;
+			int y = rect.Top + Math.Min(18, h / 4);
+			int screenW = Math.Max(1, GetSystemMetrics(0));
+			int screenH = Math.Max(1, GetSystemMetrics(1));
+			uint sx = (uint)(x * 65535 / Math.Max(1, screenW - 1));
+			uint sy = (uint)(y * 65535 / Math.Max(1, screenH - 1));
+			GetCursorPos(out POINT orig);
+			Store.Trace("ACTIVATE_R clickToActivate at=" + x + "," + y + " orig=" + orig.X + "," + orig.Y);
+			SetCursorPos(x, y);
+			mouse_event(2u, sx, sy, 0u, UIntPtr.Zero);
+			Thread.Sleep(40);
+			mouse_event(4u, sx, sy, 0u, UIntPtr.Zero);
+			Thread.Sleep(150);
+			SetCursorPos(orig.X, orig.Y);
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
+	}
+
+	/// <summary>
+	/// 同进程主窗体兜底：目标窗口无法恢复时，枚举同 pid 的顶层窗口，
+	/// 排除 tooltip/IME/消息壳等工具类，取面积最大者（应用真正的 UI 主窗体）。
+	/// </summary>
+	private static IntPtr FindMainWindowOf(IntPtr handle)
+	{
+		IntPtr best = IntPtr.Zero;
+		long bestArea = 0L;
+		try
+		{
+			GetWindowThreadProcessId(handle, out uint targetPid);
+			if (targetPid == 0)
+			{
+				return IntPtr.Zero;
+			}
+			EnumWindows(delegate (IntPtr h, IntPtr value)
+			{
+				if (!IsWindow(h))
+				{
+					return true;
+				}
+				GetWindowThreadProcessId(h, out uint pid);
+				if (pid != targetPid)
+				{
+					return true;
+				}
+				StringBuilder cls = new StringBuilder(256);
+				GetClassName(h, cls, 256);
+				string c = cls.ToString();
+				if (c.IndexOf("tooltips_class", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("MSCTFIME", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("BroadcastEventWindow", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("GDI+", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("ADLXEventWindow", StringComparison.OrdinalIgnoreCase) >= 0 || (c.StartsWith("IME", StringComparison.OrdinalIgnoreCase) && c.Length <= 12) || c.IndexOf("MessageWindow", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("Message", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("HookWindow", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("TrayWindow", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("TrayIcon", StringComparison.OrdinalIgnoreCase) >= 0 || c.IndexOf("Notify", StringComparison.OrdinalIgnoreCase) >= 0)
+				{
+					return true;
+				}
+				int w;
+				int hh;
+				if (IsIconic(h))
+				{
+					// 最小化窗口的 GetWindowRect 是 -32000 处的小矩形，用还原尺寸判定面积。
+					WINDOWPLACEMENT placement = default(WINDOWPLACEMENT);
+					placement.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+					if (!GetWindowPlacement(h, ref placement))
+					{
+						return true;
+					}
+					w = placement.rcNormalPosition.Right - placement.rcNormalPosition.Left;
+					hh = placement.rcNormalPosition.Bottom - placement.rcNormalPosition.Top;
+				}
+				else
+				{
+					GetWindowRect(h, out RECT r);
+					w = r.Right - r.Left;
+					hh = r.Bottom - r.Top;
+				}
+				if (w < 80 || hh < 60)
+				{
+					return true;
+				}
+				long area = (long)w * (long)hh;
+				if (area > bestArea)
+				{
+					bestArea = area;
+					best = h;
+				}
+				return true;
+			}, IntPtr.Zero);
+		}
+		catch (Exception)
+		{
+		}
+		return best;
+	}
+
+	/// <summary>
+	/// 窗口"还原尺寸"面积：最小化窗口 GetWindowRect 是 -32000 处小矩形，
+	/// 用 GetWindowPlacement 的 rcNormalPosition 还原真实尺寸参与比较。
+	/// </summary>
+	private static long NormalArea(IntPtr h)
+	{
+		try
+		{
+			if (IsIconic(h))
+			{
+				WINDOWPLACEMENT p = default(WINDOWPLACEMENT);
+				p.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+				if (GetWindowPlacement(h, ref p))
+				{
+					return (long)(p.rcNormalPosition.Right - p.rcNormalPosition.Left) * (long)(p.rcNormalPosition.Bottom - p.rcNormalPosition.Top);
+				}
+			}
+			GetWindowRect(h, out RECT r);
+			return (long)(r.Right - r.Left) * (long)(r.Bottom - r.Top);
+		}
+		catch (Exception)
+		{
+			return 0L;
+		}
 	}
 
 	public static bool Activate(Entry entry)
 	{
 		Scan();
+		// 微信 4.0（Qt 多进程+托盘驻留）特例：主窗"大退"/隐藏到托盘后 Qt 应用层进入
+		// 锁定态，外部 ShowWindow 恢复链只能唤醒 Win32 壳（标题栏按钮可用、客户区
+		// 聊天列表点击无响应="半死窗口"，实测多轮修复均无效）。唯一可靠解锁路径=
+		// 微信单实例启动转发（等效托盘点击，微信自己走完整恢复流程）。
+		// 检测到隐藏主窗时放弃激活返回 false，让 Controller.Launch 走 Process.Start，
+		// 后续 delayed-activate 轮询等主窗重新出现再激活（IsMainWindowSize 已过滤过渡小窗）。
+		// 最小化（IsIconic）窗口不受影响：走正常恢复链即可。
+		string entryPath = entry == null ? "" : entry.Path;
+		string entryTarget = entry == null ? "" : (entry.LaunchTarget ?? "");
+		if (entryPath.IndexOf("Weixin", StringComparison.OrdinalIgnoreCase) >= 0 ||
+			entryPath.IndexOf("WeChat", StringComparison.OrdinalIgnoreCase) >= 0 ||
+			entryTarget.IndexOf("Weixin", StringComparison.OrdinalIgnoreCase) >= 0 ||
+			entryTarget.IndexOf("WeChat", StringComparison.OrdinalIgnoreCase) >= 0)
+		{
+			List<RunningWindow> wechatHidden = ForHidden(entry);
+			if (wechatHidden.Any((RunningWindow w) => !IsWindowVisible(w.Handle) || IsIconic(w.Handle)))
+			{
+				// 微信 4.0"大退"后主窗进入 Qt 应用层锁定态（"半死窗口"）：外部 ShowWindow
+				// 恢复链只能唤醒 Win32 壳（标题栏按钮可用、客户区聊天列表无响应），
+				// 实测多轮修复无效。唯一可靠的官方路径=微信全局热键 Ctrl+Alt+W
+				// （微信自己注册、自己处理=等效托盘点击），热键无效时回退单实例启动转发。
+				// 全程后台线程执行，UI 线程立即返回（点击图标零卡顿）。
+				Store.Trace("ACTIVATE wechat hidden-main → hotkey restore path");
+				string launchTarget = entryTarget;
+				System.Threading.Tasks.Task.Run(delegate
+				{
+					try
+					{
+						WechatHotkeyRestore(entry, launchTarget);
+					}
+					catch (Exception)
+					{
+					}
+				});
+				return true;
+			}
+		}
 		List<RunningWindow> list = For(entry);
 		if (list.Count == 0)
 		{
@@ -1392,12 +1841,72 @@ public static class RunningWindows
 				list = launchWins;
 				Store.Trace("ACTIVATE launch-window fallback count=" + list.Count);
 			}
+			// 快照只收可见且未被 DWM cloaked 的窗口：大退/最小化到托盘的应用
+			// （微信 4.0 关主窗=最小化到 -32000，cloaked 被快照排除）主窗不在快照里，
+			// 定向枚举该入口进程的隐藏/最小化主窗找回，点击图标恢复原窗口而不是重开。
+			if (list.Count == 0)
+			{
+				list = ForHidden(entry);
+				if (list.Count > 0)
+				{
+					Store.Trace("ACTIVATE hidden-window fallback count=" + list.Count);
+				}
+			}
 		}
 		if (list.Count > 0)
 		{
+			// 多进程应用（微信 4.0）：主窗大退/最小化到 -32000 后被 DWM cloaked 移出快照，
+			// 但同程序子进程的可见小窗（登录窗/过渡窗）仍在快照里会 match——
+			// 直接激活它用户看到的是"新的窗口"。这里把隐藏/最小化的主窗找回来优先恢复。
+			List<RunningWindow> hiddenMain = ForHidden(entry).Where((RunningWindow w) => !IsWindowVisible(w.Handle) || IsIconic(w.Handle)).ToList();
+			if (hiddenMain.Count > 0)
+			{
+				hiddenMain.Sort((RunningWindow a, RunningWindow b) => NormalArea(b.Handle).CompareTo(NormalArea(a.Handle)));
+				list = hiddenMain;
+				Store.Trace("ACTIVATE hidden-main prefer count=" + hiddenMain.Count + " first=" + hiddenMain[0].Handle.ToInt64());
+			}
 			// 只过滤不可见窗口（DDE 服务窗、隐藏的 Chrome_WidgetWin_0 等被误当候选时，
 			// 点击会去"激活"一个看不见的窗口）。最小化窗口必须保留：点击=恢复最大化。
 			list = list.Where((RunningWindow w) => IsWindowVisible(w.Handle)).ToList();
+			if (list.Count == 0)
+			{
+				// 应用"大退"到托盘（如微信：关闭主窗后进程驻留，主窗被隐藏）：
+				// 全部窗口不可见时，定向枚举该入口进程的隐藏主窗强制显示，
+				// 点击 Dock 图标即恢复窗口；否则会走到 Process.Start 重开，
+				// 单实例应用会弹出全新窗口而不是恢复原会话。
+				// 注意：For(entry) 的窗口快照只收可见窗口，隐藏窗必须用 ForHidden 定向枚举。
+				List<RunningWindow> hidden = ForHidden(entry);
+				if (hidden.Count == 0)
+				{
+					hidden = For(entry).Where((RunningWindow w) => !IsWindowVisible(w.Handle)).ToList();
+				}
+				if (hidden.Count > 0)
+				{
+					IntPtr main = FindMainWindowOf(hidden[0].Handle);
+					if (main != IntPtr.Zero)
+					{
+						if (!IsWindowVisible(main))
+						{
+							// 隐藏主窗：同步 ShowWindow 显示→真实最小化→恢复（见 ACTIVATE_R hiddenShown 注释）。
+							PostMessage(main, 0x0112u, (IntPtr)0xF120, IntPtr.Zero);
+							Thread.Sleep(80);
+							ShowWindow(main, 1);
+							Thread.Sleep(350);
+							ShowWindow(main, 6);
+							Thread.Sleep(550);
+							ShowWindow(main, 9);
+						}
+						Store.Trace("ACTIVATE hidden-main restore hwnd=" + main.ToInt64());
+						list.Add(new RunningWindow
+						{
+							Handle = main,
+							ProcessId = hidden[0].ProcessId,
+							Path = hidden[0].Path,
+							Title = hidden[0].Title
+						});
+					}
+				}
+			}
 		}
 		Store.Trace("ACTIVATE entry=" + (entry == null ? "null" : entry.Path) + " launchTarget=" + (entry == null ? "" : entry.LaunchTarget) + " windowTarget=" + (entry == null ? "" : entry.WindowTarget) + " matches=" + list.Count);
 		IntPtr foregroundWindow = EffectiveForeground();
@@ -1451,6 +1960,45 @@ public static class RunningWindows
 		SetTracked(new IntPtr(value2));
 		last.Put(entry.Path, value2);
 		return true;
+	}
+
+	// 微信 4.0 大退主窗恢复：模拟微信全局热键 Ctrl+Alt+W（微信自己注册、自己处理，
+	// 等效托盘点击——托盘点击是唯一能解锁 Qt 层"大退锁定"的官方路径，外部 ShowWindow
+	// 恢复链实测无效）。热键无效时回退 Process.Start 单实例转发。全程后台线程执行。
+	private static void WechatHotkeyRestore(Entry entry, string launchTarget)
+	{
+		// 1) 模拟 Ctrl+Alt+W
+		keybd_event(0x11, 0, 0u, UIntPtr.Zero);
+		keybd_event(0x12, 0, 0u, UIntPtr.Zero);
+		Thread.Sleep(30);
+		keybd_event(0x57, 0, 0u, UIntPtr.Zero);
+		Thread.Sleep(60);
+		keybd_event(0x57, 0, 2u, UIntPtr.Zero);
+		keybd_event(0x12, 0, 2u, UIntPtr.Zero);
+		keybd_event(0x11, 0, 2u, UIntPtr.Zero);
+		// 2) 轮询 2.5s 等主窗恢复（微信处理热键需要几百 ms）
+		for (int i = 0; i < 25; i++)
+		{
+			Thread.Sleep(100);
+			List<RunningWindow> wins = ForHidden(entry);
+			RunningWindow main = wins.FirstOrDefault((RunningWindow w) => IsWindowVisible(w.Handle) && !IsIconic(w.Handle));
+			if (main != null)
+			{
+				Store.Trace("ACTIVATE wechat hotkey restore ok hwnd=" + main.Handle.ToInt64());
+				RestoreAndForeground(main.Handle);
+				return;
+			}
+		}
+		// 3) 热键无效（用户在微信设置里关了热键）→ 回退单实例启动转发
+		Store.Trace("ACTIVATE wechat hotkey restore failed → single-instance launch fallback");
+		try
+		{
+			string target = string.IsNullOrEmpty(launchTarget) ? entry.Path : launchTarget;
+			System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true });
+		}
+		catch (Exception)
+		{
+		}
 	}
 
 	public static bool IsForeground(IntPtr handle)

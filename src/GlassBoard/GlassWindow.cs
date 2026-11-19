@@ -1054,42 +1054,40 @@ public class GlassWindow : Window
 		RefreshBackdropStyle();
 	}
 
-	protected void AnimateOpen()
+	protected virtual void AnimateOpen()
 	{
 		BeginAnimation(UIElement.OpacityProperty, null);
 		Root.RenderTransform = Transform.Identity;
-		Opacity = 1.0;
 		if (!MotionEnabled)
 		{
+			Opacity = 1.0;
 			return;
 		}
 		double level = Math.Max(0.15, MotionLevel);
-		Root.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
-		ScaleTransform scaleTransform = new ScaleTransform(1.0 - 0.035 * level, 1.0 - 0.035 * level);
-		TranslateTransform translateTransform = new TranslateTransform(0.0, 14.0 * level);
-		TransformGroup transformGroup = new TransformGroup();
-		transformGroup.Children.Add(scaleTransform);
-		transformGroup.Children.Add(translateTransform);
-		Root.RenderTransform = transformGroup;
-		TimeSpan duration = TimeSpan.FromMilliseconds(260.0);
+		// 统一入场：从左上方朝右下方滑入归位 + 淡入，单一方向、同时长同缓动，
+		// 与面板内容/切页动画同语言，避免多方向叠加造成的"闪"与不一致感
+		TranslateTransform translateTransform = new TranslateTransform(-30.0 * level, -20.0 * level);
+		Root.RenderTransform = translateTransform;
+		TimeSpan duration = TimeSpan.FromMilliseconds(240.0);
 		CubicEase easing = new CubicEase
 		{
 			EasingMode = EasingMode.EaseOut
 		};
+		// 动画起始值同步落位：先置 0 再挂动画，避免 Show 首帧以 Opacity=1 完整显示造成"闪一下"
+		Opacity = 0.0;
 		BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.0, 1.0, duration)
 		{
 			EasingFunction = easing
 		});
-		DoubleAnimation scaleAnimation = new DoubleAnimation(1.0, duration)
+		DoubleAnimation slideXAnimation = new DoubleAnimation(0.0, duration)
 		{
 			EasingFunction = easing
 		};
-		scaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, scaleAnimation);
-		scaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, scaleAnimation);
-		DoubleAnimation liftAnimation = new DoubleAnimation(0.0, duration)
+		DoubleAnimation slideYAnimation = new DoubleAnimation(0.0, duration)
 		{
 			EasingFunction = easing
 		};
-		translateTransform.BeginAnimation(TranslateTransform.YProperty, liftAnimation);
+		translateTransform.BeginAnimation(TranslateTransform.XProperty, slideXAnimation);
+		translateTransform.BeginAnimation(TranslateTransform.YProperty, slideYAnimation);
 	}
 }

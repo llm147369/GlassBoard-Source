@@ -146,20 +146,9 @@ public static class FeatureRules
 		{
 			throw new ArgumentException("不能移动到全部分类");
 		}
-		if (from == "全部")
-		{
-			return AddShared(p, paths, to);
-		}
-		HashSet<string> set = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
-		int num = 0;
-		foreach (Entry item in p.Apps.Where((Entry a) => set.Contains(a.Path) && InGroup(a, from)))
-		{
-			RemoveMembership(item, from);
-			AddMembership(item, to);
-			num++;
-		}
-		p.Groups = Groups(p.Groups, p.Apps);
-		return num;
+		// 统一为唯一归属移动：图标移入目标组后从原分组（含全部/未分组视图下的其它归属）消失，
+		// 不会出现同一个图标存在于两个分组的情况（用户明确要求单组归属）。
+		return Move(p, paths, to);
 	}
 
 	public static string GroupName(Entry entry)

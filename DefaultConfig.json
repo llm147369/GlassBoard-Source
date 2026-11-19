@@ -40,6 +40,7 @@
         "ItemOrder": [
             "glassboard://dock/apps",
             "glassboard://dock/computer",
+            "glassboard://dock/recycle",
             "glassboard://dock/power",
             "glassboard://dock/network",
             "glassboard://dock/settings",
@@ -62,7 +63,9 @@
         "Radius": 20,
         "RunningOrder": [],
         "SharperIcons": true,
+        "Consolidate": false,
         "ShowComputer": true,
+        "ShowRecycle": true,
         "ShowControlCenter": true,
         "ShowLabels": false,
         "ShowNetwork": false,

@@ -16,14 +16,15 @@ public static class ConfigImport
 		{
 			return;
 		}
+		// 覆盖安装会重新解包 DefaultConfig.json。若本机此前已经询问过（存在 .done 标记），
+		// 直接静默跳过——升级/重装绝不能再次覆盖用户自己的 dock 与面板配置。
+		// 注意：此检查必须在 try 之外，否则 finally 里的改名/清理会把新解包的文件误删。
+		if (File.Exists(defaultPath + ".done"))
+		{
+			return;
+		}
 		try
 		{
-			// 覆盖安装会重新解包 DefaultConfig.json。若本机此前已经询问过（存在 .done 标记），
-			// 直接静默跳过——升级/重装绝不能再次覆盖用户自己的 dock 与面板配置。
-			if (File.Exists(defaultPath + ".done"))
-			{
-				return;
-			}
 			MessageBoxResult choice = MessageBox.Show("检测到作者推荐的配置。\n\n是否使用推荐配置？\n· 会覆盖当前设置（已有配置将自动备份）\n· 不会导入任何图标文件\n· 应用列表仅保留你电脑上实际存在的程序", "GlassBoard-Source · 推荐配置", MessageBoxButton.YesNo, MessageBoxImage.Question);
 			if (choice == MessageBoxResult.Yes)
 			{

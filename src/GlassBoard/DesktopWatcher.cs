@@ -112,24 +112,38 @@ public static class DesktopWatcher
 		}
 		System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
 		{
-			try
+			// 大面板刚打开（开启动画进行中）：推迟 1600ms（>1.5s 窗口期），等动画播完再刷，避免抽帧
+			if (controller.Board.IsVisible && (DateTime.UtcNow - controller.Board.OpenStamp).TotalSeconds < 1.5)
 			{
-				string[] existing = paths.Where((string p) => File.Exists(p) || Directory.Exists(p)).ToArray();
-				string[] programs = existing.Where((string p) => ProgramExtensions.Contains(Path.GetExtension(p), StringComparer.OrdinalIgnoreCase)).ToArray();
-				string[] others = existing.Where((string p) => !ProgramExtensions.Contains(Path.GetExtension(p), StringComparer.OrdinalIgnoreCase)).ToArray();
-				if (programs.Length > 0)
+				System.Threading.Tasks.Task.Delay(1600).ContinueWith(delegate
 				{
-					controller.Add(programs, manual: false);
-				}
-				if (others.Length > 0)
-				{
-					controller.Add(others, manual: true);
-				}
+					System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() => FlushExec(paths)), DispatcherPriority.Background);
+				});
+				return;
 			}
-			catch (Exception ex)
-			{
-				Store.Log(ex);
-			}
+			FlushExec(paths);
 		}));
+	}
+
+	private static void FlushExec(string[] paths)
+	{
+		try
+		{
+			string[] existing = paths.Where((string p) => File.Exists(p) || Directory.Exists(p)).ToArray();
+			string[] programs = existing.Where((string p) => ProgramExtensions.Contains(Path.GetExtension(p), StringComparer.OrdinalIgnoreCase)).ToArray();
+			string[] others = existing.Where((string p) => !ProgramExtensions.Contains(Path.GetExtension(p), StringComparer.OrdinalIgnoreCase)).ToArray();
+			if (programs.Length > 0)
+			{
+				controller.Add(programs, manual: false);
+			}
+			if (others.Length > 0)
+			{
+				controller.Add(others, manual: true);
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+		}
 	}
 }

@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Forms;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace GlassBoard;
 
@@ -27,6 +28,7 @@ public static class IslandSettingsUi
 		// 预览控件每次 Render 都新建（旧的随页面重建丢弃），避免把同一控件重复挂到新控件树
 		IslandPreview collapsedPreview = null;
 		IslandPreview expandedPreview = null;
+		bool enableSuppress = false;
 
 		void RenderPreviews()
 		{
@@ -41,13 +43,25 @@ public static class IslandSettingsUi
 		}
 
 		// 改动即应用：写回 Prefs、保存、实时刷新灵动岛与预览
+		bool applyQueued = false;
 		void Apply()
 		{
 			draft.Normalize();
 			C.Prefs.Island = draft;
-			C.Save();
-			islandApply?.Invoke();
 			RenderPreviews();
+			// 写盘与灵动岛窗口重建/样式应用移到空闲优先级执行：复选框点击路径（MouseUp 处理器）
+			// 立即返回，避免点击瞬间 UI 冻结诱发重复点击（“闪一下然后消失”）。连续改动合并为一次。
+			if (applyQueued)
+			{
+				return;
+			}
+			applyQueued = true;
+			p.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+			{
+				applyQueued = false;
+				C.Save();
+				islandApply?.Invoke();
+			}));
 		}
 
 		void Rebuild()
@@ -70,9 +84,31 @@ public static class IslandSettingsUi
 			// —— ① 总开关与位置 ——
 			Border main = Polish.Section("灵动岛", "顶部居中的动态浮层：音乐、电量、通知与快捷控制。所有设置仅影响灵动岛。", light);
 			StackPanel mainPanel = (StackPanel)main.Child;
-			check(mainPanel, "启用灵动岛", d.Enabled, delegate (bool on)
+			System.Windows.Controls.CheckBox enableBox = null;
+			enableBox = check(mainPanel, "启用灵动岛", d.Enabled, delegate (bool on)
 			{
-				d.Enabled = on;
+				if (enableSuppress)
+				{
+					return;
+				}
+				if (on)
+				{
+					IslandEnableGuard.NoteEnable();
+					d.Enabled = true;
+				}
+				else if (IslandEnableGuard.RejectQuickDisable())
+				{
+					// 启用后 1.5 秒内的关闭请求视为误触：复选框回弹并保持启用
+					Store.Trace("ISLAND quick-disable ignored (settings)");
+					enableSuppress = true;
+					enableBox.IsChecked = true;
+					enableSuppress = false;
+					return;
+				}
+				else
+				{
+					d.Enabled = false;
+				}
 				Apply();
 			});
 			// 每次重建都创建新的预览控件，杜绝“已属于另一控件树”的重复挂载异常

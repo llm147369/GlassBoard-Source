@@ -10,6 +10,8 @@ public static class DockLayoutRules
 
 	public const string Computer = "glassboard://dock/computer";
 
+	public const string Recycle = "glassboard://dock/recycle";
+
 	public const string ControlCenter = "glassboard://dock/control";
 
 	public const string Power = "glassboard://dock/power";
@@ -25,7 +27,7 @@ public static class DockLayoutRules
 
 	public const string GameMode = "glassboard://dock/gamemode";
 
-	public static readonly string[] SystemKeys = new string[9] { "glassboard://dock/apps", "glassboard://dock/computer", "glassboard://dock/control", "glassboard://dock/power", "glassboard://dock/network", "glassboard://dock/settings", "glassboard://dock/running", "glassboard://dock/desktop-icons", "glassboard://dock/gamemode" };
+	public static readonly string[] SystemKeys = new string[10] { "glassboard://dock/apps", "glassboard://dock/computer", "glassboard://dock/recycle", "glassboard://dock/control", "glassboard://dock/power", "glassboard://dock/network", "glassboard://dock/settings", "glassboard://dock/running", "glassboard://dock/desktop-icons", "glassboard://dock/gamemode" };
 
 	public static bool SystemItem(string key)
 	{
@@ -46,6 +48,8 @@ public static class DockLayoutRules
 			return o.ShowControlCenter;
 		case "glassboard://dock/computer":
 			return !folded && o.ShowComputer;
+		case "glassboard://dock/recycle":
+			return !folded && o.ShowRecycle;
 		case "glassboard://dock/running":
 			return o.ShowRunningList;
 		case "glassboard://dock/settings":
@@ -66,7 +70,7 @@ public static class DockLayoutRules
 		if (list.Count == 0)
 		{
 			// 设置图标排在控制中心/运行列表之前，避免 Dock 溢出时被收进"更多"
-			return new string[2] { "glassboard://dock/apps", "glassboard://dock/computer" }.Concat(apps).Concat(new string[5] { "glassboard://dock/power", "glassboard://dock/network", "glassboard://dock/settings", "glassboard://dock/control", "glassboard://dock/running" }).ToList();
+			return new string[3] { "glassboard://dock/apps", "glassboard://dock/computer", "glassboard://dock/recycle" }.Concat(apps).Concat(new string[5] { "glassboard://dock/power", "glassboard://dock/network", "glassboard://dock/settings", "glassboard://dock/control", "glassboard://dock/running" }).ToList();
 		}
 		string[] systemKeys = SystemKeys;
 		foreach (string text in systemKeys)

@@ -216,6 +216,43 @@ public static class MediaThumb
 		return ((png == null) ? null : LoadFile(png, width));
 	}
 
+	// 大面板悬浮预览缓存：同一文件二次悬浮直接命中，避免重复解码几 MB 照片冻结 UI
+	private static readonly Dictionary<string, ImageSource> previewCache = new Dictionary<string, ImageSource>();
+
+	private static readonly object previewLock = new object();
+
+	// 预览图带缓存的加载入口：可安全地在后台线程调用（结果已 Freeze）
+	public static ImageSource LoadPreview(string path, int width)
+	{
+		string key = path.ToLowerInvariant() + "|" + width;
+		lock (previewLock)
+		{
+			if (previewCache.TryGetValue(key, out ImageSource hit) && hit != null)
+			{
+				return hit;
+			}
+		}
+		ImageSource src = (IsSvg(path) ? SvgPreview(path, width) : LoadFile(path, width));
+		if (src == null)
+		{
+			return null;
+		}
+		lock (previewLock)
+		{
+			if (previewCache.Count > 64)
+			{
+				previewCache.Clear();
+			}
+			previewCache[key] = src;
+		}
+		return src;
+	}
+
+	private static bool IsSvg(string path)
+	{
+		return string.Equals(Path.GetExtension(path), ".svg", StringComparison.OrdinalIgnoreCase);
+	}
+
 	// 磁贴图标：图片/视频直接显示内容缩略图，其余文件沿用原有图标逻辑；
 	// 全部经统一裁切缩放（无底板），视觉大小一致。
 	public static ImageSource TileIcon(Entry entry, bool showShortcutOverlays)

@@ -83,4 +83,36 @@ public static class DesktopWindowPolicy
 			return SystemParameters.WorkArea;
 		}
 	}
+
+	// 按给定 DIP 坐标定位所在屏幕并返回其工作区：用于恢复已保存的窗口位置，
+	// 多显示器下不受启动瞬间鼠标所在屏幕影响（WorkArea 的 pointer 模式会按鼠标定位屏幕）。
+	public static Rect WorkAreaAt(Window window, double dipX, double dipY, bool fullScreen = false)
+	{
+		try
+		{
+			PresentationSource presentationSource = PresentationSource.FromVisual(window);
+			if (presentationSource == null && window.IsInitialized)
+			{
+				new WindowInteropHelper(window).Handle.ToString();
+				presentationSource = PresentationSource.FromVisual(window);
+			}
+			Matrix matrix = ((presentationSource != null && presentationSource.CompositionTarget != null) ? presentationSource.CompositionTarget.TransformToDevice : Matrix.Identity);
+			System.Windows.Point point = matrix.Transform(new System.Windows.Point(dipX, dipY));
+			Screen screen = Screen.FromPoint(new System.Drawing.Point((int)point.X, (int)point.Y));
+			Rectangle rectangle = (fullScreen ? screen.Bounds : screen.WorkingArea);
+			Matrix matrix2 = ((presentationSource != null && presentationSource.CompositionTarget != null) ? presentationSource.CompositionTarget.TransformFromDevice : Matrix.Identity);
+			if (presentationSource == null)
+			{
+				using Graphics graphics = Graphics.FromHwnd(IntPtr.Zero);
+				matrix2 = new Matrix(96.0 / (double)graphics.DpiX, 0.0, 0.0, 96.0 / (double)graphics.DpiY, 0.0, 0.0);
+			}
+			System.Windows.Point point2 = matrix2.Transform(new System.Windows.Point(rectangle.Left, rectangle.Top));
+			System.Windows.Point point3 = matrix2.Transform(new System.Windows.Point(rectangle.Right, rectangle.Bottom));
+			return new Rect(point2, point3);
+		}
+		catch
+		{
+			return SystemParameters.WorkArea;
+		}
+	}
 }

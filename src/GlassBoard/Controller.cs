@@ -24,6 +24,24 @@ using Microsoft.Win32;
 
 namespace GlassBoard;
 
+// 灵动岛启用守卫：启用后 1.5 秒内到达的“关闭”请求视为误触（点击反馈滞后/动画期间的重复点击），
+// 直接忽略并保持启用。修复“点启用 → 闪一下 → 又被点掉 → 岛消失”的故障循环。
+internal static class IslandEnableGuard
+{
+	private const int QuickDisableMs = 1500;
+	private static DateTime lastEnableUtc = DateTime.MinValue;
+
+	public static void NoteEnable()
+	{
+		lastEnableUtc = DateTime.UtcNow;
+	}
+
+	public static bool RejectQuickDisable()
+	{
+		return (DateTime.UtcNow - lastEnableUtc).TotalMilliseconds < QuickDisableMs;
+	}
+}
+
 public class Controller
 {
 	private sealed class ColorOwner : System.Windows.Forms.IWin32Window
@@ -510,8 +528,6 @@ public class Controller
 					list.Add(a);
 				}
 			}
-			list.Add(RecycleBin.Create());
-			list.Add(SystemPlaces.CreateComputer());
 			if (list.Count == 0)
 			{
 				return;
@@ -783,7 +799,18 @@ public class Controller
 			Prefs.Island = Prefs.Island ?? new IslandOptions();
 			Prefs.Island.Normalize();
 			// 真开关：关 → 开、开 → 关。旧实现无条件强制开启，导致“关了没反应”。
-			Prefs.Island.Enabled = !Prefs.Island.Enabled;
+			bool nextEnabled = !Prefs.Island.Enabled;
+			if (!nextEnabled && IslandEnableGuard.RejectQuickDisable())
+			{
+				// 启用后 1.5 秒内的关闭请求视为误触，保持启用
+				Store.Trace("ISLAND quick-disable ignored (tray)");
+				return;
+			}
+			Prefs.Island.Enabled = nextEnabled;
+			if (nextEnabled)
+			{
+				IslandEnableGuard.NoteEnable();
+			}
 			Save();
 			if (Prefs.Island.Enabled && islandHub.Window == null)
 			{
@@ -991,6 +1018,47 @@ public class Controller
 					{
 					}
 				}
+				// 新进程窗口"显示但不激活"问题（微信 4.0 等：启动过渡窗不抢前台，
+				// 用户点击弹窗无反应，必须去托盘再点一次才会激活）：
+				// 后台轮询等"主窗尺寸"窗口出现，出现后延迟稳定确认，再走统一恢复/前台链补一次激活。
+				// 过滤启动过渡窗（微信 4.0 的 176x199 空白过渡窗等）：尺寸不足 400x300 的不激活。
+				Entry launched = entry;
+				Task.Run(delegate
+				{
+					try
+					{
+						for (int wait = 0; wait < 32; wait++)
+						{
+							Thread.Sleep(250);
+							List<RunningWindow> wins = RunningWindows.For(launched);
+							if (wins.Count == 0)
+							{
+								continue;
+							}
+							RunningWindow main = wins.FirstOrDefault(delegate (RunningWindow w)
+							{
+								return RunningWindows.IsWindowVisible(w.Handle) && !RunningWindows.IsIconic(w.Handle) && RunningWindows.IsMainWindowSize(w.Handle);
+							});
+							if (main == null)
+							{
+								continue;
+							}
+							// 稳定确认：过渡窗常闪现后即隐藏，等 600ms 再验证一次仍在可见状态。
+							IntPtr mainHandle = main.Handle;
+							Thread.Sleep(600);
+							if (!RunningWindows.IsWindowVisible(mainHandle) || RunningWindows.IsIconic(mainHandle))
+							{
+								continue;
+							}
+							RunningWindows.ActivateHandle(mainHandle);
+							Store.Trace("LAUNCH delayed-activate path=" + launched.Path + " hwnd=" + mainHandle.ToInt64());
+							return;
+						}
+					}
+					catch (Exception)
+					{
+					}
+				});
 			}
 			Board.CollapseSmooth();
 		}
@@ -1025,7 +1093,7 @@ public class Controller
 
 	public void Add(IEnumerable<string> paths, bool manual = true, string targetGroup = null)
 	{
-		// 手动拖入面板时，跟随当前分组视图；已有入口直接补充分组成员
+		// 手动拖入面板时，跟随当前分组视图；已有入口直接移到该分组（唯一归属）
 		if (manual && targetGroup == null && Board.IsVisible)
 		{
 			targetGroup = Board.CurrentGroup;
@@ -1048,7 +1116,7 @@ public class Controller
 			{
 				if (manual && targetGroup != null && targetGroup != "全部")
 				{
-					num += FeatureRules.AddShared(Prefs, new string[1] { entry.Path }, targetGroup);
+					num += FeatureRules.Move(Prefs, new string[1] { entry.Path }, targetGroup);
 				}
 				continue;
 			}
@@ -1075,7 +1143,17 @@ public class Controller
 		if (num > 0)
 		{
 			EndBoardEdit(before, "添加入口");
-			Refresh();
+			if (manual)
+			{
+				Refresh();
+			}
+			else
+			{
+				// 桌面自动导入：轻量刷新——新入口未固定到 Dock，跳过 Dock.Refresh/RefreshWidgets，
+				// 只同步分组并重建面板磁贴，避免与面板开启动画抢 UI 线程造成抽帧
+				Board.SyncGroups();
+				Board.Render();
+			}
 		}
 	}
 
@@ -1084,13 +1162,13 @@ public class Controller
 	{
 		BoardEditState before = BeginBoardEdit();
 		int num = FeatureRules.Transfer(Prefs, paths, from, to);
-		EndBoardEdit(before, (from == "全部") ? "添加到分组" : "移动分组");
+		EndBoardEdit(before, "移动分组");
 		Board.FinishSelection();
 		Refresh();
 		Board.SetStatus("已处理 " + num + " 个入口 · 可按 Ctrl+Z 撤销");
 	}
 
-	// 添加已有入口到当前分组（同一软件可出现在多个分组）
+	// 移动已有入口到当前分组（图标唯一归属：移入后从原分组消失）
 	public void AddExistingToGroup(string group)
 	{
 		if (group == "全部")
@@ -1101,7 +1179,7 @@ public class Controller
 		Board.ModalBusy = true;
 		try
 		{
-			Window w = FeatureUi.Dialog("添加已有图标到「" + group + "」", Board, 680.0, 620.0);
+			Window w = FeatureUi.Dialog("移动已有图标到「" + group + "」", Board, 680.0, 620.0);
 			DockPanel dockPanel = new DockPanel
 			{
 				Margin = new Thickness(22.0)
@@ -1112,13 +1190,13 @@ public class Controller
 			dockPanel.Children.Add(stackPanel);
 			stackPanel.Children.Add(new TextBlock
 			{
-				Text = "同一软件可以出现在多个分组",
+				Text = "图标只属于一个分组",
 				FontSize = 18.0,
 				Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
 			});
 			stackPanel.Children.Add(new TextBlock
 			{
-				Text = ((group == "未分组") ? "选择后会移回未分组。" : "添加后保留原有分组；全部视图只显示一次。"),
+				Text = ((group == "未分组") ? "选择后会移回未分组。" : "移入后图标只属于本分组，原分组中不再出现。"),
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				Margin = new Thickness(0.0, 0.0, 0.0, 10.0)
 			});
@@ -1180,14 +1258,14 @@ public class Controller
 				selected.Clear();
 				fill();
 			}));
-			wrapPanel.Children.Add(FeatureUi.Button("添加到本组", () =>
+			wrapPanel.Children.Add(FeatureUi.Button("移入本组", () =>
 			{
 				BoardEditState before = BeginBoardEdit();
-				int num = FeatureRules.AddShared(Prefs, selected, group);
-				EndBoardEdit(before, "添加已有图标");
+				int num = FeatureRules.Move(Prefs, selected, group);
+				EndBoardEdit(before, "移动已有图标");
 				Refresh();
 				Board.ClearSearch();
-				Board.SetStatus("已添加 " + num + " 个已有图标到「" + group + "」");
+				Board.SetStatus("已移动 " + num + " 个已有图标到「" + group + "」");
 				w.Close();
 			}));
 			wrapPanel.Children.Add(FeatureUi.Button("关闭", () =>
@@ -1344,32 +1422,34 @@ public class Controller
 		RemoveMany(new string[1] { a.Path });
 	}
 
-	// 开机时把回收站入口补进面板；用户手动移除（移除记录仍在）后不再补回
+	// 老用户迁移：旧版本把回收站/此电脑作为面板入口补进 Apps；新版本这两项不再进面板
+	// （此电脑归 Dock 开关管理，回收站归 Dock 独立开关管理），启动时从 Apps 移除一次。
 	private void EnsureSystemEntries()
 	{
 		try
 		{
-			EnsureOne(RecycleBin.Create(), RecycleBin.Clsid);
-			EnsureOne(SystemPlaces.CreateComputer(), SystemPlaces.ComputerClsid);
+			bool changed = false;
+			for (int i = Prefs.Apps.Count - 1; i >= 0; i--)
+			{
+				Entry a = Prefs.Apps[i];
+				if (a == null)
+				{
+					continue;
+				}
+				if (string.Equals(a.Path, RecycleBin.Clsid, StringComparison.OrdinalIgnoreCase) || string.Equals(a.Path, SystemPlaces.ComputerClsid, StringComparison.OrdinalIgnoreCase))
+				{
+					Prefs.Apps.RemoveAt(i);
+					changed = true;
+				}
+			}
+			if (changed && persistConfiguration)
+			{
+				Save();
+			}
 		}
 		catch (Exception ex)
 		{
 			Store.Log(ex);
-		}
-	}
-
-	// 系统入口（回收站/此电脑）默认加入面板；用户手动移除过的不再自动加回
-	private void EnsureOne(Entry entry, string key)
-	{
-		bool exists = Prefs.Apps.Any((Entry a) => string.Equals(a.Path, key, StringComparison.OrdinalIgnoreCase));
-		bool removed = Prefs.Removed.Any((string r) => string.Equals(r, key, StringComparison.OrdinalIgnoreCase));
-		if (!exists && !removed)
-		{
-			Prefs.Apps.Add(entry);
-			if (persistConfiguration)
-			{
-				Save();
-			}
 		}
 	}
 
@@ -1418,6 +1498,36 @@ public class Controller
 	public void UndoRemoval()
 	{
 		UndoBoard();
+	}
+
+	// 拖入口（面板磁贴等）到 Dock 回收站：直接从面板与 Dock 移除入口（可撤销），不弹确认框。
+	// 与 RemoveMany 的区别：拖拽到回收站本身已是明确删除意图，走静默+历史记录路径。
+	public int RemoveEntryPathsForRecycle(IEnumerable<string> paths)
+	{
+		HashSet<string> targets = new HashSet<string>(paths ?? new string[0], StringComparer.OrdinalIgnoreCase);
+		targets.RemoveWhere((string path) => !Prefs.Apps.Any((Entry a) => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase)));
+		int num = Prefs.Apps.Count((Entry a) => targets.Contains(a.Path));
+		if (num == 0)
+		{
+			return 0;
+		}
+		try
+		{
+			foreach (Entry item in Prefs.Apps.Where((Entry a) => targets.Contains(a.Path)))
+			{
+				LaunchInfoService.Enrich(item);
+			}
+			BoardEditState before = BeginBoardEdit();
+			EntryRules.Remove(Prefs, targets);
+			EndBoardEdit(before, "拖到回收站移除入口");
+			Refresh();
+		}
+		catch (Exception ex)
+		{
+			Store.Log(ex);
+			return 0;
+		}
+		return num;
 	}
 
 	public void Pin(Entry a)
@@ -2846,16 +2956,18 @@ public class Controller
 				live();
 			});
 			System.Windows.Controls.CheckBox cbComputer = null;
+			System.Windows.Controls.CheckBox cbRecycle = null;
 			System.Windows.Controls.CheckBox cbSettings = null;
 			System.Windows.Controls.CheckBox cbPower = null;
 			System.Windows.Controls.CheckBox cbNetwork = null;
-			func3(stackPanel3, "收纳整合系统入口（此电脑 / 设置 / 电源 / Wi-Fi·蓝牙收进应用面板与控制中心）", draft.Consolidate, (bool consolidate) =>
+			func3(stackPanel3, "收纳整合系统入口（此电脑 / 回收站 / 设置 / 电源 / Wi-Fi·蓝牙收进应用面板与控制中心）", draft.Consolidate, (bool consolidate) =>
 			{
 				draft.Consolidate = consolidate;
 				if (consolidate)
 				{
 					// 收纳开启时自动收起各独立入口（运行列表与控制中心保留）
 					if (cbComputer != null && cbComputer.IsChecked == true) cbComputer.IsChecked = false;
+					if (cbRecycle != null && cbRecycle.IsChecked == true) cbRecycle.IsChecked = false;
 					if (cbSettings != null && cbSettings.IsChecked == true) cbSettings.IsChecked = false;
 					if (cbPower != null && cbPower.IsChecked == true) cbPower.IsChecked = false;
 					if (cbNetwork != null && cbNetwork.IsChecked == true) cbNetwork.IsChecked = false;
@@ -2864,7 +2976,7 @@ public class Controller
 			});
 			TextBlock consolidateTip = new TextBlock
 			{
-				Text = "开启后自动关闭下方「此电脑 / 设置 / 电源 / Wi-Fi·蓝牙」入口（运行列表、控制中心与快捷功能不受影响）；关闭收纳后各开关可独立开启。",
+				Text = "开启后自动关闭下方「此电脑 / 回收站 / 设置 / 电源 / Wi-Fi·蓝牙」入口（运行列表、控制中心与快捷功能不受影响）；关闭收纳后各开关可独立开启。",
 				TextWrapping = TextWrapping.Wrap,
 				Foreground = System.Windows.Media.Brushes.LightGray,
 				FontSize = 11.0,
@@ -2884,6 +2996,11 @@ public class Controller
 			cbComputer = func3(stackPanel3, "显示此电脑", draft.ShowComputer, (bool showComputer) =>
 			{
 				draft.ShowComputer = showComputer;
+				live();
+			});
+			cbRecycle = func3(stackPanel3, "显示回收站（支持把文件拖到图标上直接移入回收站）", draft.ShowRecycle, (bool showRecycle) =>
+			{
+				draft.ShowRecycle = showRecycle;
 				live();
 			});
 			cbSettings = func3(stackPanel3, "显示设置图标", draft.ShowSettings, (bool showSettings) =>
@@ -2984,6 +3101,7 @@ public class Controller
 				Prefs.DockGap = dockGap;
 				Prefs.Placement.DockTop = null;
 				Dock.ResetSettledTop();
+				Dock.ApplyDockGap();
 				live();
 			});
 			func2(stackPanel3, "固定应用显示数量", 3.0, 30.0, draft.MaxPinned, 1.0, " 个", (double num3) =>
@@ -5199,7 +5317,6 @@ public class Controller
 		}
 		EndBoardEdit(before, "调整图标顺序");
 		Refresh();
-		Board.Render(animate: true);
 		return true;
 	}
 
@@ -5254,7 +5371,6 @@ public class Controller
 		}
 		EndBoardEdit(before, "调整图标顺序");
 		Refresh();
-		Board.Render(animate: true);
 		return true;
 	}
 
@@ -6077,6 +6193,10 @@ public class Controller
 		if (key == DockLayoutRules.Computer)
 		{
 			Prefs.Dock.ShowComputer = false;
+		}
+		else if (key == DockLayoutRules.Recycle)
+		{
+			Prefs.Dock.ShowRecycle = false;
 		}
 		else if (key == DockLayoutRules.ControlCenter)
 		{

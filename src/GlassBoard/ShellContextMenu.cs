@@ -124,6 +124,9 @@ public static class ShellContextMenu
 	private static extern bool DestroyMenu(IntPtr hMenu);
 
 	[DllImport("user32.dll")]
+	private static extern bool RemoveMenu(IntPtr hMenu, uint uPosition, uint uFlags);
+
+	[DllImport("user32.dll")]
 	private static extern int TrackPopupMenuEx(IntPtr hmenu, uint fuFlags, int x, int y, IntPtr hwnd, IntPtr lptpm);
 
 	[DllImport("user32.dll")]
@@ -157,6 +160,7 @@ public static class ShellContextMenu
 	private const uint MF_GRAYED = 0x0001;
 	private const uint MF_CHECKED = 0x0008;
 	private const uint MF_POPUP = 0x0010;
+	private const uint MF_BYPOSITION = 0x0400;
 
 	/// <summary>原生菜单追踪期间为 true；大面板/控制中心据此抑制失焦自动隐藏。</summary>
 	public static volatile bool Active;
@@ -441,11 +445,22 @@ public static class ShellContextMenu
 		{
 			return IntPtr.Zero;
 		}
+		bool lastWasSeparator = true; // 视为"开头已有分隔符"：跳过首部分隔符
 		foreach (ShellMenuEntry entry in model)
 		{
 			if (entry.Separator)
 			{
-				AppendMenu(hmenu, MF_SEPARATOR, IntPtr.Zero, (string)null);
+				if (!lastWasSeparator)
+				{
+					AppendMenu(hmenu, MF_SEPARATOR, IntPtr.Zero, (string)null);
+					lastWasSeparator = true;
+				}
+				continue;
+			}
+			// 空文本且无子菜单的项：多数是 owner-draw / 图标化扩展占位（文本提取失败），
+			// 重建后会渲染成一条横线或空白行，而且点了也没动作——直接跳过。
+			if (string.IsNullOrEmpty(entry.Text) && (entry.Sub == null || entry.Sub.Count == 0))
+			{
 				continue;
 			}
 			uint flags = 0;
@@ -469,6 +484,16 @@ public static class ShellContextMenu
 			else
 			{
 				AppendMenu(hmenu, flags, new IntPtr((int)entry.Id), entry.Text ?? "");
+			}
+			lastWasSeparator = false;
+		}
+		// 去尾部悬空分隔符（菜单末尾一条横线很难看）
+		if (lastWasSeparator)
+		{
+			int count = GetMenuItemCount(hmenu);
+			if (count > 0)
+			{
+				RemoveMenu(hmenu, (uint)(count - 1), MF_BYPOSITION);
 			}
 		}
 		return hmenu;
@@ -577,8 +602,9 @@ public static class ShellContextMenu
 	/// <summary>
 	/// 在鼠标当前位置弹出 path 的原生右键菜单：模型在宿主线程异步构建（挂死防护），
 	/// 菜单追踪在 owner 的 UI 线程执行（原生菜单的硬性要求）；构建失败或菜单为空时调用 fallback。
+	/// invoked：用户实际点击了某个菜单命令后回调（UI 线程，面板/托盘等可用它收起自己）。
 	/// </summary>
-	public static void ShowAtCursor(string path, Window owner, Action fallback = null)
+	public static void ShowAtCursor(string path, Window owner, Action fallback = null, Action invoked = null)
 	{
 		if (!CanShell(path))
 		{
@@ -601,6 +627,11 @@ public static class ShellContextMenu
 					if (cmd == 0 && model.Count == 0)
 					{
 						fallback?.Invoke();
+					}
+					else if (cmd != 0)
+					{
+						// 点击了系统菜单命令：通知调用方（面板收起），InvokeAsync 在宿主线程异步执行
+						invoked?.Invoke();
 					}
 				}
 				catch (Exception ex)
