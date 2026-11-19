@@ -24,6 +24,9 @@ public class WidgetOptions
 	public bool Visualizer;
 
 	[DataMember]
+	public bool Battery;
+
+	[DataMember]
 	public int ClockPanel;
 
 	[DataMember]
@@ -37,6 +40,9 @@ public class WidgetOptions
 
 	[DataMember]
 	public int VisualizerPanel;
+
+	[DataMember]
+	public int BatteryPanel;
 
 	// 律动样式：0 极光镜像柱 1 频谱曲线 2 双螺旋 3 粒子喷泉 4 音轨条带 5 径向频谱
 	[DataMember]
@@ -163,6 +169,7 @@ public class WidgetOptions
 		WeatherPanel = Panel(WeatherPanel);
 		MusicPanel = Panel(MusicPanel);
 		NotesPanel = Panel(NotesPanel);
+		BatteryPanel = Panel(BatteryPanel);
 		VisualizerStyle = Math.Max(0, Math.Min(5, VisualizerStyle));
 		VisualizerColor = Math.Max(0, Math.Min(9, VisualizerColor));
 		VisualizerAnchor = Math.Max(0, Math.Min(3, VisualizerAnchor));
@@ -220,11 +227,12 @@ public class WidgetOptions
 		WeatherPanel = 1;
 		MusicPanel = 2;
 		NotesPanel = 3;
+		BatteryPanel = 0;
 	}
 
 	public void Fuse()
 	{
-		ClockPanel = (WeatherPanel = (MusicPanel = (NotesPanel = 0)));
+		ClockPanel = (WeatherPanel = (MusicPanel = (NotesPanel = (BatteryPanel = 0))));
 	}
 
 	public void NormalizeStyles()

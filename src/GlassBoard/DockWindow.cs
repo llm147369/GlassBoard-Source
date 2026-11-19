@@ -257,6 +257,8 @@ public class DockWindow : GlassWindow
 
 	private string taskSignature = "";
 
+	private string folderSig = "";
+
 	private bool externalDockDrag;
 
 	private bool boardPinDragging;
@@ -441,6 +443,22 @@ public class DockWindow : GlassWindow
 				RefreshTaskSnapshot();
 				UpdateRunning();
 				C.Board?.UpdateRunning();
+			}
+			// 文件夹聚合按钮：打开≥1 个资源管理器窗口时出现在 Dock 尾部，全关即消失。
+			// 出现/消失是结构变化：立即重建（用户盯着 Dock 等按钮出现时，鼠标悬停防护会永久卡住初始出现）；
+			// 数量增减时保留空闲防护，避免打断拖拽/悬停。
+			List<IntPtr> folderHandles = RunningWindows.ExplorerFolders().Select((RunningWindow w) => w.Handle).OrderBy((IntPtr h) => h.ToInt64()).ToList();
+			string folderSigNow = string.Join(",", folderHandles);
+			if (!string.Equals(folderSigNow, folderSig, StringComparison.Ordinal))
+			{
+				Store.Trace("FOLDER dock tick count=" + folderHandles.Count + " prev=" + folderSig.Length);
+			}
+			bool folderEdgeChange = string.IsNullOrEmpty(folderSig) != string.IsNullOrEmpty(folderSigNow);
+			if (!string.Equals(folderSigNow, folderSig, StringComparison.Ordinal) && (folderEdgeChange || (!DockInputBusy && !dragging && !externalDockDrag && (C.Board == null || !C.Board.ModalBusy) && (ContextMenu == null || !ContextMenu.IsOpen) && (previewPopup == null || !previewPopup.IsOpen) && !Items.Children.OfType<System.Windows.Controls.Button>().Any((System.Windows.Controls.Button b) => b.IsMouseOver))))
+			{
+				Store.Trace("FOLDER dock tick apply count=" + folderHandles.Count + " prev=" + folderSig.Length + " edge=" + folderEdgeChange);
+				folderSig = folderSigNow;
+				Refresh(capture: false);
 			}
 		};
 		runningTimer.Start();
@@ -1102,6 +1120,8 @@ public class DockWindow : GlassWindow
 		{
 			AddRunningButton();
 		}
+		// 文件夹聚合按钮不依赖"运行列表"开关：只要开着资源管理器窗口就显示
+		AddFolderButton();
 		ArrangeDockItems();
 		double num4 = dock.IconSize + 16.0 + (double)(dock.ShowLabels ? 18 : 0);
 		// 倒影需要窗口高度预算（与按钮高度同步），否则倒影下缘被窗口硬切（用户看到"直接裁剪"而非渐隐）。
@@ -3496,6 +3516,53 @@ public class DockWindow : GlassWindow
 		Items.Children.Add(button);
 	}
 
+	// 文件夹聚合：打开≥1 个资源管理器窗口时自动出现在 Dock 尾部，全关即消失。
+	// 单击=在打开的文件夹窗口间轮换（任务栏语义），悬停=窗口实时预览（TaskGroup 管线）。
+	private void AddFolderButton()
+	{
+		List<RunningWindow> folders = RunningWindows.ExplorerFolders();
+		if (folders.Count == 0)
+		{
+			return;
+		}
+		Store.Trace("FOLDER button add count=" + folders.Count);
+		TaskGroup group = new TaskGroup
+		{
+			Key = "folder:",
+			Name = "文件夹",
+			Windows = folders
+		};
+		System.Windows.Controls.Button button = DockButton(null, CustomIcons.Folder(), delegate
+		{
+			ActivateFolder(folders);
+		}, (folders.Count > 1) ? ("文件夹 · " + folders.Count + " 个窗口") : "文件夹");
+		button.SetValue(LayoutKey, "glassboard://dock/folder");
+		button.Tag = group;
+		AttachPreview(button, group);
+		Items.Children.Add(button);
+	}
+
+	private void ActivateFolder(List<RunningWindow> folders)
+	{
+		if (folders.Count == 0)
+		{
+			return;
+		}
+		IntPtr fg = RunningWindows.EffectiveForeground();
+		int idx = -1;
+		for (int i = 0; i < folders.Count; i++)
+		{
+			if (folders[i].Handle == fg)
+			{
+				idx = i;
+				break;
+			}
+		}
+		// 前台已是文件夹窗口 → 轮换到下一个；否则激活最近的一个（枚举顺序=Z 序反序）。
+		RunningWindow target = folders[(idx >= 0) ? ((idx + 1) % folders.Count) : 0];
+		RunningWindows.ActivateHandle(target.Handle);
+	}
+
 	// 正在运行的程序：单一入口按钮，点开/右键都弹出运行列表；
 	// 每项点击=打开主面板，右键项=子菜单（打开主面板 / 退出程序）。
 	private void AddRunningButton()
@@ -3916,8 +3983,11 @@ public class DockWindow : GlassWindow
 			}
 		}
 		List<System.Windows.Controls.Button> collection = list.Where((System.Windows.Controls.Button b) => ItemKey(b) == null).ToList();
+		// 文件夹聚合按钮固定排在 Dock 最右（用户语义：整合打开的文件夹窗口，跟随运行列表按钮之后）
+		List<System.Windows.Controls.Button> tail = list.Where((System.Windows.Controls.Button b) => string.Equals(ItemKey(b), "glassboard://dock/folder", StringComparison.OrdinalIgnoreCase)).ToList();
 		int num = list2.FindLastIndex((System.Windows.Controls.Button b) => !DockLayoutRules.SystemItem(ItemKey(b)));
 		list2.InsertRange((num < 0) ? Math.Min(2, list2.Count) : (num + 1), collection);
+		list2.AddRange(tail);
 		Items.Children.Clear();
 		foreach (System.Windows.Controls.Button item in list2)
 		{
@@ -4005,12 +4075,17 @@ public class DockWindow : GlassWindow
 				ShowEntryPreview(button, entry);
 				return;
 			}
+			if (owner is TaskGroup group)
+			{
+				ShowGroupPreview(button, group);
+				return;
+			}
 			Store.Trace("PREVIEW mouseenter");
 			PreviewHover(button, owner);
 		};
 		button.MouseLeave += (object s, System.Windows.Input.MouseEventArgs e) =>
 		{
-			if (owner is Entry)
+			if (owner is Entry || owner is TaskGroup)
 			{
 				EntryPreviewLeave();
 				return;
@@ -4113,6 +4188,75 @@ public class DockWindow : GlassWindow
 		{
 			return;
 		}
+		BuildPreviewWindow(button, entry.Name, wins, entry);
+	}
+
+	// 分组按钮预览（文件夹聚合/运行列表 TaskGroup）：与普通图标同一条独立 Window 管线。
+	private void ShowGroupPreview(System.Windows.Controls.Button button, TaskGroup group)
+	{
+		if (DockInputBusy || dockIconDragging || externalDockDrag)
+		{
+			Store.Trace("PREVIEW group enter blocked busy=" + DockInputBusy + " drag=" + dockIconDragging + " ext=" + externalDockDrag);
+			return;
+		}
+		if (previewWin != null && previewWin.IsVisible && previewWinAnchor == button)
+		{
+			if (previewWinCloseTimer != null)
+			{
+				previewWinCloseTimer.Stop();
+			}
+			return;
+		}
+		CloseEntryPreview();
+		previewWinAnchor = button;
+		System.Windows.Threading.DispatcherTimer t = new System.Windows.Threading.DispatcherTimer
+		{
+			Interval = TimeSpan.FromMilliseconds(380.0)
+		};
+		t.Tick += (object s, EventArgs e) =>
+		{
+			t.Stop();
+			System.Windows.Controls.Button b = previewWinAnchor;
+			if (b != null && b.IsMouseOver)
+			{
+				OpenGroupPreview(b, group);
+			}
+		};
+		previewWinTimer = t;
+		t.Start();
+	}
+
+	private void OpenGroupPreview(System.Windows.Controls.Button button, TaskGroup group)
+	{
+		CloseEntryPreview();
+		List<RunningWindow> wins;
+		try
+		{
+			if (group.Key == "folder:")
+			{
+				// 文件夹集合用实时扫描结果（悬停时窗口数可能与建按钮时不同）
+				wins = RunningWindows.ExplorerFolders().Where((RunningWindow w) => w.Handle != IntPtr.Zero && IsWindowVisible(w.Handle)).ToList();
+			}
+			else
+			{
+				wins = group.Windows.Where((RunningWindow w) => w.Handle != IntPtr.Zero && IsWindowVisible(w.Handle)).ToList();
+			}
+		}
+		catch (Exception ex)
+		{
+			Store.Trace("PREVIEW group scan failed: " + ex.Message);
+			return;
+		}
+		Store.Trace("PREVIEW group open " + group.Name + " wins=" + wins.Count);
+		if (wins.Count == 0)
+		{
+			return;
+		}
+		BuildPreviewWindow(button, group.Name, wins, null);
+	}
+
+	private void BuildPreviewWindow(System.Windows.Controls.Button button, string fallbackTitle, List<RunningWindow> wins, Entry entry)
+	{
 		(System.Windows.Media.Color bg, System.Windows.Media.Color ink, System.Windows.Media.Color line, System.Windows.Media.Color hover) = MenuTheme.Palette(C.Prefs.Light, C.Prefs.Dock.Accent, C.Prefs.Dock.Material.Tint, (int)C.Prefs.Dock.OpacityPercent);
 		previewRows = new System.Windows.Controls.StackPanel
 		{
@@ -4152,12 +4296,12 @@ public class DockWindow : GlassWindow
 		int shown = 0;
 		foreach (RunningWindow w in wins)
 		{
-			if (shown >= 4)
+			if (shown >= 8)
 			{
 				break;
 			}
 			shown++;
-			string title = string.IsNullOrWhiteSpace(w.Title) ? entry.Name : w.Title;
+			string title = string.IsNullOrWhiteSpace(w.Title) ? fallbackTitle : w.Title;
 			// 槽位：DWM 缩略图由覆盖其上的顶层宿主窗绘制，这里只提供背景与尺寸
 			System.Windows.Controls.Border thumbArea = new System.Windows.Controls.Border
 			{
@@ -4170,18 +4314,40 @@ public class DockWindow : GlassWindow
 			cardGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(104.0) });
 			cardGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 			cardGrid.Children.Add(thumbArea);
+			// 标题行：标题 + 右上角关闭按钮（等效 Windows 任务栏缩略图右上角 ×）
+			System.Windows.Controls.Grid titleRow = new System.Windows.Controls.Grid();
+			titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+			titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 			TextBlock titleBlock = new TextBlock
 			{
 				Text = title,
 				FontSize = 12.0,
 				Foreground = new SolidColorBrush(ink),
-				MaxWidth = 184.0,
+				MaxWidth = 160.0,
 				TextTrimming = TextTrimming.CharacterEllipsis,
 				TextAlignment = TextAlignment.Left,
-				Margin = new Thickness(4.0, 5.0, 4.0, 2.0)
+				Margin = new Thickness(4.0, 5.0, 2.0, 2.0)
 			};
-			System.Windows.Controls.Grid.SetRow(titleBlock, 1);
-			cardGrid.Children.Add(titleBlock);
+			titleRow.Children.Add(titleBlock);
+			System.Windows.Controls.Button closeBtn = new System.Windows.Controls.Button
+			{
+				Content = "✕",
+				Width = 22.0,
+				Height = 22.0,
+				FontSize = 11.0,
+				Foreground = new SolidColorBrush(ink),
+				Background = System.Windows.Media.Brushes.Transparent,
+				BorderThickness = new Thickness(0.0),
+				Padding = new Thickness(0.0),
+				Cursor = System.Windows.Input.Cursors.Hand,
+				ToolTip = "关闭窗口",
+				Margin = new Thickness(0.0, 1.0, 2.0, 0.0),
+				VerticalAlignment = System.Windows.VerticalAlignment.Center
+			};
+			System.Windows.Controls.Grid.SetColumn(closeBtn, 1);
+			titleRow.Children.Add(closeBtn);
+			System.Windows.Controls.Grid.SetRow(titleRow, 1);
+			cardGrid.Children.Add(titleRow);
 			System.Windows.Controls.Border card = new System.Windows.Controls.Border
 			{
 				CornerRadius = new CornerRadius(8.0),
@@ -4192,8 +4358,14 @@ public class DockWindow : GlassWindow
 				ToolTip = title
 			};
 			IntPtr handle = w.Handle;
-			card.PreviewMouseLeftButtonUp += delegate
+			card.PreviewMouseLeftButtonUp += delegate(object s2, System.Windows.Input.MouseButtonEventArgs e)
 			{
+				// 点在关闭按钮上时不触发卡片激活：Preview 隧道先于按钮 Click 到达卡片，
+				// 若这里关窗+激活，✕ 的 Click 就永远等不到。
+				if (e.OriginalSource is System.Windows.DependencyObject src && IsVisualChild(closeBtn, src))
+				{
+					return;
+				}
 				CloseEntryPreview();
 				// 与 dock 图标统一：该窗口已在前台时再点=最小化，否则提到最上层。
 				if (RunningWindows.IsForeground(handle))
@@ -4203,11 +4375,70 @@ public class DockWindow : GlassWindow
 				else if (!RunningWindows.ActivateHandle(handle))
 				{
 					// 窗口已销毁/句柄失效：走通用激活链兜底（重新扫描、可见过滤、launch 跟踪）
-					RunningWindows.Activate(entry);
+					if (entry != null)
+					{
+						RunningWindows.Activate(entry);
+					}
 				}
 			};
+			int slotIndex = thumbSlots.Count;
 			previewRows.Children.Add(card);
 			thumbSlots.Add(new KeyValuePair<System.Windows.Controls.Border, IntPtr>(thumbArea, handle));
+			closeBtn.Click += delegate
+			{
+				Store.Trace("PREVIEW close click hwnd=" + handle.ToInt64() + " title=" + title);
+				// 优雅关闭目标窗口（等效标题栏 ×，WM_CLOSE 让应用走自己的退出流程）
+				System.Threading.Tasks.Task.Run(delegate
+				{
+					try
+					{
+						RunningWindows.Close(handle);
+					}
+					catch (Exception ex)
+					{
+						Store.Log(ex);
+					}
+				});
+				try
+				{
+					// 移除该卡片对应的缩略图宿主与缩略图，再从面板移除卡片
+					if (slotIndex < previewWinHosts.Count)
+					{
+						System.Windows.Interop.HwndSource host = previewWinHosts[slotIndex];
+						previewWinHosts.RemoveAt(slotIndex);
+						if (slotIndex < previewWinThumbs.Count)
+						{
+							IntPtr th = previewWinThumbs[slotIndex];
+							previewWinThumbs.RemoveAt(slotIndex);
+							if (th != IntPtr.Zero)
+							{
+								DwmUnregisterThumbnail(th);
+							}
+						}
+						if (host != null)
+						{
+							host.Dispose();
+						}
+					}
+					if (slotIndex < thumbSlots.Count)
+					{
+						thumbSlots.RemoveAt(slotIndex);
+					}
+					previewRows.Children.Remove(card);
+					if (previewRows.Children.Count == 0)
+					{
+						CloseEntryPreview();
+						return;
+					}
+					// 布局更新后把剩余缩略图宿主移到新位置
+					previewWin.UpdateLayout();
+					RelayoutPreviewThumbs(thumbSlots);
+				}
+				catch (Exception ex)
+				{
+					Store.Log(ex);
+				}
+			};
 		}
 		if (shown < wins.Count)
 		{
@@ -4249,42 +4480,11 @@ public class DockWindow : GlassWindow
 				{
 					System.Windows.Controls.Border area = slot.Key;
 					IntPtr src = slot.Value;
-					System.Windows.Point dipOffset = area.TranslatePoint(new System.Windows.Point(0.0, 0.0), win);
-					System.Windows.Media.Matrix toDevice = System.Windows.Media.Matrix.Identity;
-					try
-					{
-						PresentationSource ps = PresentationSource.FromVisual(area);
-						if (ps != null && ps.CompositionTarget != null)
-						{
-							toDevice = ps.CompositionTarget.TransformToDevice;
-						}
-					}
-					catch (Exception)
-					{
-					}
-					System.Windows.Point px = toDevice.Transform(dipOffset);
-					System.Windows.Point pxSize = toDevice.Transform(new System.Windows.Point(area.ActualWidth, area.ActualHeight));
-					// 宿主窗 x,y 是屏幕物理坐标：窗口相对偏移 + 卡片窗口屏幕原点
-					double winPxX;
-					double winPxY;
-					try
-					{
-						PresentationSource winPs = PresentationSource.FromVisual(win);
-						System.Windows.Media.Matrix wt = (winPs != null && winPs.CompositionTarget != null) ? winPs.CompositionTarget.TransformToDevice : System.Windows.Media.Matrix.Identity;
-						System.Windows.Point wp = wt.Transform(new System.Windows.Point(win.Left, win.Top));
-						winPxX = wp.X;
-						winPxY = wp.Y;
-					}
-					catch (Exception)
-					{
-						winPxX = win.Left;
-						winPxY = win.Top;
-					}
-					int hx = (int)Math.Round(winPxX + px.X);
-					int hy = (int)Math.Round(winPxY + px.Y);
-					int hw = (int)Math.Round(pxSize.X);
-					int hh = (int)Math.Round(pxSize.Y);
-					if (hw < 2 || hh < 2)
+					int hx;
+					int hy;
+					int hw;
+					int hh;
+					if (!LocatePreviewSlot(area, win, out hx, out hy, out hw, out hh))
 					{
 						continue;
 					}
@@ -4353,7 +4553,10 @@ public class DockWindow : GlassWindow
 								}
 								else if (!RunningWindows.ActivateHandle(handle))
 								{
-									RunningWindows.Activate(entry);
+									if (entry != null)
+									{
+										RunningWindows.Activate(entry);
+									}
 								}
 							}));
 							handled = true;
@@ -4371,6 +4574,96 @@ public class DockWindow : GlassWindow
 				previewWin.Opacity = 1.0;
 			}
 		}));
+	}
+
+	// 视觉树包含判断（点在关闭按钮上时不触发卡片激活）
+	private static bool IsVisualChild(System.Windows.DependencyObject parent, System.Windows.DependencyObject child)
+	{
+		while (child != null)
+		{
+			if (child == parent)
+			{
+				return true;
+			}
+			child = System.Windows.Media.VisualTreeHelper.GetParent(child);
+		}
+		return false;
+	}
+
+	// 计算缩略图槽位在屏幕物理像素系的位置尺寸（宿主窗 x,y 是屏幕物理坐标）
+	private static bool LocatePreviewSlot(System.Windows.Controls.Border area, System.Windows.Window win, out int hx, out int hy, out int hw, out int hh)
+	{
+		hx = 0;
+		hy = 0;
+		hw = 0;
+		hh = 0;
+		try
+		{
+			System.Windows.Point dipOffset = area.TranslatePoint(new System.Windows.Point(0.0, 0.0), win);
+			System.Windows.Media.Matrix toDevice = System.Windows.Media.Matrix.Identity;
+			try
+			{
+				PresentationSource ps = PresentationSource.FromVisual(area);
+				if (ps != null && ps.CompositionTarget != null)
+				{
+					toDevice = ps.CompositionTarget.TransformToDevice;
+				}
+			}
+			catch (Exception)
+			{
+			}
+			System.Windows.Point px = toDevice.Transform(dipOffset);
+			System.Windows.Point pxSize = toDevice.Transform(new System.Windows.Point(area.ActualWidth, area.ActualHeight));
+			double winPxX;
+			double winPxY;
+			try
+			{
+				PresentationSource winPs = PresentationSource.FromVisual(win);
+				System.Windows.Media.Matrix wt = (winPs != null && winPs.CompositionTarget != null) ? winPs.CompositionTarget.TransformToDevice : System.Windows.Media.Matrix.Identity;
+				System.Windows.Point wp = wt.Transform(new System.Windows.Point(win.Left, win.Top));
+				winPxX = wp.X;
+				winPxY = wp.Y;
+			}
+			catch (Exception)
+			{
+				winPxX = win.Left;
+				winPxY = win.Top;
+			}
+			hx = (int)Math.Round(winPxX + px.X);
+			hy = (int)Math.Round(winPxY + px.Y);
+			hw = (int)Math.Round(pxSize.X);
+			hh = (int)Math.Round(pxSize.Y);
+			return hw >= 2 && hh >= 2;
+		}
+		catch (Exception)
+		{
+			return false;
+		}
+	}
+
+	// 关闭某张预览卡后，把剩余缩略图宿主窗移到卡片的新位置
+	private void RelayoutPreviewThumbs(List<KeyValuePair<System.Windows.Controls.Border, IntPtr>> slots)
+	{
+		if (previewWin == null)
+		{
+			return;
+		}
+		System.Windows.Window win = previewWin;
+		for (int i = 0; i < previewWinHosts.Count && i < slots.Count; i++)
+		{
+			if (previewWinHosts[i] == null)
+			{
+				continue;
+			}
+			int hx;
+			int hy;
+			int hw;
+			int hh;
+			if (LocatePreviewSlot(slots[i].Key, win, out hx, out hy, out hw, out hh))
+			{
+				SetWindowPos(previewWinHosts[i].Handle, IntPtr.Zero, hx, hy, hw, hh, 0x0014);
+			}
+		}
 	}
 
 	private void CloseEntryPreview()
@@ -5185,6 +5478,9 @@ public class DockWindow : GlassWindow
 
 	[DllImport("dwmapi.dll")]
 	private static extern int DwmUnregisterThumbnail(IntPtr hThumbnailId);
+
+	[DllImport("user32.dll")]
+	private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
 	[DllImport("dwmapi.dll")]
 	private static extern int DwmUpdateThumbnailProperties(IntPtr hThumbnailId, ref DWM_THUMBNAIL_PROPERTIES props);

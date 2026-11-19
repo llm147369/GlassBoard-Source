@@ -6,9 +6,9 @@ namespace GlassBoard;
 
 public static class WidgetRules
 {
-	public static readonly string[] Kinds = new string[5] { "clock", "weather", "music", "notes", "visualizer" };
+	public static readonly string[] Kinds = new string[6] { "clock", "weather", "music", "notes", "visualizer", "battery" };
 
-	public static readonly string[] Names = new string[5] { "时钟", "天气", "音乐", "备忘录", "音乐律动" };
+	public static readonly string[] Names = new string[6] { "时钟", "天气", "音乐", "备忘录", "音乐律动", "设备电量" };
 
 	// 律动组件固定专属面板 id：它是独立无框装饰，不参与融合/分离，位置由锚点决定。
 	// 普通组件用 0-3，律动独占 4，天然独立成窗。
@@ -23,6 +23,7 @@ public static class WidgetRules
 			"weather" => o.Weather, 
 			"clock" => o.Clock, 
 			"visualizer" => o.Visualizer, 
+			"battery" => o.Battery, 
 			_ => false, 
 		};
 	}
@@ -34,6 +35,7 @@ public static class WidgetRules
 			"music" => o.MusicPanel, 
 			"weather" => o.WeatherPanel, 
 			"clock" => o.ClockPanel, 
+			"battery" => o.BatteryPanel, 
 			"visualizer" => VisualizerPanelId, 
 			_ => o.NotesPanel, 
 		};
@@ -55,6 +57,9 @@ public static class WidgetRules
 			break;
 		case "notes":
 			o.NotesPanel = panel;
+			break;
+		case "battery":
+			o.BatteryPanel = panel;
 			break;
 		case "visualizer":
 			// 律动组件固定专属面板，忽略融合/分离操作。
@@ -80,6 +85,9 @@ public static class WidgetRules
 			break;
 		case "visualizer":
 			o.Visualizer = value;
+			break;
+		case "battery":
+			o.Battery = value;
 			break;
 		}
 	}

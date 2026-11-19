@@ -78,6 +78,10 @@ public sealed class WidgetWindow : GlassWindow
 
 	private TextBlock weatherStatus;
 
+	private StackPanel batteryList;
+
+	private TextBlock batteryStatus;
+
 	private TextBlock musicTitle;
 
 	private TextBlock musicArtist;
@@ -854,6 +858,7 @@ public sealed class WidgetWindow : GlassWindow
 		Tick();
 		UpdateMusic();
 		UpdateWeather();
+		UpdateBattery();
 		FitContent();
 		WidgetPanelPosition widgetPanelPosition = widgets.Position(PanelId);
 		double? num = widgetPanelPosition.Left;
@@ -878,6 +883,7 @@ public sealed class WidgetWindow : GlassWindow
 		Tick();
 		UpdateMusic();
 		UpdateWeather();
+		UpdateBattery();
 	}
 
 	// 律动组件锚点定位：算出应处的 Left/Top（锚点边固定，尺寸变化时锚点边不动）。
@@ -1129,6 +1135,9 @@ public sealed class WidgetWindow : GlassWindow
 						break;
 					case "visualizer":
 						Visualizer(stackPanel);
+						break;
+					case "battery":
+						Battery(stackPanel);
 						break;
 					default:
 						Notes(stackPanel);
@@ -1829,6 +1838,28 @@ public sealed class WidgetWindow : GlassWindow
 			Margin = new Thickness(0.0, 0.0, 0.0, 8.0)
 		};
 		parent.Children.Add(weatherStatus);
+	}
+
+	// 设备电量：原生 BatteryCore（电脑/鼠标/键盘）+ 可选 BatteryHub 扩展行。
+	// 具体行由 UpdateBattery 按引擎 Devices 列表重建（60s 刷新一次）。
+	private void Battery(StackPanel parent)
+	{
+		batteryList = new StackPanel
+		{
+			Margin = new Thickness(0.0, 2.0, 0.0, 0.0)
+		};
+		parent.Children.Add(batteryList);
+		batteryStatus = new TextBlock
+		{
+			Foreground = MutedBrush,
+			FontSize = 10.0,
+			VerticalAlignment = VerticalAlignment.Center,
+			TextWrapping = TextWrapping.Wrap,
+			MaxHeight = 56.0,
+			TextTrimming = TextTrimming.CharacterEllipsis,
+			Margin = new Thickness(0.0, 6.0, 0.0, 8.0)
+		};
+		parent.Children.Add(batteryStatus);
 	}
 
 	private void Music(StackPanel parent)
@@ -2822,6 +2853,95 @@ public sealed class WidgetWindow : GlassWindow
 		FitContent();
 	}
 
+	public void UpdateBattery()
+	{
+		if (building || batteryList == null || M.Battery == null)
+		{
+			return;
+		}
+		DeviceBattery engine = M.Battery;
+		List<DeviceBatteryInfo> devices = engine.Devices ?? new List<DeviceBatteryInfo>();
+		batteryList.Children.Clear();
+		if (devices.Count == 0)
+		{
+			TextBlock empty = new TextBlock
+			{
+				Text = "未检测到无线设备",
+				Foreground = StyleInk("battery"),
+				FontSize = 12.0,
+				Margin = new Thickness(0.0, 0.0, 0.0, 6.0),
+				TextWrapping = TextWrapping.Wrap
+			};
+			batteryList.Children.Add(empty);
+		}
+		foreach (DeviceBatteryInfo d in devices)
+		{
+			Grid row = new Grid
+			{
+				Margin = new Thickness(0.0, 2.0, 0.0, 2.0)
+			};
+			row.ColumnDefinitions.Add(new ColumnDefinition
+			{
+				Width = new GridLength(34.0)
+			});
+			row.ColumnDefinitions.Add(new ColumnDefinition());
+			row.ColumnDefinitions.Add(new ColumnDefinition
+			{
+				Width = GridLength.Auto
+			});
+			TextBlock icon = new TextBlock
+			{
+				Text = BatteryGlyph(d.Kind),
+				FontSize = 16.0,
+				VerticalAlignment = VerticalAlignment.Center,
+				Opacity = (d.Asleep ? 0.45 : 1.0)
+			};
+			row.Children.Add(icon);
+			TextBlock name = new TextBlock
+			{
+				Text = d.Name + (string.IsNullOrWhiteSpace(d.Via) ? "" : ("\n" + d.Via)),
+				Foreground = StyleInk("battery"),
+				FontSize = 12.0,
+				VerticalAlignment = VerticalAlignment.Center,
+				TextWrapping = TextWrapping.Wrap,
+				Margin = new Thickness(0.0, 0.0, 6.0, 0.0),
+				Opacity = (d.Asleep ? 0.45 : 1.0),
+				ToolTip = d.Key
+			};
+			Grid.SetColumn(name, 1);
+			row.Children.Add(name);
+			TextBlock percent = new TextBlock
+			{
+				Text = d.Percent + "%" + (d.Charging ? " ⚡" : ""),
+				Foreground = ((d.Percent <= 15) ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 107, 107)) : StyleInk("battery")),
+				FontSize = 12.0,
+				FontWeight = FontWeights.SemiBold,
+				VerticalAlignment = VerticalAlignment.Center,
+				Opacity = (d.Asleep ? 0.45 : 1.0)
+			};
+			Grid.SetColumn(percent, 2);
+			row.Children.Add(percent);
+			batteryList.Children.Add(row);
+		}
+		batteryStatus.Text = engine.Message;
+		batteryStatus.ToolTip = engine.Message;
+		FitContent();
+	}
+
+	private static string BatteryGlyph(string kind)
+	{
+		return kind switch
+		{
+			"pc" => "💻",
+			"mouse" => "🖱",
+			"keyboard" => "⌨",
+			"headset" or "headphones" => "🎧",
+			"gamepad" or "controller" => "🎮",
+			"phone" => "📱",
+			_ => "🔋"
+		};
+	}
+
 	public void Tick()
 	{
 		if (clock != null)
@@ -3286,6 +3406,7 @@ public sealed class WidgetWindow : GlassWindow
 					"weather" => weatherPlace, 
 					"music" => musicTitle, 
 					"clock" => date, 
+					"battery" => batteryStatus, 
 					_ => noteStatus, 
 				}).Foreground is SolidColorBrush { Color: { R: 51 }, Color: { G: 204 } }))
 				{

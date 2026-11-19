@@ -18,6 +18,7 @@
 #   data\AppGroups.tsv                     —— 应用自动分组（v0.9.21.3 曾漏打）
 #   DefaultConfig.json                     —— 首启推荐配置（漏打则 ConfigImport 静默失效）
 #   licenses\                              —— 第三方许可
+#   BatteryHub\                            —— 设备电量可选扩展（BatteryHub.exe + headsetcontrol.exe + LICENSE.txt，GPL-3.0）
 #   说明.txt / README.md / THIRD_PARTY_NOTICES.md
 #   wallpapers\                            —— 官方图库源文件（体积很小，默认包含）
 #
@@ -101,7 +102,7 @@ if (Test-Path $cfg) {
     Write-Host "[PACK][警告] 没有可打包的 DefaultConfig.json —— 新装用户将收不到首启推荐配置。" -ForegroundColor Yellow
 }
 
-foreach ($d in @("licenses", "wallpapers")) {
+foreach ($d in @("licenses", "wallpapers", "BatteryHub")) {
     if (Test-Path (Join-Path $repo $d)) { Copy-Item (Join-Path $repo $d) $stage -Recurse }
 }
 foreach ($f in @("说明.txt", "README.md", "THIRD_PARTY_NOTICES.md")) {
@@ -128,7 +129,7 @@ Copy-Item $zip $zip2 -Force
 Write-Host ""
 $z = [System.IO.Compression.ZipFile]::OpenRead($zip)
 $entries = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
-$check = @("GlassBoard.exe", "GlassBoard.exe.config", "lib/NPSMLib.dll", "data/AppGroups.tsv", "DefaultConfig.json", "licenses/NPSMLib_LICENSE.txt", "说明.txt", "wallpapers/wallpapers.json", "Microsoft.Web.WebView2.Core.dll", "WebView2Loader.dll")
+$check = @("GlassBoard.exe", "GlassBoard.exe.config", "lib/NPSMLib.dll", "data/AppGroups.tsv", "DefaultConfig.json", "licenses/NPSMLib_LICENSE.txt", "说明.txt", "wallpapers/wallpapers.json", "Microsoft.Web.WebView2.Core.dll", "WebView2Loader.dll", "BatteryHub/BatteryHub.exe", "BatteryHub/LICENSE.txt")
 $missing = @($check | Where-Object { $entries -notcontains $_ })
 $z.Dispose()
 if ($missing.Count -gt 0) {

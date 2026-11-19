@@ -32,6 +32,7 @@
     <EmbeddedResource Include="GlassBoard\Assets\launchpad.png" LogicalName="GlassBoard.Assets.launchpad.png" />
     <EmbeddedResource Include="GlassBoard\Assets\settings.svg" LogicalName="GlassBoard.Assets.settings.svg" />
     <EmbeddedResource Include="GlassBoard\Assets\running.png" LogicalName="GlassBoard.Assets.running.png" />
+    <EmbeddedResource Include="GlassBoard\Assets\folder.png" LogicalName="GlassBoard.Assets.folder.png" />
     <EmbeddedResource Include="GlassBoard\Assets\wechat.jpg" LogicalName="GlassBoard.Assets.wechat.jpg" />
     <EmbeddedResource Include="GlassBoard\Assets\alipay.jpg" LogicalName="GlassBoard.Assets.alipay.jpg" />
   </ItemGroup>

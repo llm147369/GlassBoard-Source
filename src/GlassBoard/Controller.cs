@@ -3572,6 +3572,18 @@ public class Controller
 					}
 				};
 				stackPanel5.Children.Add(grid3);
+				if (kind == "battery")
+				{
+					string batteryExe = DeviceBattery.FindExe();
+					stackPanel5.Children.Add(new TextBlock
+					{
+						Text = ((batteryExe.Length != 0) ? "已找到 BatteryHub：" + batteryExe : "内置原生检测：电脑 / 鼠标 / 键盘电量（无需任何程序）。可选：把 BatteryHub 便携版（github.com/krisgfx9/Wireless-Device-Battery-Monitor）放到本程序目录，额外显示耳机 / 手柄 / 罗技 2.4G 接收器等设备。"),
+						TextWrapping = TextWrapping.Wrap,
+						Foreground = System.Windows.Media.Brushes.Gray,
+						FontSize = 11.0,
+						Margin = new Thickness(34.0, 0.0, 0.0, 10.0)
+					});
+				}
 			}
 			// 律动配色（仅律动组件生效；右键组件菜单里也可切换）
 			Grid paletteRow = new Grid

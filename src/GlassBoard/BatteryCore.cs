@@ -92,18 +92,19 @@ public static class BatteryCore
 				Name = "GlassBoard.BatteryCore"
 			};
 			worker.Start();
+			// 订阅移到锁内：保证每个 worker 生命周期只订阅一次（外部重复 Start 幂等）。
+			SystemEvents.PowerModeChanged += OnPowerModeChanged;
 		}
-		SystemEvents.PowerModeChanged += OnPowerModeChanged;
 	}
 
 	public static void Stop()
 	{
-		SystemEvents.PowerModeChanged -= OnPowerModeChanged;
 		lock (Gate)
 		{
 			running = false;
 			WakeSignal.Set();
 			worker = null;
+			SystemEvents.PowerModeChanged -= OnPowerModeChanged;
 		}
 	}
 

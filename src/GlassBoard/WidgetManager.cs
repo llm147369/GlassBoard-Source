@@ -19,6 +19,8 @@ public sealed class WidgetManager : IDisposable
 
 	public MusicEngine Music;
 
+	public readonly DeviceBattery Battery;
+
 	private readonly WidgetRegistry<WidgetWindow> windows = new WidgetRegistry<WidgetWindow>();
 
 	// Send 优先级：Background 队列里堆积的刷新任务（运行扫描/音乐轮询等）会把它拖后
@@ -64,6 +66,8 @@ public sealed class WidgetManager : IDisposable
 				}
 			}
 		};
+		Battery = new DeviceBattery(c);
+		Battery.Changed += RefreshBattery;
 		timer.Tick += (object s, EventArgs e) =>
 		{
 			if (closed)
@@ -228,6 +232,7 @@ public sealed class WidgetManager : IDisposable
 				value.Tick();
 				value.UpdateMusic();
 				value.UpdateWeather();
+				value.UpdateBattery();
 			}
 			else
 			{
@@ -357,6 +362,7 @@ public sealed class WidgetManager : IDisposable
 			}
 		}
 		Weather.Update();
+		Battery.SetEnabled(o.Battery);
 	}
 
 	private void TryStop(WidgetWindow w)
@@ -378,6 +384,17 @@ public sealed class WidgetManager : IDisposable
 			if (item.IsVisible)
 			{
 				item.UpdateMusic();
+			}
+		}
+	}
+
+	private void RefreshBattery()
+	{
+		foreach (WidgetWindow item in windows.Values.ToList())
+		{
+			if (item.IsVisible)
+			{
+				item.UpdateBattery();
 			}
 		}
 	}
@@ -442,6 +459,7 @@ public sealed class WidgetManager : IDisposable
 		finally
 		{
 			Weather.Stop();
+			Battery.Dispose();
 			if (Music != null)
 			{
 				MusicEngine music = Music;

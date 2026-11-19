@@ -59,6 +59,12 @@ public static class RunningWindows
 	private static readonly List<RunningWindow> windows = new List<RunningWindow>();
 	private static readonly List<RunningWindow> background = new List<RunningWindow>();
 
+	// 文件资源管理器窗口（class=CabinetWClass）：Dock 尾部「文件夹」聚合按钮的数据源，
+	// 每次窗口扫描顺带收集（零额外枚举），UI 线程只读锁内快照。
+	private static readonly object explorerGate = new object();
+
+	private static readonly List<RunningWindow> explorerFolders = new List<RunningWindow>();
+
 	private static readonly BoundedCache<string, TargetInfo> targets = new BoundedCache<string, TargetInfo>(192, StringComparer.OrdinalIgnoreCase);
 
 	private static readonly BoundedCache<string, long> last = new BoundedCache<string, long>(192, StringComparer.OrdinalIgnoreCase);
@@ -275,25 +281,6 @@ public static class RunningWindows
 	private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
 
 	[DllImport("user32.dll")]
-	private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
-
-	[DllImport("user32.dll")]
-	private static extern bool SetCursorPos(int x, int y);
-
-	[DllImport("user32.dll")]
-	private static extern bool GetCursorPos(out POINT point);
-
-	[DllImport("user32.dll")]
-	private static extern int GetSystemMetrics(int index);
-
-	private struct POINT
-	{
-		public int X;
-
-		public int Y;
-	}
-
-	[DllImport("user32.dll")]
 	private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 
 	[DllImport("user32.dll")]
@@ -508,6 +495,9 @@ public static class RunningWindows
 
 	[DllImport("user32.dll")]
 	private static extern bool FlashWindowEx(ref FLASHWINFO info);
+
+	[DllImport("user32.dll")]
+	private static extern bool IsHungAppWindow(IntPtr hWnd);
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	private static extern int GetClassName(IntPtr window, StringBuilder text, int length);
@@ -737,6 +727,7 @@ public static class RunningWindows
 	private static void ScanWindowsCore()
 	{
 		List<RunningWindow> next = new List<RunningWindow>();
+		List<RunningWindow> folders = new List<RunningWindow>();
 		Dictionary<uint, string> byPid = new Dictionary<uint, string>();
 		int own = Process.GetCurrentProcess().Id;
 		EnumWindows((IntPtr handle, IntPtr value) =>
@@ -810,6 +801,18 @@ public static class RunningWindows
 					return true;
 				}
 			}
+			if (className == "CabinetWClass")
+			{
+				// 文件资源管理器主窗（打开文件夹/此电脑）：供 Dock 文件夹聚合按钮使用。
+				folders.Add(new RunningWindow
+				{
+					Handle = handle,
+					ProcessId = id,
+					Path = value3,
+					Title = stringBuilder.ToString(),
+					AppUserModelId = Aumid(id)
+				});
+			}
 			next.Add(new RunningWindow
 			{
 				Handle = handle,
@@ -831,6 +834,15 @@ public static class RunningWindows
 		{
 			windows.Clear();
 			windows.AddRange(next);
+		}
+		lock (explorerGate)
+		{
+			explorerFolders.Clear();
+			explorerFolders.AddRange(folders);
+		}
+		if (folders.Count > 0)
+		{
+			Store.Trace("FOLDER scan count=" + folders.Count + " first=" + folders[0].Title);
 		}
 		if (RenderDiagnostics.Verbose)
 		{
@@ -1474,6 +1486,15 @@ public static class RunningWindows
 		}
 	}
 
+	// 当前打开的文件资源管理器窗口快照（CabinetWClass，可见窗口；全关为空列表）。
+	public static List<RunningWindow> ExplorerFolders()
+	{
+		lock (explorerGate)
+		{
+			return explorerFolders.ToList();
+		}
+	}
+
 	public static bool IsRunning(Entry entry)
 	{
 		return For(entry).Count > 0;
@@ -1628,8 +1649,7 @@ public static class RunningWindows
 		if (!flag2)
 		{
 			// 前台锁无法突破（此环境前台进程为第三方桌面壳，SetForegroundWindow 全被拒）：
-			// 注入一次真实鼠标点击到目标窗口标题栏，Windows 视为真实输入 → 目标窗口
-			// 获得激活 + 键盘焦点（与用户亲手点击等价）。点击后恢复鼠标原位。
+			// 投递一次标题栏 NC 点击到目标窗口（不移动物理鼠标），让目标获得激活+键盘焦点。
 			ClickToActivate(intPtr);
 			flag2 = GetForegroundWindow() == intPtr;
 		}
@@ -1653,14 +1673,22 @@ public static class RunningWindows
 	}
 
 	/// <summary>
-	/// 终极激活兜底：前台锁无法突破时，注入一次真实鼠标点击到目标窗口标题栏
-	/// （Windows 将注入输入视为真实用户操作 → 目标窗口获得激活+键盘焦点）。
-	/// 点标题栏左 1/4 处避开右侧按钮，点击后恢复鼠标原位。
+	/// 终极激活兜底：前台锁无法突破时，向目标窗口标题栏投递一次"非客户区左键点击"
+	/// （WM_NCLBUTTONDOWN/UP + HT_CAPTION，等效点击标题栏激活窗口）。
+	/// 不再使用 SetCursorPos+mouse_event 注入真实鼠标事件——那会把用户光标从当前位置
+	/// 拖到目标窗口再拖回（用户体感"鼠标自己乱飞"，豆包类 Electron 应用恢复期尤为明显），
+	/// 且若目标窗口坐标已失效，真实点击会点到别的应用界面。
 	/// </summary>
 	private static void ClickToActivate(IntPtr handle)
 	{
 		try
 		{
+			// 目标窗口未响应（应用主线程忙/卡死）时消息点击无效——直接放弃，改由调用方闪任务栏提示。
+			if (IsHungAppWindow(handle))
+			{
+				Store.Trace("ACTIVATE_R clickToActivate skipped hung hwnd=" + handle.ToInt64());
+				return;
+			}
 			if (!GetWindowRect(handle, out RECT rect))
 			{
 				return;
@@ -1671,20 +1699,13 @@ public static class RunningWindows
 			{
 				return;
 			}
+			// 标题栏左 1/4 处避开右侧按钮；NC 消息的 lParam 是屏幕坐标。
 			int x = rect.Left + w / 4;
 			int y = rect.Top + Math.Min(18, h / 4);
-			int screenW = Math.Max(1, GetSystemMetrics(0));
-			int screenH = Math.Max(1, GetSystemMetrics(1));
-			uint sx = (uint)(x * 65535 / Math.Max(1, screenW - 1));
-			uint sy = (uint)(y * 65535 / Math.Max(1, screenH - 1));
-			GetCursorPos(out POINT orig);
-			Store.Trace("ACTIVATE_R clickToActivate at=" + x + "," + y + " orig=" + orig.X + "," + orig.Y);
-			SetCursorPos(x, y);
-			mouse_event(2u, sx, sy, 0u, UIntPtr.Zero);
-			Thread.Sleep(40);
-			mouse_event(4u, sx, sy, 0u, UIntPtr.Zero);
-			Thread.Sleep(150);
-			SetCursorPos(orig.X, orig.Y);
+			IntPtr lParam = (IntPtr)(((y & 0xFFFF) << 16) | (x & 0xFFFF));
+			SendMessageTimeout(handle, 0x00A1u, (IntPtr)2, lParam, 2u, 500u, out IntPtr result);
+			SendMessageTimeout(handle, 0x00A2u, (IntPtr)2, lParam, 2u, 500u, out result);
+			Store.Trace("ACTIVATE_R clickToActivate nc-click at=" + x + "," + y + " cursor=untouched");
 		}
 		catch (Exception ex)
 		{
@@ -2022,68 +2043,71 @@ public static class RunningWindows
 				{
 					// Electron 托盘应用（QQ NT 等）优先走托盘点击重放（应用自己解锁，
 					// 等效用户点托盘图标）；失败再走三段唤醒链。
-					IntPtr notifyHost = FindNotifyIconHost(hidden[0].Path ?? "");
-					bool trayWoke = false;
-					if (notifyHost != IntPtr.Zero)
+					// 全程后台线程执行：TrayWakeElectron 会逐个轮询托盘图标 ID（最长约 13 秒），
+					// 同步执行会把 UI 线程卡死 13 秒（HealthMonitor 报"界面线程已停滞"，
+					// 用户点开豆包/DSH Desktop 等 Electron 应用时的"长卡顿"即来源于此）。
+					// 与微信大退路径一致：点击立即返回，托盘唤醒/主窗恢复/前台抢占全部后台完成。
+					string launchPath = entry == null ? "" : entry.Path;
+					string launchTarget2 = entry == null ? "" : entry.LaunchTarget;
+					Task.Run(delegate
 					{
-						string cacheKey = ProcessPath(hidden[0].ProcessId) ?? "";
-						List<IntPtr> watch = new List<IntPtr>();
-						foreach (RunningWindow w in hidden)
+						try
 						{
-							watch.Add(w.Handle);
-						}
-						trayWoke = TrayWakeElectron(notifyHost, watch, cacheKey);
-						if (!trayWoke)
-						{
-							Store.Trace("ACTIVATE electron-tray wake failed");
-						}
-					}
-					IntPtr main = IntPtr.Zero;
-					if (!trayWoke)
-					{
-						main = FindMainWindowOf(hidden[0].Handle);
-					}
-					if (main == IntPtr.Zero && trayWoke)
-					{
-						// 托盘唤醒成功：主窗已可见，直接用它作为激活目标。
-						foreach (RunningWindow w in hidden)
-						{
-							if (IsWindowVisible(w.Handle) && !IsIconic(w.Handle))
+							IntPtr notifyHost = FindNotifyIconHost(hidden[0].Path ?? "");
+							bool trayWoke = false;
+							if (notifyHost != IntPtr.Zero)
 							{
-								main = w.Handle;
-								break;
+								string cacheKey = ProcessPath(hidden[0].ProcessId) ?? "";
+								List<IntPtr> watch = new List<IntPtr>();
+								foreach (RunningWindow w in hidden)
+								{
+									watch.Add(w.Handle);
+								}
+								trayWoke = TrayWakeElectron(notifyHost, watch, cacheKey);
+								if (!trayWoke)
+								{
+									Store.Trace("ACTIVATE electron-tray wake failed");
+								}
+							}
+							IntPtr main = IntPtr.Zero;
+							if (!trayWoke)
+							{
+								main = FindMainWindowOf(hidden[0].Handle);
+							}
+							if (main == IntPtr.Zero && trayWoke)
+							{
+								// 托盘唤醒成功：主窗已可见，直接用它作为激活目标。
+								foreach (RunningWindow w in hidden)
+								{
+									if (IsWindowVisible(w.Handle) && !IsIconic(w.Handle))
+									{
+										main = w.Handle;
+										break;
+									}
+								}
+							}
+							if (main != IntPtr.Zero)
+							{
+								Store.Trace("ACTIVATE hidden-main restore hwnd=" + main.ToInt64());
+								// RestoreAndForeground 自带隐藏窗显示链+前台抢占链（原 inline 三段链合并于此）。
+								RestoreAndForeground(main);
+							}
+							else
+							{
+								// 找不到可恢复主窗：退回启动转发（等效旧代码返回 false → 调用方 Process.Start）。
+								string target = string.IsNullOrEmpty(launchTarget2) ? launchPath : launchTarget2;
+								if (!string.IsNullOrEmpty(target))
+								{
+									Store.Trace("ACTIVATE hidden-restore fallback launch target=" + target);
+									System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true });
+								}
 							}
 						}
-					}
-					if (main != IntPtr.Zero)
-					{
-						if (!IsWindowVisible(main) && !trayWoke)
+						catch (Exception)
 						{
-							// 隐藏主窗：同步 ShowWindow 显示→真实最小化→恢复（见 ACTIVATE_R hiddenShown 注释）。
-							PostMessage(main, 0x0112u, (IntPtr)0xF120, IntPtr.Zero);
-							Thread.Sleep(80);
-							ShowWindow(main, 1);
-							Thread.Sleep(350);
-							ShowWindow(main, 6);
-							Thread.Sleep(550);
-							ShowWindow(main, 9);
-							int visPoll = 0;
-							while (!IsWindowVisible(main) && visPoll < 10)
-							{
-								Thread.Sleep(100);
-								visPoll++;
-							}
-							Store.Trace("ACTIVATE hidden-chain done visible=" + IsWindowVisible(main) + " iconic=" + IsIconic(main));
 						}
-						Store.Trace("ACTIVATE hidden-main restore hwnd=" + main.ToInt64());
-						list.Add(new RunningWindow
-						{
-							Handle = main,
-							ProcessId = hidden[0].ProcessId,
-							Path = hidden[0].Path,
-							Title = hidden[0].Title
-						});
-					}
+					});
+					return true;
 				}
 			}
 		}

@@ -1,0 +1,13 @@
+BatteryHub bundles the following third-party software.
+
+HeadsetControl 4.3.0 (headsetcontrol.exe)
+  Copyright (C) the HeadsetControl contributors
+  https://github.com/Sapd/HeadsetControl
+  License: GNU General Public License v3.0 (same text as LICENSE.txt)
+  Corresponding source code:
+    https://github.com/Sapd/HeadsetControl/releases/tag/4.3.0
+    (headsetcontrol-4.3.0.tar.gz is also attached to every BatteryHub release)
+
+  The binary is the unmodified official release asset
+  headsetcontrol-windows-x86_64.exe,
+  SHA-256 e371da043710ddb8fc70af77f2ccad1cd03f8c6f49ba423e08764ad7a94a3c40.

@@ -66,30 +66,55 @@ public static class CustomIcons
 		{
 			if (running == null)
 			{
-				try
-				{
-					using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("GlassBoard.Assets.running.png"))
-					{
-						if (stream == null)
-						{
-							return null;
-						}
-						BitmapImage bitmap = new BitmapImage();
-						bitmap.BeginInit();
-						bitmap.CacheOption = BitmapCacheOption.OnLoad;
-						bitmap.StreamSource = stream;
-						bitmap.EndInit();
-						bitmap.Freeze();
-						running = bitmap;
-					}
-				}
-				catch
-				{
-					return null;
-				}
+				running = LoadPng("GlassBoard.Assets.running.png");
 			}
 		}
 		return running;
+	}
+
+	// 文件夹聚合按钮图标（微软 Fluent Emoji「File folder」3D 版，MIT 许可）：
+	// 嵌入资源加载，无外部依赖；Dock 尾部「文件夹」入口用。
+	private static BitmapImage folder;
+
+	public static ImageSource Folder()
+	{
+		if (folder != null)
+		{
+			return folder;
+		}
+		lock (Sync)
+		{
+			if (folder == null)
+			{
+				folder = LoadPng("GlassBoard.Assets.folder.png");
+			}
+		}
+		return folder;
+	}
+
+	private static BitmapImage LoadPng(string resource)
+	{
+		try
+		{
+			using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource))
+			{
+				if (stream == null)
+				{
+					return null;
+				}
+				BitmapImage bitmap = new BitmapImage();
+				bitmap.BeginInit();
+				bitmap.CacheOption = BitmapCacheOption.OnLoad;
+				bitmap.StreamSource = stream;
+				bitmap.EndInit();
+				bitmap.Freeze();
+				return bitmap;
+			}
+		}
+		catch
+		{
+			return null;
+		}
 	}
 
 	// 大面板右上角设置图标：解析内嵌 SVG 的 <path d="..."> 为 WPF 几何，按主题色填充。
