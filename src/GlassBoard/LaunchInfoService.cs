@@ -35,6 +35,7 @@ public static class LaunchInfoService
 		}
 		if (text3 == ".lnk")
 		{
+			string linkPath = text;
 			object obj = null;
 			object obj2 = null;
 			try
@@ -58,6 +59,12 @@ public static class LaunchInfoService
 				{
 					Marshal.ReleaseComObject(obj);
 				}
+			}
+			// MSIX/UWP 快捷方式没有普通 TargetPath（WScript 返回空串），
+			// 实际目标是 AppsFolder 的 AUMID；不补这一步，点击会报"找不到文件"。
+			if (string.IsNullOrWhiteSpace(text))
+			{
+				entry.Aumid = Native.ShortcutAumid(linkPath);
 			}
 		}
 		else if (text3 == ".url")

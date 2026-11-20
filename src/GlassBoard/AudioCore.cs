@@ -12,6 +12,11 @@ public static class AudioCore
 		public string Id;
 		public string Name;
 		public bool IsDefault;
+
+		public override string ToString()
+		{
+			return Name ?? "";
+		}
 	}
 
 	private enum EDataFlow
@@ -159,9 +164,12 @@ public static class AudioCore
 
 	private static readonly Guid IID_IMMDeviceEnumerator = new Guid("A95664D2-9614-4F35-A746-DE8DB63617E6");
 
-	private static readonly Guid CLSID_PolicyConfigClient = new Guid("294935CE-F637-4E7C-A41B-AB255460B862");
+	// Windows 10/11 默认设备切换用的 PolicyConfig 客户端与接口。
+	// 旧代码把 Vista 客户端 CLSID（294935CE…）和错误接口 GUID 拼在一起，
+	// CoCreateInstance/SetDefaultEndpoint 都会失败，表现为控制中心点了没反应。
+	private static readonly Guid CLSID_PolicyConfigClient = new Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9");
 
-	private static readonly Guid IID_IPolicyConfig = new Guid("870AF99C-171D-4F63-B0AF-E63DF44C7A2F");
+	private static readonly Guid IID_IPolicyConfig = new Guid("F8679F50-850A-41CF-9C72-430F290290C8");
 
 	private static readonly Guid IID_IAudioEndpointVolume = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
 
@@ -190,6 +198,12 @@ public static class AudioCore
 
 	[UnmanagedFunctionPointer(CallingConvention.StdCall)]
 	private delegate int StoreGetValue(IntPtr self, ref PROPERTYKEY key, out PROPVARIANT value);
+
+	// IPolicyConfig 的 SetDefaultEndpoint（IUnknown 之后第 11 个方法，虚表槽 13）。
+	// 不走 ComImport 接口封送：在当前 .NET Framework / Win11 组合下 RCW 调用会失败，
+	// 裸虚表调用与系统声音设置行为一致。
+	[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+	private delegate int PolicySetDefaultEndpoint(IntPtr self, [MarshalAs(UnmanagedType.LPWStr)] string deviceId, ERole role);
 
 	// 用 CoCreateInstance 显式创建 COM 对象，绕开 `new ComImportClass()` 在部分系统上
 	// 对类接口（CLSID 当 IID）做 QI 失败导致 InvalidCastException 的问题。
@@ -401,16 +415,43 @@ public static class AudioCore
 
 	public static bool TrySetDefault(string id)
 	{
+		if (string.IsNullOrWhiteSpace(id))
+		{
+			return false;
+		}
+		IntPtr instance = IntPtr.Zero;
 		try
 		{
 			Guid clsid = CLSID_PolicyConfigClient;
 			Guid iid = IID_IPolicyConfig;
-			IPolicyConfig policyConfig = (IPolicyConfig)CreateInstance(ref clsid, ref iid);
-			return policyConfig.SetDefaultEndpoint(id, ERole.Multimedia) >= 0;
+			int hr = CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_ALL, ref iid, out instance);
+			if (hr < 0 || instance == IntPtr.Zero)
+			{
+				return false;
+			}
+			IntPtr vt = Marshal.ReadIntPtr(instance);
+			IntPtr setDefaultPtr = (vt == IntPtr.Zero) ? IntPtr.Zero : Marshal.ReadIntPtr(vt, 13 * IntPtr.Size);
+			if (setDefaultPtr == IntPtr.Zero)
+			{
+				return false;
+			}
+			PolicySetDefaultEndpoint setDefault = (PolicySetDefaultEndpoint)Marshal.GetDelegateForFunctionPointer(setDefaultPtr, typeof(PolicySetDefaultEndpoint));
+			// 系统声音设置会同时切换三个角色；只改 Multimedia 会导致部分应用仍走旧设备。
+			bool console = setDefault(instance, id, ERole.Console) >= 0;
+			bool multimedia = setDefault(instance, id, ERole.Multimedia) >= 0;
+			bool communications = setDefault(instance, id, ERole.Communications) >= 0;
+			return console && multimedia && communications;
 		}
 		catch
 		{
 			return false;
+		}
+		finally
+		{
+			if (instance != IntPtr.Zero)
+			{
+				Marshal.Release(instance);
+			}
 		}
 	}
 }

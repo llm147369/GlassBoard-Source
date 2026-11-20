@@ -13,6 +13,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Threading;
 
 namespace GlassBoard;
@@ -2361,6 +2362,16 @@ public class BoardWindow : GlassWindow
 			FontSize = 12.0,
 			TextAlignment = TextAlignment.Center,
 			TextTrimming = TextTrimming.CharacterEllipsis,
+			// 面板可以独立调到高透明度；亮色壁纸下白字会直接融进背景。
+			// 给图标名称加一层不偏移的暗色阴影，保证高透明度时仍然可读。
+			Effect = new DropShadowEffect
+			{
+				Color = Colors.Black,
+				BlurRadius = 7.0,
+				ShadowDepth = 0.0,
+				Opacity = 0.9,
+				Direction = 270.0
+			},
 			MaxWidth = Math.Max(20.0, ((Tiles.ActualWidth > 0.0) ? Tiles.ActualWidth : (Width - 104.0)) / (double)columns - 2.0 * C.Prefs.BoardIconGap - 10.0)
 		});
 		grid.Children.Add(new Border

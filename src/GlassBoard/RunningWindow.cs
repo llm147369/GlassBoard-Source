@@ -17,4 +17,7 @@ public sealed class RunningWindow
 
 	// 仅托盘/隐藏态运行的窗口（无可见窗口时的兜底收录）
 	public bool Tray;
+
+	// 可见窗口面积（像素）：同组多窗口时用来挑真正的主窗口，避免标题栏/浮层抢占图标与名称
+	public long Area;
 }

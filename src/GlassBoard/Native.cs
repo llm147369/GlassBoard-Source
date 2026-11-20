@@ -438,8 +438,148 @@ public static class Native
 		pid = 5u
 	};
 
+	// —— MSIX/UWP 快捷方式：目标不是普通 exe，而是 AppsFolder 里的 AUMID ——
+	// 这类 .lnk 的 TargetPath 为空，ShellExecute 会报"找不到所需信息"，
+	// 必须从快捷方式的 IDList 里取出 AUMID，再用激活器启动。
+	[ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+	private class ShellLink
+	{
+	}
+
+	[ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+	private interface IShellLinkW
+	{
+		void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszFile, int cch, IntPtr pfd, uint fFlags);
+		void GetIDList(out IntPtr ppidl);
+		void SetIDList(IntPtr pidl);
+		void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszName, int cch);
+		void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+		void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszDir, int cch);
+		void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+		void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszArgs, int cch);
+		void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+		void GetHotkey(out short pwHotkey);
+		void SetHotkey(short wHotkey);
+		void GetShowCmd(out int piShowCmd);
+		void SetShowCmd(int iShowCmd);
+		void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszIconPath, int cch, out int piIcon);
+		void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+		void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+		void Resolve(IntPtr hwnd, uint fFlags);
+		void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+	}
+
+	[ComImport, Guid("0000010b-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+	private interface IPersistFile
+	{
+		void GetClassID(out Guid pClassID);
+		[PreserveSig]
+		int IsDirty();
+		void Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, uint dwMode);
+		void Save([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, bool fRemember);
+		void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+		void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+	}
+
+	[DllImport("shell32.dll")]
+	private static extern int SHGetNameFromIDList(IntPtr pidl, int sigdnName, out IntPtr ppszName);
+
+	[DllImport("ole32.dll")]
+	private static extern void CoTaskMemFree(IntPtr pv);
+
+	[ComImport, Guid("2e941141-7f97-4756-ba1d-9decde894a3d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+	private interface IApplicationActivationManager
+	{
+		[PreserveSig]
+		int ActivateApplication([MarshalAs(UnmanagedType.LPWStr)] string appUserModelId, [MarshalAs(UnmanagedType.LPWStr)] string arguments, int options, out uint processId);
+	}
+
+	[ComImport, Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
+	private class ApplicationActivationManager
+	{
+	}
+
+	// 从快捷方式 IDList 读取解析名：MSIX 快捷方式返回 AUMID（Family!AppId），普通快捷方式返回文件路径。
+	private static string ShortcutAumidFromIdList(string path)
+	{
+		object link = null;
+		IntPtr pidl = IntPtr.Zero;
+		try
+		{
+			link = new ShellLink();
+			((IPersistFile)link).Load(path, 0u);
+			((IShellLinkW)link).GetIDList(out pidl);
+			if (pidl == IntPtr.Zero)
+			{
+				return "";
+			}
+			if (SHGetNameFromIDList(pidl, unchecked((int)0x80028000), out IntPtr name) != 0 || name == IntPtr.Zero)
+			{
+				return "";
+			}
+			string text = Marshal.PtrToStringUni(name) ?? "";
+			CoTaskMemFree(name);
+			// 只接受 AUMID 形态，避免把普通目标路径误当 AUMID。
+			return (text.IndexOf('!') > 0 && text.IndexOf('\\') < 0 && text.IndexOf('/') < 0) ? text : "";
+		}
+		catch
+		{
+			return "";
+		}
+		finally
+		{
+			if (pidl != IntPtr.Zero)
+			{
+				CoTaskMemFree(pidl);
+			}
+			if (link != null && Marshal.IsComObject(link))
+			{
+				Marshal.ReleaseComObject(link);
+			}
+		}
+	}
+
+	// 启动 MSIX/UWP 应用（返回新进程 pid，失败返回 0）。比 explorer shell:AppsFolder 更直接，且能拿到 pid。
+	public static int ActivateApplication(string aumid)
+	{
+		if (string.IsNullOrWhiteSpace(aumid))
+		{
+			return 0;
+		}
+		try
+		{
+			IApplicationActivationManager manager = (IApplicationActivationManager)new ApplicationActivationManager();
+			int hr = manager.ActivateApplication(aumid, null, 0, out uint pid);
+			return (hr >= 0) ? (int)pid : 0;
+		}
+		catch
+		{
+			return 0;
+		}
+	}
+
 	// 读取 .lnk 快捷方式的 AppUserModelID（失败或非快捷方式返回空串）
 	public static string ShortcutAumid(string path)
+	{
+		string aumid = ShortcutAumidStore(path);
+		if (!string.IsNullOrEmpty(aumid))
+		{
+			return aumid;
+		}
+		try
+		{
+			if (Path.GetExtension(path ?? "").Equals(".lnk", StringComparison.OrdinalIgnoreCase))
+			{
+				return ShortcutAumidFromIdList(path);
+			}
+		}
+		catch
+		{
+		}
+		return "";
+	}
+
+	private static string ShortcutAumidStore(string path)
 	{
 		try
 		{
