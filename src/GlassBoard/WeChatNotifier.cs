@@ -98,14 +98,10 @@ namespace GlassBoard
 		private static int workAreaTick;
 		private static Timer idleTimer;
 
-		// —— 诊断计数器（阶段 2/3 用）——
-		private static long rawShowHideCount;
-		private static long rawFgCount;
-		private static long rawLocCount;
+		// —— 事件计数（仅保留低频业务计数；诊断计数器已删除：每秒数百事件的锁与
+		// 写盘会对 UI 线程造成持续压力，表现为鼠标偶发卡顿）——
 		private static long weixinEventCount;
 		private static long shellFlashCount;
-		private static int rawSampleSeq;
-		private static int lastHeartbeatTick;
 		private static Dictionary<IntPtr, int> diagTick = new Dictionary<IntPtr, int>();
 
 		// Shell Hook（HSHELL_FLASH 备用路径）
@@ -331,49 +327,6 @@ namespace GlassBoard
 			}
 		}
 
-		private static void CountRaw(int kind)
-		{
-			// kind: 0=showhide 1=fg 2=loc
-			lock (gate)
-			{
-				if (kind == 0)
-				{
-					rawShowHideCount++;
-				}
-				else if (kind == 1)
-				{
-					rawFgCount++;
-				}
-				else
-				{
-					rawLocCount++;
-				}
-				int now = Environment.TickCount;
-				if (now - lastHeartbeatTick > 60000)
-				{
-					lastHeartbeatTick = now;
-					Store.Trace("WEIXIN raw totals showHide=" + rawShowHideCount + " fg=" + rawFgCount
-						+ " loc=" + rawLocCount + " weixinEvts=" + weixinEventCount + " flashes=" + shellFlashCount);
-				}
-			}
-		}
-
-		private static void SampleRaw(uint evt, IntPtr hwnd, int idObject, uint pid, string cls)
-		{
-			// 阶段 2：原始事件抽样（前 20 条 + 每 250 条 1 条），证明回调在跑
-			int seq;
-			lock (gate)
-			{
-				rawSampleSeq++;
-				seq = rawSampleSeq;
-			}
-			if (seq <= 20 || seq % 250 == 0)
-			{
-				Store.Trace("WEIXIN raw sample #" + seq + " evt=0x" + evt.ToString("X") + " hwnd=" + hwnd
-					+ " idObject=" + idObject + " pid=" + pid + " class=" + cls);
-			}
-		}
-
 		private static void OnShowHideEvent(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
 		{
 			try
@@ -384,10 +337,8 @@ namespace GlassBoard
 				}
 				uint pid;
 				GetWindowThreadProcessId(hwnd, out pid);
-				CountRaw(0);
-				StringBuilder cls = new StringBuilder(128);
-				GetClassName(hwnd, cls, 128);
-				SampleRaw(evt, hwnd, idObject, pid, cls.ToString());
+				// 先按 pid 过滤再碰窗口名/样式：非微信窗口只花 1 次 P/Invoke + 1 次集合查询，
+				// 微信活跃时该回调每秒上百次，多余分配与锁都是 UI 线程负担。
 				if (idObject != OBJID_WINDOW || pid == 0 || !IsWeixinPid(pid))
 				{
 					return;
@@ -421,7 +372,6 @@ namespace GlassBoard
 				}
 				uint pid;
 				GetWindowThreadProcessId(hwnd, out pid);
-				CountRaw(2);
 				if (idObject != OBJID_WINDOW || pid == 0 || !IsWeixinPid(pid))
 				{
 					return;
@@ -481,10 +431,6 @@ namespace GlassBoard
 				}
 				uint pid;
 				GetWindowThreadProcessId(hwnd, out pid);
-				CountRaw(1);
-				StringBuilder cls = new StringBuilder(128);
-				GetClassName(hwnd, cls, 128);
-				SampleRaw(evt, hwnd, idObject, pid, cls.ToString());
 				if (pid == 0 || !IsWeixinPid(pid))
 				{
 					return;

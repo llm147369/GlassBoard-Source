@@ -65,6 +65,8 @@ public static class RunningWindows
 
 	private static readonly List<RunningWindow> explorerFolders = new List<RunningWindow>();
 
+	private static string lastFolderTraceSig;
+
 	private static readonly BoundedCache<string, TargetInfo> targets = new BoundedCache<string, TargetInfo>(192, StringComparer.OrdinalIgnoreCase);
 
 	private static readonly BoundedCache<string, long> last = new BoundedCache<string, long>(192, StringComparer.OrdinalIgnoreCase);
@@ -95,6 +97,7 @@ public static class RunningWindows
 	private static int trayScanTick = int.MinValue;
 
 	private static int trayInFlight;
+	private static int windowsInFlight;
 
 	private static bool maintenanceStarted;
 
@@ -188,6 +191,17 @@ public static class RunningWindows
 		}
 		Resolve(entry);
 		string[] paths = WindowActivationRules.Executables(entry);
+		// Wallpaper Engine：wallpaper64/wallpaperservice64 的窗口是壁纸渲染/事件层（挂 WorkerW，
+		// ShowWindow 拉出来就错位成右上角空白块），绝不当作可恢复主窗。入口点击走启动转发：
+		// Wallpaper Engine 单实例再启动 = 打开设置窗口（等效托盘点击）。
+		foreach (string p in paths)
+		{
+			string fn = Path.GetFileNameWithoutExtension(p);
+			if (fn.Equals("wallpaper64", StringComparison.OrdinalIgnoreCase) || fn.Equals("wallpaperservice64", StringComparison.OrdinalIgnoreCase))
+			{
+				return hidden;
+			}
+		}
 		HashSet<string> fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		foreach (string text in paths)
 		{
@@ -629,30 +643,22 @@ public static class RunningWindows
 		return "";
 	}
 
+	// UI 线程入口：只吃缓存或触发后台刷新，绝不同步枚举窗口。
+	// 背景：ScanWindowsCore 的 EnumWindows + GetWindowText 会对每个可见窗口跨进程
+	// 同步发 WM_GETTEXT 等待，任一窗口忙碌（Electron 冷启动、资源管理器加载缩略图等）
+	// 都会把等待时间直接摊在 UI 线程上——这是"时不时卡 1 秒"的头号来源。
+	// 刷新数据由 StartMaintenance 的 2.5 秒后台线程与 RefreshAsync 兜底。
 	public static void Scan()
 	{
-		Stopwatch timer = Stopwatch.StartNew();
 		int tick = Environment.TickCount;
 		lock (scanGate)
 		{
 			if (tick - windowsScanTick >= 0 && tick - windowsScanTick < WindowsFreshMs)
 			{
-				return; // 1.2 秒内的重复调用直接吃缓存（右键菜单 / 点击 / 刷新共用）
+				return; // 1.2 秒内缓存新鲜：直接吃
 			}
 		}
-		ScanWindowsCore();
-		lock (scanGate)
-		{
-			if (tick - processesScanTick < 0 || tick - processesScanTick >= ProcessesFreshMs)
-			{
-				ScanProcessesCore();
-			}
-		}
-		timer.Stop();
-		if (timer.ElapsedMilliseconds > 60)
-		{
-			Store.Trace("SCAN slow ms=" + timer.ElapsedMilliseconds);
-		}
+		RefreshAsync(); // 后台线程刷新，UI 立即返回
 	}
 
 	// —— 后台维护：2.5 秒一拍的窗口索引刷新，UI 线程永不参与窗口枚举 ——
@@ -704,23 +710,41 @@ public static class RunningWindows
 
 	private static void RefreshCore()
 	{
-		int tick = Environment.TickCount;
-		bool doWindows;
-		bool doProcesses;
 		lock (scanGate)
 		{
-			doWindows = tick - windowsScanTick < 0 || tick - windowsScanTick >= WindowsFreshMs / 2;
-			doProcesses = tick - processesScanTick < 0 || tick - processesScanTick >= ProcessesFreshMs;
+			if (windowsInFlight > 0)
+			{
+				return; // 单飞：维护线程与异步刷新并发触发时只跑一轮
+			}
+			windowsInFlight++;
 		}
-		if (doWindows)
+		try
 		{
-			ScanWindowsCore();
+			int tick = Environment.TickCount;
+			bool doWindows;
+			bool doProcesses;
+			lock (scanGate)
+			{
+				doWindows = tick - windowsScanTick < 0 || tick - windowsScanTick >= WindowsFreshMs / 2;
+				doProcesses = tick - processesScanTick < 0 || tick - processesScanTick >= ProcessesFreshMs;
+			}
+			if (doWindows)
+			{
+				ScanWindowsCore();
+			}
+			if (doProcesses)
+			{
+				ScanProcessesCore();
+			}
+			KickTrayRefresh();
 		}
-		if (doProcesses)
+		finally
 		{
-			ScanProcessesCore();
+			lock (scanGate)
+			{
+				windowsInFlight--;
+			}
 		}
-		KickTrayRefresh();
 	}
 
 	// 第一遍：可见窗口枚举（原 Scan 主体；与托盘窗口合并后整体换入）。
@@ -842,7 +866,17 @@ public static class RunningWindows
 		}
 		if (folders.Count > 0)
 		{
-			Store.Trace("FOLDER scan count=" + folders.Count + " first=" + folders[0].Title);
+			// 只在集合变化时打一条（集合不变时后台每 2.5s 一拍，全量刷屏只会徒增写盘）
+			string sig = string.Join(",", folders.Select((RunningWindow w) => w.Handle.ToInt64()));
+			if (!string.Equals(sig, lastFolderTraceSig, StringComparison.Ordinal))
+			{
+				lastFolderTraceSig = sig;
+				Store.Trace("FOLDER scan count=" + folders.Count + " first=" + folders[0].Title);
+			}
+		}
+		else if (lastFolderTraceSig != null)
+		{
+			lastFolderTraceSig = null;
 		}
 		if (RenderDiagnostics.Verbose)
 		{
@@ -1108,6 +1142,14 @@ public static class RunningWindows
 				return true;
 			}
 			string exeName = Path.GetFileNameWithoutExtension(value3);
+			// Wallpaper Engine 的渲染/事件层进程（wallpaper64/wallpaperservice64）：
+			// 它们的主窗是壁纸渲染层（挂 WorkerW，恢复显示=错位的空白块），
+			// 绝不收进托盘窗口列表——入口点击走启动转发（单实例再启动=打开设置窗口）。
+			// 运行圆点由 UpdateRunning 的 TrayMatches 按托盘图标名兜底。
+			if (exeName.Equals("wallpaper64", StringComparison.OrdinalIgnoreCase) || exeName.Equals("wallpaperservice64", StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
 			if (SystemSoftwareExeNames.Contains(exeName) || SubprocessExeNames.Contains(exeName))
 			{
 				return true;
@@ -1256,11 +1298,27 @@ public static class RunningWindows
 
 	private static List<string> TrayNames()
 	{
-		if (Environment.TickCount - trayNameCacheTick < 5000 && trayNameCache.Count > 0)
+		int tick = Environment.TickCount;
+		// 5 秒短节流：托盘名读取是跨进程 UIA 调用，绝不高频执行；
+		// 只由后台扫描线程驱动（8s 节拍），溢出岛被用户展开时自然能读到名字。
+		if (tick - trayNameCacheTick >= 0 && tick - trayNameCacheTick < 5000)
 		{
 			return trayNameCache;
 		}
-		trayNameCacheTick = Environment.TickCount;
+		trayNameCacheTick = tick;
+		List<string> names = TrayNamesQuick();
+		if (names.Count > 0)
+		{
+			trayNameCache = names;
+		}
+		// 读不到时沿用旧缓存（60 秒内）：运行圆点不闪。
+		// 超过 60 秒仍读不到说明托盘从未展开/系统无溢出岛，缓存保留旧值，
+		// 圆点兜底主要靠 TrayHostPids 的进程路径匹配。
+		return trayNameCache;
+	}
+
+	private static List<string> TrayNamesQuick()
+	{
 		List<string> names = new List<string>();
 		try
 		{
@@ -1316,8 +1374,101 @@ public static class RunningWindows
 		catch
 		{
 		}
-		trayNameCache = names;
 		return names;
+	}
+
+	// 入口是否匹配托盘常驻图标：托盘名与入口名/可执行名互含，或托盘宿主进程路径匹配入口可执行集。
+	// 只读缓存（trayNameCache/TrayHostPids），绝不触发 UIA/枚举——供 UpdateRunning 兜底判定"托盘程序在跑"。
+	private sealed class TrayMatchInfo
+	{
+		public bool Result;
+		public int Tick;
+	}
+
+	private static readonly Dictionary<string, TrayMatchInfo> trayMatchCache = new Dictionary<string, TrayMatchInfo>();
+
+	public static bool TrayMatches(Entry entry)
+	{
+		if (entry == null || entry.IsFolder || string.IsNullOrEmpty(entry.Path))
+		{
+			return false;
+		}
+		int tick = Environment.TickCount;
+		// 30 秒结果缓存：UpdateRunning 每秒 tick 对每个图标调用，缓存后每图标每 30 秒
+		// 最多算一次（字符串匹配 + 3s 节流的宿主进程快照），UI 线程零压力。
+		lock (trayMatchCache)
+		{
+			if (trayMatchCache.TryGetValue(entry.Path, out TrayMatchInfo cached) && tick - cached.Tick >= 0 && tick - cached.Tick < 30000)
+			{
+				return cached.Result;
+			}
+		}
+		bool result = false;
+		try
+		{
+			Resolve(entry);
+			string name = entry.Name ?? "";
+			string targetName = Path.GetFileNameWithoutExtension(entry.Path) ?? "";
+			HashSet<string> hostNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			foreach (string p in WindowActivationRules.Executables(entry))
+			{
+				string fn = Path.GetFileNameWithoutExtension(p);
+				if (!string.IsNullOrEmpty(fn))
+				{
+					hostNames.Add(fn);
+				}
+			}
+			if (hostNames.Count == 0 && !string.IsNullOrEmpty(targetName))
+			{
+				hostNames.Add(targetName);
+			}
+			// 只读缓存名单（托盘名只在溢出岛可见时由后台扫描刷新，UI 线程零 UIA）
+			foreach (string tn in trayNameCache)
+			{
+				if (tn.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(tn, StringComparison.OrdinalIgnoreCase) >= 0 || tn.IndexOf(targetName, StringComparison.OrdinalIgnoreCase) >= 0)
+				{
+					result = true;
+					break;
+				}
+			}
+			if (!result)
+			{
+				foreach (uint pid in TrayHostPids())
+				{
+					try
+					{
+						using (Process proc = Process.GetProcessById((int)pid))
+						{
+							string fn = Path.GetFileNameWithoutExtension(proc.ProcessName);
+							if (!string.IsNullOrEmpty(fn) && hostNames.Contains(fn))
+							{
+								result = true;
+								break;
+							}
+						}
+					}
+					catch
+					{
+					}
+					if (result)
+					{
+						break;
+					}
+				}
+			}
+		}
+		catch
+		{
+		}
+		lock (trayMatchCache)
+		{
+			trayMatchCache[entry.Path] = new TrayMatchInfo
+			{
+				Result = result,
+				Tick = tick
+			};
+		}
+		return result;
 	}
 
 	private static void CollectToolbarNames(IntPtr parent, List<string> names)
@@ -1988,6 +2139,49 @@ public static class RunningWindows
 				return true;
 			}
 		}
+		// 豆包（Electron 托盘应用）特例：主窗隐藏（关闭到托盘/大退）时，外部 ShowWindow
+		// 恢复链只能唤醒 Win32 壳，Electron 客户区点击无响应（与微信 4.0"半死窗口"同病，
+		// 实测恢复一个刚收到 WM_CLOSE 的销毁期窗口更是直接顶出僵尸窗）。
+		// 可靠路径=托盘点击重放，失败则单实例启动转发（等效托盘点击，豆包自己走完整恢复）。
+		if (entryPath.IndexOf("Doubao", StringComparison.OrdinalIgnoreCase) >= 0 ||
+			entryTarget.IndexOf("Doubao", StringComparison.OrdinalIgnoreCase) >= 0)
+		{
+			List<RunningWindow> doubaoHidden = ForHidden(entry);
+			if (doubaoHidden.Any((RunningWindow w) => !IsWindowVisible(w.Handle)))
+			{
+				Store.Trace("ACTIVATE doubao hidden-main → tray/launch-forward path");
+				string launchTarget3 = entryTarget;
+				Task.Run(delegate
+				{
+					try
+					{
+						IntPtr notifyHost = FindNotifyIconHost(doubaoHidden[0].Path ?? "");
+						if (notifyHost != IntPtr.Zero)
+						{
+							List<IntPtr> watch = new List<IntPtr>();
+							foreach (RunningWindow w in doubaoHidden)
+							{
+								watch.Add(w.Handle);
+							}
+							if (TrayWakeElectron(notifyHost, watch, ProcessPath(doubaoHidden[0].ProcessId) ?? ""))
+							{
+								return;
+							}
+						}
+						Store.Trace("ACTIVATE doubao tray wake failed → launch forward");
+						string target = string.IsNullOrEmpty(launchTarget3) ? entryPath : launchTarget3;
+						if (!string.IsNullOrEmpty(target))
+						{
+							System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true });
+						}
+					}
+					catch (Exception)
+					{
+					}
+				});
+				return true;
+			}
+		}
 		List<RunningWindow> list = For(entry);
 		if (list.Count == 0)
 		{
@@ -2086,22 +2280,46 @@ public static class RunningWindows
 									}
 								}
 							}
-							if (main != IntPtr.Zero)
+						if (main != IntPtr.Zero)
+						{
+							// 活性校验：不恢复垂死窗口（WM_CLOSE 销毁期 / 进程已退出 / 未响应），
+							// 否则会顶出一个显示但无法交互的僵尸窗口。校验失败走启动转发。
+							uint pidCheck = 0u;
+							GetWindowThreadProcessId(main, out pidCheck);
+							bool alive = IsWindow(main) && pidCheck != 0u;
+							if (alive)
 							{
-								Store.Trace("ACTIVATE hidden-main restore hwnd=" + main.ToInt64());
-								// RestoreAndForeground 自带隐藏窗显示链+前台抢占链（原 inline 三段链合并于此）。
-								RestoreAndForeground(main);
-							}
-							else
-							{
-								// 找不到可恢复主窗：退回启动转发（等效旧代码返回 false → 调用方 Process.Start）。
-								string target = string.IsNullOrEmpty(launchTarget2) ? launchPath : launchTarget2;
-								if (!string.IsNullOrEmpty(target))
+								try
 								{
-									Store.Trace("ACTIVATE hidden-restore fallback launch target=" + target);
-									System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true });
+									alive = System.Diagnostics.Process.GetProcessById((int)pidCheck) != null;
+								}
+								catch (Exception)
+								{
+									alive = false;
 								}
 							}
+							if (!alive || IsHungAppWindow(main))
+							{
+								Store.Trace("ACTIVATE hidden-main stale window skipped hwnd=" + main.ToInt64());
+								main = IntPtr.Zero;
+							}
+						}
+						if (main != IntPtr.Zero)
+						{
+							Store.Trace("ACTIVATE hidden-main restore hwnd=" + main.ToInt64());
+							// RestoreAndForeground 自带隐藏窗显示链+前台抢占链（原 inline 三段链合并于此）。
+							RestoreAndForeground(main);
+						}
+						else
+						{
+							// 找不到可恢复主窗：退回启动转发（等效旧代码返回 false → 调用方 Process.Start）。
+							string target = string.IsNullOrEmpty(launchTarget2) ? launchPath : launchTarget2;
+							if (!string.IsNullOrEmpty(target))
+							{
+								Store.Trace("ACTIVATE hidden-restore fallback launch target=" + target);
+								System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true });
+							}
+						}
 						}
 						catch (Exception)
 						{

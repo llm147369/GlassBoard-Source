@@ -751,10 +751,14 @@ public class Controller
 		}
 	}
 
-	public void Refresh()
+	public void Refresh(HashSet<string> popKeys = null)
 	{
 		Save();
-		Dock.Refresh();
+		// 图标集合/顺序变化：宽度与内容立即到位（宽度动画每帧驱动整行图标重排，
+		// 是“来回抖”的根源），窗口水平位置平滑滑动承接宽度变化；
+		// popKeys 里的新增图标走弹入动画（0.25 → 1.0，悬停引擎同一套平滑管线）。
+		// 不重捕壁纸背景（玻璃层没变，重烘只会闪一下）。
+		Dock.Refresh(capture: false, animate: true, popKeys: popKeys);
 		Board.SyncGroups();
 		Board.Render();
 		RefreshWidgets();
@@ -906,7 +910,7 @@ public class Controller
 			}
 		}
 		Save();
-		Dock.Refresh(capture: false);
+		Dock.Refresh(capture: false, animate: false);
 	}
 
 	public void ChooseSystemIconImage(string kind)
@@ -944,7 +948,7 @@ public class Controller
 			Prefs.SystemIconImages[kind] = stored;
 			Prefs.SystemIconGlyphs.Remove(kind);
 			Save();
-			Dock.Refresh(capture: false);
+			Dock.Refresh(capture: false, animate: false);
 		}
 		catch (Exception ex)
 		{
@@ -1104,6 +1108,7 @@ public class Controller
 		}
 		BoardEditState before = BeginBoardEdit();
 		int num = 0;
+		HashSet<string> addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		foreach (string path2 in paths)
 		{
 			string path = EntryPathRules.Normalize(path2);
@@ -1137,6 +1142,10 @@ public class Controller
 				// 手动拖入：跟随当前分组；桌面自动读取：自动识别分组（识别不出 = 未分组）
 				entry2.Group = FeatureRules.ImportGroup(Prefs, entry2, manual ? targetGroup : null);
 				Prefs.Apps.Add(entry2);
+				if (manual)
+				{
+					addedPaths.Add(path);
+				}
 				num++;
 			}
 		}
@@ -1145,7 +1154,7 @@ public class Controller
 			EndBoardEdit(before, "添加入口");
 			if (manual)
 			{
-				Refresh();
+				Refresh(addedPaths.Count > 0 ? addedPaths : null);
 			}
 			else
 			{
@@ -1540,7 +1549,10 @@ public class Controller
 		BoardEditState before = BeginBoardEdit();
 		a.Pinned = !a.Pinned;
 		EndBoardEdit(before, "调整 Dock 固定");
-		Refresh();
+		Refresh(a.Pinned ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+		{
+			a.Path
+		} : null);
 	}
 
 	private static IEnumerable<string> Shortcuts(string root)
@@ -4837,7 +4849,7 @@ public class Controller
 			}
 		}
 		EndBoardEdit(before, "拖入 Dock 固定");
-		Dock.Refresh(capture: false);
+		Dock.Refresh(capture: false, animate: true, popKeys: (dockPinResult.Paths.Count > 0 ? new HashSet<string>(dockPinResult.Paths, StringComparer.OrdinalIgnoreCase) : null));
 		Board.Render();
 		Board.SetStatus((dockPinResult.Paths.Count == 0) ? "未添加入口" : ("已放入 Dock " + dockPinResult.Paths.Count + " 个 · Ctrl+Z 撤销" + ((dockPinResult.Skipped > 0) ? ("；已达 20 个上限，跳过 " + dockPinResult.Skipped + " 个") : "")));
 		return dockPinResult;
@@ -6183,7 +6195,7 @@ public class Controller
 			return false;
 		}
 		EndBoardEdit(before2, "调整 Dock 顺序");
-		Dock.Refresh(capture: false);
+		Dock.Refresh(capture: false, animate: false);
 		Board.Render();
 		return true;
 	}
@@ -6194,7 +6206,7 @@ public class Controller
 		if (Dock.StepLayout(path, step))
 		{
 			EndBoardEdit(before, "调整 Dock 顺序");
-			Dock.Refresh(capture: false);
+			Dock.Refresh(capture: false, animate: false);
 			Board.Render();
 		}
 	}
@@ -6235,7 +6247,7 @@ public class Controller
 			return;
 		}
 		Store.Save(Prefs);
-		Dock.Refresh(capture: false);
+		Dock.Refresh(capture: false, animate: true);
 	}
 
 	private void AddDockWindowMenus(System.Windows.Controls.ContextMenu menu, Entry entry)

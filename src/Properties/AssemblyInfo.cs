@@ -3,6 +3,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 [assembly: AssemblyTitle("GlassBoard-Source")]
-[assembly: AssemblyFileVersion("0.9.22.0")]
-[assembly: AssemblyVersion("0.9.22.0")]
+[assembly: AssemblyFileVersion("0.9.22.1")]
+[assembly: AssemblyVersion("0.9.22.1")]
 

@@ -50,6 +50,7 @@ public static class DesktopCoverGuard
 			};
 			timer.Tick += delegate
 			{
+				bool wasRaised = raised;
 				if (!raised)
 				{
 					for (int i = 0; i < Windows.Count; i++)
@@ -96,18 +97,13 @@ public static class DesktopCoverGuard
 						relaxTicks = 0;
 					}
 				}
-				if (raised)
+				// 只在 raised 状态翻转的瞬间 apply 一次——状态稳定时重复 SetWindowPos
+				// 每 150ms 对全部窗口制造无效的重排/渲染压力（WM_TIMER 100-199 桶大头来源）。
+				if (raised != wasRaised)
 				{
 					for (int i = 0; i < Windows.Count; i++)
 					{
-						Windows[i].apply(true);
-					}
-				}
-				else
-				{
-					for (int i = 0; i < Windows.Count; i++)
-					{
-						Windows[i].apply(false);
+						Windows[i].apply(raised);
 					}
 				}
 			};

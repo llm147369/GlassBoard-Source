@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -14,6 +15,12 @@ namespace GlassBoard;
 // 这里改成不依赖焦点机制：全局低级鼠标钩子监听按下事件，点击落在面板窗口矩形之外
 // 且不在任何打开的 Popup（右键菜单/搜索下拉/预览浮层）内时，才触发各窗口的收起回调。
 // Win+D 不产生鼠标点击，因此永远不会误收；点击面板内部/菜单/下拉框也都安全。
+//
+// 线程模型（重要）：WH_MOUSE_LL 钩子挂在专用后台消息泵线程（glassboard-mousehook），
+// 绝不挂在 UI 线程——UI 线程消息泵被渲染时钟/DispatcherTimer 灌满时，LL 回调排队等待
+// 会导致全系统鼠标移动延迟（"鼠标突然卡顿"），且回调超时触发 LowLevelHooksTimeout
+// 静默摘钩 → 心跳重装 → 全局钩子链调整再次卡鼠标。钩子线程回调只做零 WPF 访问的最小
+// 工作（存活打点 + BeginInvoke 投递），全部命中判定移入 UI 线程复核。
 public static class PanelDismissGuard
 {
 	private delegate IntPtr LowLevelMouseProc(int code, IntPtr wParam, IntPtr lParam);
@@ -28,7 +35,92 @@ public static class PanelDismissGuard
 
 	private static IntPtr hook;
 
-	private static DispatcherTimer heartbeat;
+	private static Thread hookThread;
+
+	private static volatile bool hookThreadQuit;
+
+	private static readonly object hookGate = new object();
+
+	// 最近一次有鼠标事件经过本钩子的时刻：钩子活着时事件流不会断。
+	private static volatile int lastMouseTick;
+
+	private static void EnsureHook()
+	{
+		lock (hookGate)
+		{
+			if (hookThread != null && hookThread.IsAlive)
+			{
+				return;
+			}
+			hookThreadQuit = false;
+			hookThread = new Thread(HookPump)
+			{
+				IsBackground = true,
+				Name = "glassboard-mousehook"
+			};
+			hookThread.Start();
+		}
+	}
+
+	// 钩子线程体：装钩子 → 消息泵循环（GetMessage）→ 线程内 WM_TIMER(10s) 心跳自愈。
+	// 钩子在程序存活期间常驻（Windows/Popups 空时回调空转，成本可忽略），
+	// 避免摘/挂 LL 钩子的瞬间系统调整全局钩子链让所有鼠标消息短暂排队。
+	private static void HookPump()
+	{
+		try
+		{
+			hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
+			if (hook == IntPtr.Zero)
+			{
+				Store.Trace("PDG hook install failed");
+				return;
+			}
+			lastMouseTick = Environment.TickCount;
+			Store.Trace("PDG hook thread started");
+			IntPtr wakeTimer = SetTimer(IntPtr.Zero, (IntPtr)1, 10000u, IntPtr.Zero);
+			MSG msg;
+			while (!hookThreadQuit && GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
+			{
+				if (msg.message == 0x0113 && msg.wParam == (IntPtr)1)
+				{
+					// 心跳自愈：全局低级钩子回调若超时，系统会静默摘除钩子且无通知
+					// （LowLevelHooksTimeout）。钩子活着时每 10 秒都会经过鼠标事件
+					// （lastMouseTick 更新），此时绝不重装。只有 10 秒内无事件（疑似被
+					// 摘除）才重装，保证自愈能力不变。
+					if (Windows.Count == 0 && Popups.Count == 0)
+					{
+						continue;
+					}
+					if (Environment.TickCount - lastMouseTick < 10000)
+					{
+						continue; // 钩子活着：不重装
+					}
+					UnhookWindowsHookEx(hook);
+					hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
+					lastMouseTick = Environment.TickCount;
+					Store.Trace("PDG hook reinstalled");
+					continue;
+				}
+				TranslateMessage(ref msg);
+				DispatchMessage(ref msg);
+			}
+			KillTimer(IntPtr.Zero, wakeTimer);
+		}
+		catch (Exception e)
+		{
+			Store.Trace("PDG hook thread error: " + e.Message);
+		}
+		finally
+		{
+			if (hook != IntPtr.Zero)
+			{
+				UnhookWindowsHookEx(hook);
+				hook = IntPtr.Zero;
+			}
+			hookThread = null;
+			Store.Trace("PDG hook thread exited");
+		}
+	}
 
 	public static void Track(Window win, Action dismiss)
 	{
@@ -38,38 +130,8 @@ public static class PanelDismissGuard
 		win.Closed += (object s, EventArgs e) =>
 		{
 			Windows.RemoveAll(p => ReferenceEquals(p.win, win));
-			if (Windows.Count == 0 && hook != IntPtr.Zero)
-			{
-				UnhookWindowsHookEx(hook);
-				hook = IntPtr.Zero;
-			}
 		};
-		if (hook == IntPtr.Zero)
-		{
-			hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
-		}
-		// 心跳重装：全局低级钩子回调若因 UI 线程繁忙超时，系统会静默摘除钩子且无通知
-		// （LowLevelHooksTimeout）。定期重装保证摘除后自动恢复，面板收起永不永久失效。
-		if (heartbeat == null)
-		{
-			heartbeat = new DispatcherTimer(DispatcherPriority.Background)
-			{
-				Interval = TimeSpan.FromSeconds(5.0)
-			};
-			heartbeat.Tick += delegate
-			{
-				if (Windows.Count == 0 && Popups.Count == 0)
-				{
-					return;
-				}
-				if (hook != IntPtr.Zero)
-				{
-					UnhookWindowsHookEx(hook);
-				}
-				hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
-			};
-			heartbeat.Start();
-		}
+		EnsureHook();
 	}
 
 	// 追踪一个 Popup：点击浮层外任意位置时触发 dismiss（Popup 本身的位置由 InOpenPopup 判定）。
@@ -79,44 +141,32 @@ public static class PanelDismissGuard
 		popup.Closed += (object s, EventArgs e) =>
 		{
 			Popups.RemoveAll(p => ReferenceEquals(p.popup, popup));
-			if (Windows.Count == 0 && Popups.Count == 0 && hook != IntPtr.Zero)
-			{
-				UnhookWindowsHookEx(hook);
-				hook = IntPtr.Zero;
-			}
 		};
-		if (hook == IntPtr.Zero)
-		{
-			hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
-		}
-		if (heartbeat == null)
-		{
-			heartbeat = new DispatcherTimer(DispatcherPriority.Background)
-			{
-				Interval = TimeSpan.FromSeconds(5.0)
-			};
-			heartbeat.Tick += delegate
-			{
-				if (Windows.Count == 0 && Popups.Count == 0)
-				{
-					return;
-				}
-				if (hook != IntPtr.Zero)
-				{
-					UnhookWindowsHookEx(hook);
-				}
-				hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
-			};
-			heartbeat.Start();
-		}
+		EnsureHook();
 	}
 
 	private static IntPtr OnMouse(int code, IntPtr wParam, IntPtr lParam)
 	{
-		if (code >= 0 && (wParam == (IntPtr)513 || wParam == (IntPtr)516))
+		if (code >= 0)
 		{
-			int x = Marshal.ReadInt32(lParam, 0);
-			int y = Marshal.ReadInt32(lParam, 4);
+			// 任何经过本钩子的鼠标事件都证明钩子仍挂在全局链上（供 heartbeat 判断存活）。
+			lastMouseTick = Environment.TickCount;
+			if (wParam == (IntPtr)513 || wParam == (IntPtr)516)
+			{
+				// 钩子线程绝不访问 WPF 对象（线程亲和）——坐标捕获 + 投递，判定在 UI 线程复核。
+				int x = Marshal.ReadInt32(lParam, 0);
+				int y = Marshal.ReadInt32(lParam, 4);
+				Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => DismissCheck(x, y)));
+			}
+		}
+		return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+	}
+
+	// UI 线程复核：全部 WPF 对象访问（IsVisible/IsOpen/视觉树）都在这里，钩子回调保持零亲和访问。
+	private static void DismissCheck(int x, int y)
+	{
+		try
+		{
 			bool inPopup = InOpenPopup(x, y);
 			bool inOwnWindow = HitIsOwnWindow(x, y);
 			for (int i = 0; i < Windows.Count; i++)
@@ -140,32 +190,29 @@ public static class PanelDismissGuard
 					continue;
 				}
 				Action dismiss = entry.dismiss;
-				entry.win.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+				try
 				{
 					// 面板持有键盘焦点时收起，焦点会被系统转移到壁纸层的 NOACTIVATE
 					// 窗口链（视频壁纸/第三方壁纸），转移失败播放系统提示音。
 					// 点击壁纸区域时前台已切走（GetForegroundWindow != 面板），但焦点
 					// 仍在面板内——所以按"焦点是否在面板内"判定，与前台无关。
 					// 收起前把焦点静默移到桌面图标列表（可接收焦点、不抢前台），杜绝提示音。
-					try
+					IntPtr hwnd = new WindowInteropHelper(entry.win).Handle;
+					if (hwnd != IntPtr.Zero && entry.win.IsKeyboardFocusWithin)
 					{
-						IntPtr hwnd = new WindowInteropHelper(entry.win).Handle;
-						if (hwnd != IntPtr.Zero && entry.win.IsKeyboardFocusWithin)
+						IntPtr prog = FindWindowNative("Progman", null);
+						IntPtr def = (prog != IntPtr.Zero) ? FindWindowExNative(prog, IntPtr.Zero, "SHELLDLL_DefView", null) : IntPtr.Zero;
+						IntPtr list = (def != IntPtr.Zero) ? FindWindowExNative(def, IntPtr.Zero, "SysListView32", null) : IntPtr.Zero;
+						if (list != IntPtr.Zero)
 						{
-							IntPtr prog = FindWindowNative("Progman", null);
-							IntPtr def = (prog != IntPtr.Zero) ? FindWindowExNative(prog, IntPtr.Zero, "SHELLDLL_DefView", null) : IntPtr.Zero;
-							IntPtr list = (def != IntPtr.Zero) ? FindWindowExNative(def, IntPtr.Zero, "SysListView32", null) : IntPtr.Zero;
-							if (list != IntPtr.Zero)
-							{
-								SetFocusNative(list);
-							}
+							SetFocusNative(list);
 						}
 					}
-					catch
-					{
-					}
-					dismiss();
-				}));
+				}
+				catch
+				{
+				}
+				dismiss();
 			}
 			// 弹出层（运行列表等）：点击浮层外任何位置（含 Dock 本体、桌面、其它应用）都收起。
 			// 判定用 inPopup（是否落在任意打开的 Popup 内）：落在本浮层或其右键菜单内不收起，其余一律收起。
@@ -176,22 +223,21 @@ public static class PanelDismissGuard
 				{
 					continue;
 				}
-				popup.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(delegate
+				try
 				{
-					try
+					if (popup.IsOpen)
 					{
-						if (popup.IsOpen)
-						{
-							dismiss();
-						}
+						dismiss();
 					}
-					catch
-					{
-					}
-				}));
+				}
+				catch
+				{
+				}
 			}
 		}
-		return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+		catch
+		{
+		}
 	}
 
 	private static bool HitIsOwnWindow(int x, int y)
@@ -267,13 +313,6 @@ public static class PanelDismissGuard
 	[DllImport("user32.dll", EntryPoint = "SetFocus")]
 	private static extern IntPtr SetFocusNative(IntPtr h);
 
-	[StructLayout(LayoutKind.Sequential)]
-	private struct POINT
-	{
-		public int x;
-		public int y;
-	}
-
 	[DllImport("user32.dll", SetLastError = true)]
 	[return: MarshalAs(UnmanagedType.Bool)]
 	private static extern bool UnhookWindowsHookEx(IntPtr hhk);
@@ -283,4 +322,39 @@ public static class PanelDismissGuard
 
 	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 	private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+	[DllImport("user32.dll")]
+	private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+	[DllImport("user32.dll")]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static extern bool TranslateMessage(ref MSG lpMsg);
+
+	[DllImport("user32.dll")]
+	private static extern IntPtr DispatchMessage(ref MSG lpmsg);
+
+	[DllImport("user32.dll")]
+	private static extern IntPtr SetTimer(IntPtr hWnd, IntPtr nIDEvent, uint uElapse, IntPtr lpTimerFunc);
+
+	[DllImport("user32.dll")]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static extern bool KillTimer(IntPtr hWnd, IntPtr uIDEvent);
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct POINT
+	{
+		public int x;
+		public int y;
+	}
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct MSG
+	{
+		public IntPtr hwnd;
+		public int message;
+		public IntPtr wParam;
+		public IntPtr lParam;
+		public int time;
+		public POINT pt;
+	}
 }

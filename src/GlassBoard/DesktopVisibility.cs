@@ -698,7 +698,7 @@ public static class DesktopVisibility
 		}
 		revealProc = OnReveal;
 		revealHook = SetWinEventHook(0x8002u, 0x8002u, IntPtr.Zero, revealProc, 0u, 0u, 0u);
-		Store.Trace("TASKBAR reveal hook=" + revealHook.ToInt64());
+		Store.Trace("TASKBAR reveal hook ret=" + (revealHook != IntPtr.Zero));
 	}
 
 	private static void UninstallRevealHook()

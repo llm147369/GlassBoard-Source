@@ -59,10 +59,17 @@ public static class NotificationCenter
 	private static HashSet<uint> lastIds = new HashSet<uint>();
 	private static bool histSeeded;
 	private static int histCheckRunning;
+	private static bool syncInFlight;
 	private static int lastHistCheckTick;
 
 	private static DispatcherTimer snapshotTimer;
 	private static System.Threading.Timer resyncTimer;
+
+	// UserNotificationListener 是线程仿射（STA）对象：任何跨线程调用都会 RPC 回创建它的
+	// STA 线程。为了"慢查询绝不拖 UI"，listener 在专用 STA 线程创建并常驻，所有 WinRT
+	// 查询（GetNotificationsAsync 等 Shell RPC，忙时 2-6 秒）都在该线程执行，UI 线程零负担。
+	private static Thread staThread;
+	private static Dispatcher staDispatcher;
 
 	// 灵动岛通知内容：事件路径与轮询对账路径共用同一推送入口，按系统通知 ID 去重；
 	// 初始快照只建立基线（历史通知不伪装成新消息）。诊断计数不含任何通知内容。
@@ -70,6 +77,50 @@ public static class NotificationCenter
 	private static int islandPushCount;
 	private static int islandSkipCount;
 	private static string islandMode = "未启动";
+	private static volatile string lastAccess = "未知"; // SyncSnapshot 在专用 STA 线程更新，UI 线程只读缓存
+
+	// 专用 STA 线程：创建一次，常驻到进程结束。
+	private static void EnsureSta()
+	{
+		if (staDispatcher != null)
+		{
+			return;
+		}
+		using (ManualResetEvent ready = new ManualResetEvent(false))
+		{
+			staThread = new Thread(new ThreadStart(delegate
+			{
+				staDispatcher = Dispatcher.CurrentDispatcher;
+				ready.Set();
+				Dispatcher.Run();
+			}));
+			staThread.SetApartmentState(ApartmentState.STA);
+			staThread.IsBackground = true;
+			staThread.Name = "glassboard-notify-sta";
+			staThread.Start();
+			ready.WaitOne();
+		}
+	}
+
+	// 在专用 STA 线程执行 WinRT 通知查询（线程池调用方阻塞等待，UI 线程完全不参与）。
+	private static T OnSta<T>(Func<T> fn)
+	{
+		EnsureSta();
+		Dispatcher d = staDispatcher;
+		if (d == null || d.HasShutdownStarted)
+		{
+			return default;
+		}
+		try
+		{
+			return (T)d.Invoke(fn);
+		}
+		catch (Exception ex)
+		{
+			Store.Trace("NOTIFY sta error " + ex.Message);
+			return default;
+		}
+	}
 
 	public static void Start(Controller c)
 	{
@@ -87,40 +138,62 @@ public static class NotificationCenter
 				Store.Trace("NOTIFY listener type not present (system too old)");
 				return;
 			}
-			listener = UserNotificationListener.Current;
-			UserNotificationListenerAccessStatus status = listener.GetAccessStatus();
-			Store.Trace("NOTIFY access status=" + status);
-			if (status == UserNotificationListenerAccessStatus.Unspecified)
-			{
-				// 首次运行：请求授权（API 要求 UI 线程，此处即 UI 线程；Wait 不会死锁，完成由系统 RPC 驱动）
-				Task<UserNotificationListenerAccessStatus> req = listener.RequestAccessAsync().AsTask();
-				if (!req.Wait(8000))
-				{
-					islandMode = "授权请求超时：请点“重新检查授权”重试";
-					Store.Trace("NOTIFY access request timeout");
-					return;
-				}
-				status = req.Result;
-				Store.Trace("NOTIFY access requested -> " + status);
-			}
-			if (status != UserNotificationListenerAccessStatus.Allowed)
-			{
-				islandMode = "未授权：请在 Windows 设置 → 隐私和安全性 → 通知 中允许“GlassBoard”读取通知，然后点“重新检查授权”";
-				Store.Trace("NOTIFY access denied — 通知红点停用（可在 Windows 设置里授权）");
-				return;
-			}
-			// 事件订阅优先：部分系统上 add_NotificationChanged 会抛 0x80070490（找不到元素，系统
-			// 通知事件代理缺失的已知问题），此时回退为轮询 GetNotificationsAsync 增量对账。
-			bool eventAvailable = false;
-			try
-			{
-				listener.NotificationChanged += OnNotificationChanged;
-				eventAvailable = true;
-			}
-			catch (Exception ex)
-			{
-				Store.Trace("NOTIFY event unavailable (" + ex.Message + ") — fallback to polling");
-			}
+            // listener 创建 / 授权 / 事件订阅全部在专用 STA 线程执行：
+            // 对象仿射该线程，之后所有查询（含慢查询）都只阻塞该线程。
+            EnsureSta();
+            (bool ok, UserNotificationListenerAccessStatus status, bool eventAvailable) init = OnSta(() =>
+            {
+                try
+                {
+                    listener = UserNotificationListener.Current;
+                    UserNotificationListenerAccessStatus st = listener.GetAccessStatus();
+                    Store.Trace("NOTIFY access status=" + st);
+                    if (st == UserNotificationListenerAccessStatus.Unspecified)
+                    {
+                        // 首次运行：请求授权（系统授权对话框由系统弹出，线程无关）
+                        Task<UserNotificationListenerAccessStatus> req = listener.RequestAccessAsync().AsTask();
+                        if (!req.Wait(8000))
+                        {
+                            Store.Trace("NOTIFY access request timeout");
+                            return (false, st, false);
+                        }
+                        st = req.Result;
+                        Store.Trace("NOTIFY access requested -> " + st);
+                    }
+                    bool ev = false;
+                    // 事件订阅优先：部分系统上 add_NotificationChanged 会抛 0x80070490
+                    // （找不到元素，系统通知事件代理缺失的已知问题），此时回退为轮询。
+                    try
+                    {
+                        listener.NotificationChanged += OnNotificationChanged;
+                        ev = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Store.Trace("NOTIFY event unavailable (" + ex.Message + ") — fallback to polling");
+                    }
+                    return (true, st, ev);
+                }
+                catch (Exception ex)
+                {
+                    Store.Trace("NOTIFY sta init error " + ex.Message);
+                    return (false, UserNotificationListenerAccessStatus.Denied, false);
+                }
+            });
+            if (!init.ok)
+            {
+                islandMode = listener == null ? "启动失败：通知监听初始化错误（详见日志）" : "授权请求超时：请点“重新检查授权”重试";
+                return;
+            }
+            UserNotificationListenerAccessStatus status = init.status;
+            if (status != UserNotificationListenerAccessStatus.Allowed)
+            {
+                islandMode = "未授权：请在 Windows 设置 → 隐私和安全性 → 通知 中允许“GlassBoard”读取通知，然后点“重新检查授权”";
+                Store.Trace("NOTIFY access denied — 通知红点停用（可在 Windows 设置里授权）");
+                return;
+            }
+            bool eventAvailable = init.eventAvailable;
+
 			// 成功路径才算“已启动”：失败后设置页可重新检查授权重试
 			started = true;
 			islandMode = (eventAvailable ? "事件模式" : "轮询模式") + "，运行正常";
@@ -138,8 +211,9 @@ public static class NotificationCenter
 			snapshotTimer.Start();
 			// 初始对账：只同步徽标状态与灵动岛基线，不播弹跳动画
 			Task.Run(() => SyncSnapshot(false));
-			// 周期对账：有事件时 60 秒兜底；无事件（轮询模式）时 3 秒一拍保持响应速度
-			int pollMs = eventAvailable ? 60000 : 3000;
+			// 周期对账：有事件时 60 秒兜底；无事件（轮询模式）时 10 秒一拍保持响应速度。
+			// 查询在线程池线程执行（SyncSnapshot 内不再 Dispatcher.Invoke），慢查询不拖 UI。
+			int pollMs = eventAvailable ? 60000 : 10000;
 			resyncTimer = new System.Threading.Timer(_ => SyncSnapshot(true), null, TimeSpan.FromMilliseconds(pollMs), TimeSpan.FromMilliseconds(pollMs));
 			Store.Trace("NOTIFY started event=" + eventAvailable + " pollMs=" + pollMs);
 		}
@@ -189,7 +263,8 @@ public static class NotificationCenter
 		{
 			if (item.Added)
 			{
-				UserNotification n = OnUi(() => listener.GetNotification(item.Id));
+				// GetNotification 仿射专用 STA 线程：经 OnSta 在该线程执行（线程池调用方等待）。
+				UserNotification n = OnSta(() => listener.GetNotification(item.Id));
 				if (n == null)
 				{
 					return; // 通知在取回前已被移除
@@ -289,7 +364,8 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 				}
 				return;
 			}
-			OnUi(() =>
+			// toast XML 解析是纯本地内存操作（无 WinRT 仿射），线程池线程直接执行，
+			// 不通过 Dispatcher.Invoke 排队——通知风暴时每条通知一次 Invoke 会持续拖 UI。
 			{
 				try
 				{
@@ -360,8 +436,7 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 				{
 					// 提取失败：不推送、不猜测（来源应用仍经红点归属链路处理）
 				}
-				return 0;
-			});
+			}
 		}
 		catch
 		{
@@ -371,18 +446,7 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 	// 灵动岛通知诊断：给设置页展示授权/模式/计数状态（不含任何通知内容）。
 	public static string IslandStatus()
 	{
-		string access = "未知";
-		try
-		{
-			UserNotificationListener l = listener;
-			if (l != null)
-			{
-				access = OnUi(() => l.GetAccessStatus()).ToString();
-			}
-		}
-		catch
-		{
-		}
+		string access = lastAccess; // 缓存值：GetAccessStatus 仿射专用 STA 线程，UI 线程绝不跨线程查询
 		int pushed;
 		int skipped;
 		lock (gate)
@@ -427,10 +491,19 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 	}
 
 	// 全量对账：与系统当前通知列表逐项比对，修正徽标状态。
-	// listener 是线程仿射（STA/UI）对象，跨线程调用会抛 RPC_E_WRONG_THREAD(0x8001010E)，
-	// 因此 WinRT 检索一律经 OnUi 在 UI 线程执行，差异计算仍留在后台线程。
+	// WinRT 通知查询（GetAccessStatus / GetNotificationsAsync / GetNotification）是 agile 调用，
+	// 在线程池线程直接执行；UI 更新由 ResolveAndDispatch / NotifyBadge 内部 BeginInvoke。
+	// 慢查询（Shell 通知服务 RPC 2-6 秒）因此绝不阻塞 UI 线程。
 	private static void SyncSnapshot(bool pulse)
 	{
+		lock (gate)
+		{
+			if (syncInFlight)
+			{
+				return; // 单飞：上一轮通知查询还没结束，不再叠拍（慢查询会排队阻塞 UI）
+			}
+			syncInFlight = true;
+		}
 		try
 		{
 			UserNotificationListener l = listener;
@@ -438,13 +511,19 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 			{
 				return;
 			}
-			if (OnUi(() => l.GetAccessStatus()) != UserNotificationListenerAccessStatus.Allowed)
+			// listener 仿射专用 STA 线程：查询经 OnSta 在该线程执行，
+			// 绝不通过 Dispatcher.Invoke 拖到 UI 线程——GetNotificationsAsync
+			// 要跨进程 RPC 拉全部 toast，Shell 通知服务忙时会阻塞 2-6 秒，
+			// 那就是"时不时卡一下"的直接来源。
+			UserNotificationListenerAccessStatus acc = OnSta(() => l.GetAccessStatus());
+			lastAccess = acc.ToString();
+			if (acc != UserNotificationListenerAccessStatus.Allowed)
 			{
 				islandMode = "授权已撤销：请在 Windows 设置中重新允许访问通知，然后点“重新检查授权”";
 				Store.Trace("NOTIFY sync skipped — access revoked");
 				return;
 			}
-			IReadOnlyList<UserNotification> list = OnUi(() => l.GetNotificationsAsync(NotificationKinds.Toast).AsTask().GetAwaiter().GetResult());
+			IReadOnlyList<UserNotification> list = OnSta(() => l.GetNotificationsAsync(NotificationKinds.Toast).AsTask().GetAwaiter().GetResult());
 			if (list == null)
 			{
 				return;
@@ -607,6 +686,13 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 		{
 			Store.Trace("NOTIFY sync error " + ex.Message);
 		}
+		finally
+		{
+			lock (gate)
+			{
+				syncInFlight = false;
+			}
+		}
 	}
 
 	// 未打包应用通知归属：对比各候选 AUMID 的 ToastNotificationManager.History 条数。
@@ -643,7 +729,8 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 			{
 				try
 				{
-					int count = OnUi(() => ToastNotificationManager.History.GetHistory(aumid).Count);
+					// History API 无线程仿射要求，线程池线程直接查询（不 Invoke 到 UI）。
+					int count = ToastNotificationManager.History.GetHistory(aumid).Count;
 					now[aumid] = count;
 				}
 				catch (Exception ex)

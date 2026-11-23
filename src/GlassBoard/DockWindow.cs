@@ -124,6 +124,10 @@ public class DockWindow : GlassWindow
 	private System.Windows.Window previewWin;
 	private System.Windows.Controls.StackPanel previewRows;
 	private readonly System.Collections.Generic.List<System.Windows.Interop.HwndSource> previewWinHosts = new System.Collections.Generic.List<System.Windows.Interop.HwndSource>();
+
+	// CloseEntryPreview 重入守卫：宿主窗口 Dispose 期间的销毁回调可能再次触发关闭路径，
+	// 不加守卫会出现在枚举 previewWinHosts 时集合被修改的崩溃。
+	private bool previewClosing;
 	private readonly System.Collections.Generic.List<IntPtr> previewWinThumbs = new System.Collections.Generic.List<IntPtr>();
 	private System.Windows.Threading.DispatcherTimer previewWinTimer;
 	private System.Windows.Threading.DispatcherTimer previewWinCloseTimer;
@@ -185,8 +189,10 @@ public class DockWindow : GlassWindow
 		public double Target = 1.0;
 		public double ShiftTargetX = 0.0;
 		public int Z = 0;
-	}
-	private readonly List<ZoomNode> zoomNodes = new List<ZoomNode>();
+		// 弹入动画（添加图标）：节点注册时 Current/Scale 直接落在此值，
+		// 帧循环按悬停引擎同一套指数平滑把 Current 推回 Target（通常 1.0）。
+		public double PopFrom = 1.0;
+	}	private readonly List<ZoomNode> zoomNodes = new List<ZoomNode>();
 	private System.Windows.Threading.DispatcherTimer zoomLeaveTimer;
 	private bool zoomHoverActive;
 	private double zoomMouseX = double.NaN;
@@ -421,13 +427,6 @@ public class DockWindow : GlassWindow
 		};
 		runningTimer.Tick += (object s, EventArgs e) =>
 		{
-			if (Environment.TickCount - diagTrace > 2500)
-			{
-				diagTrace = Environment.TickCount;
-				System.Windows.IInputElement captured = System.Windows.Input.Mouse.Captured;
-				System.Windows.IInputElement over = System.Windows.Input.Mouse.DirectlyOver;
-				Store.Trace("DIAG captured=" + ((captured == null) ? "null" : captured.GetType().Name) + " over=" + ((over == null) ? "null" : over.GetType().Name) + " dockOver=" + IsMouseOver + " itemsOver=" + Items.IsMouseOver + " busy=" + DockInputBusy + " hidden=" + renderedHidden);
-			}
 			ReleaseCancelledExternalDrag();
 			C.CheckGameMode();
 			RunningWindows.SampleForeground();
@@ -458,7 +457,7 @@ public class DockWindow : GlassWindow
 			{
 				Store.Trace("FOLDER dock tick apply count=" + folderHandles.Count + " prev=" + folderSig.Length + " edge=" + folderEdgeChange);
 				folderSig = folderSigNow;
-				Refresh(capture: false);
+				Refresh(capture: false, animate: false);
 			}
 		};
 		runningTimer.Start();
@@ -914,13 +913,12 @@ public class DockWindow : GlassWindow
 		base.OnPreviewMouseDown(e);
 	}
 
-	public void Refresh(bool capture = true)
+	public void Refresh(bool capture = true, bool animate = true, HashSet<string> popKeys = null)
 	{
 		if (DockInputBusy)
 		{
 			return;
 		}
-		double width = Width;
 		double left = Left;
 		StopDockLayoutMotion();
 		DockOptions dock = C.Prefs.Dock;
@@ -1032,7 +1030,7 @@ public class DockWindow : GlassWindow
 				button = DockButton(null, icon, () =>
 				{
 					C.Launch(a);
-				}, a.Name, a);
+				}, a.Name, a, popIn: (popKeys != null && popKeys.Contains(a.Path)));
 				System.Windows.Controls.ContextMenu contextMenu = C.DockMenu(a);
 				TrackMenu(contextMenu);
 				button.ContextMenu = contextMenu;
@@ -1210,9 +1208,14 @@ public class DockWindow : GlassWindow
 		System.Windows.Media.Color color = Accent(dock.Accent);
 		Surface.BorderBrush = ((GlassPercent == 0.0) ? ((System.Windows.Media.Brush)System.Windows.Media.Brushes.Transparent) : ((System.Windows.Media.Brush)new LinearGradientBrush(System.Windows.Media.Color.FromArgb((byte)Math.Min(255.0, 160.0 * EdgeStrength), color.R, color.G, color.B), System.Windows.Media.Color.FromArgb((byte)Math.Min(255.0, 30.0 * EdgeStrength), byte.MaxValue, byte.MaxValue, byte.MaxValue), 90.0)));
 		UpdateRunning();
-		if (!capture)
+		if (!capture && animate)
 		{
-			AnimateDockLayout(left, width);
+			AnimateDockLayout(left);
+		}
+		// 新图标弹入：把帧循环唤起来，PopFrom 节点从 0.25 平滑推到目标后自动收敛停帧。
+		if (popKeys != null && popKeys.Count > 0 && MotionEnabled && IsVisible)
+		{
+			EnsureZoomFrame();
 		}
 	}
 
@@ -1449,6 +1452,12 @@ public class DockWindow : GlassWindow
 			}
 			List<RunningWindow> ws = RunningWindows.For(entry);
 			bool isRunning = ws.Count > 0;
+			if (!isRunning)
+			{
+				// 无窗口快照命中时按托盘图标兜底：托盘常驻程序（Wallpaper Engine、TranslucentTB 等）
+				// 没有常规可见窗口，圆点应与系统托盘图标数一致。
+				isRunning = RunningWindows.TrayMatches(entry);
+			}
 			bool isActive = false;
 			if (isRunning && foreground != IntPtr.Zero)
 			{
@@ -1779,7 +1788,7 @@ public class DockWindow : GlassWindow
 		}
 	}
 
-	private System.Windows.Controls.Button DockButton(string text, ImageSource icon, Action action, string tip, Entry entry = null, string glyphKind = null)
+	private System.Windows.Controls.Button DockButton(string text, ImageSource icon, Action action, string tip, Entry entry = null, string glyphKind = null, bool popIn = false)
 	{
 		DockOptions o = C.Prefs.Dock;
 		double iconSize = o.IconSize;
@@ -2180,12 +2189,22 @@ public class DockWindow : GlassWindow
 		// （移出 Dock 动画停表后恢复）。当前帧驱动 + 指数平滑下 CPU 光栅缩放成本可忽略。
 		button.CacheMode = null;
 		// 苹果式邻近放大：注册进帧驱动引擎（OnDockZoomMove 记录光标，OnZoomFrameTick 统一驱动）
-		zoomNodes.Add(new ZoomNode
+		ZoomNode zoomNode = new ZoomNode
 		{
 			Button = button,
 			Scale = scale,
 			Shift = shift
-		});
+		};
+		if (popIn && MotionEnabled)
+		{
+			// 新图标弹入：从 0.25 起步，帧循环用与悬停放大相同的指数平滑推到目标值，
+			// 复用既有渲染管线，不与悬停动画打架（同一节点同一变量驱动）。
+			zoomNode.PopFrom = 0.25;
+			scale.ScaleX = 0.25;
+			scale.ScaleY = 0.25;
+			zoomNode.Current = 0.25;
+		}
+		zoomNodes.Add(zoomNode);
 		if (entry != null)
 		{
 			// 悬浮预览：悬停 380ms 后弹出任务栏式实时缩略图（DWM Thumbnail 管线，与任务模式按钮同一套）。
@@ -2427,8 +2446,9 @@ public class DockWindow : GlassWindow
 			return;
 		}
 		// 动画期间摘掉软渲染阴影（DropShadowEffect 每帧 CPU 模糊整窗，是划动掉帧的最大来源）；
-		// 收敛后恢复。阴影摘挂一次性的，只在开关沿触发。
-		if (!zoomShadowStripped)
+		// 收敛后恢复。阴影摘挂一次性的，只在开关沿触发。弹入动画（无悬停）不摘阴影：
+		// 图标从 0.25 弹入时整窗阴影瞬间消失再恢复本身就是一次可见闪烁。
+		if (zoomHoverActive && !zoomShadowStripped)
 		{
 			zoomShadowStripped = true;
 			ApplySurfaceShadow(false);
@@ -2527,12 +2547,20 @@ public class DockWindow : GlassWindow
 				n.Scale.ScaleY = n.Current;
 			}
 		}
-		// 4) 全部稳定 → 停帧（常驻 Rendering 订阅靠 flag 早退，零空闲开销）；下次 MouseMove 自动唤醒
+		// 4) 全部稳定 → 停帧 + 脱钩（Rendering 订阅存在本身会让 WPF 渲染时钟每帧 tick：
+		// 每秒 60-120 个 WM_TIMER 在消息泵空转，Dock 大窗每帧被渲染管线轮询。
+		// 脱钩后渲染循环彻底停，下次 MouseMove/弹入再挂）；下次 MouseMove 自动唤醒
 		if (settle)
 		{
 			zoomAnimating = false;
 			zoomHoverActive = false;
 			RestoreZoomShadow();
+			if (zoomRenderingHooked)
+			{
+				zoomRenderingHooked = false;
+				CompositionTarget.Rendering -= OnZoomFrameTick;
+				Store.Trace("ZOOM settle unhooked Rendering");
+			}
 		}
 		// —— 诊断落盘（默认关闭）：zoom-diag.on 存在时每帧写一行 ——
 		if (now - zoomDiagCheckedSec > 0.5)
@@ -2597,37 +2625,37 @@ public class DockWindow : GlassWindow
 		zoomLeaveTimer.Start();
 	}
 
-	private void AnimateDockLayout(double oldLeft, double oldWidth)
+	private void AnimateDockLayout(double oldLeft)
 	{
-		if (!MotionEnabled || !IsVisible || double.IsNaN(oldWidth) || double.IsNaN(oldLeft) || oldWidth <= 0.0 || Math.Abs(oldWidth - Width) < 0.5)
+		if (!MotionEnabled || !IsVisible || double.IsNaN(oldLeft) || Math.Abs(oldLeft - Left) < 0.5)
 		{
 			return;
 		}
 		int serial = ++layoutSerial;
+		// 宽度/内容已在调用方立即到位（不再动画宽度：宽度动画每帧驱动整行图标
+		// 重新布局，是“来回抖”的根源）；这里只平滑窗口水平位置，承接宽度变化。
+		double newLeft = Left;
+		Left = oldLeft;
 		TimeSpan timeSpan = TimeSpan.FromMilliseconds(180.0);
 		CubicEase easingFunction = new CubicEase
 		{
 			EasingMode = EasingMode.EaseOut
 		};
-		DoubleAnimation doubleAnimation = new DoubleAnimation(oldWidth, Width, timeSpan)
+		DoubleAnimation animation = new DoubleAnimation(oldLeft, newLeft, timeSpan)
 		{
 			EasingFunction = easingFunction,
 			FillBehavior = FillBehavior.Stop
 		};
-		DoubleAnimation animation = new DoubleAnimation(oldLeft, Left, timeSpan)
-		{
-			EasingFunction = easingFunction,
-			FillBehavior = FillBehavior.Stop
-		};
-		doubleAnimation.Completed += (object s, EventArgs e) =>
+		animation.Completed += (object s, EventArgs e) =>
 		{
 			if (serial == layoutSerial)
 			{
-				BeginAnimation(FrameworkElement.WidthProperty, null);
+				// FillBehavior.Stop 结束后属性回基值（动画前被设成旧值），必须把新值落回基值，
+				// 否则动画收尾瞬间窗口会闪回旧位置。
 				BeginAnimation(Window.LeftProperty, null);
+				Left = newLeft;
 			}
 		};
-		BeginAnimation(FrameworkElement.WidthProperty, doubleAnimation, HandoffBehavior.SnapshotAndReplace);
 		BeginAnimation(Window.LeftProperty, animation, HandoffBehavior.SnapshotAndReplace);
 	}
 
@@ -2660,7 +2688,7 @@ public class DockWindow : GlassWindow
 		{
 			C.Prefs.Placement.DockLocked = !movable.IsChecked;
 			C.Save();
-			Refresh(capture: false);
+			Refresh(capture: false, animate: true);
 		};
 		spring.Click += (object s, RoutedEventArgs e) =>
 		{
@@ -2671,7 +2699,7 @@ public class DockWindow : GlassWindow
 		{
 			C.Prefs.Dock.AutoHide = automatic.IsChecked;
 			C.Save();
-			Refresh(capture: false);
+			Refresh(capture: false, animate: true);
 		};
 		menu.Items.Add(movable);
 		menu.Items.Add(spring);
@@ -2689,7 +2717,7 @@ public class DockWindow : GlassWindow
 		{
 			C.Prefs.Dock.ShowSettings = settingsIcon.IsChecked;
 			C.Save();
-			Refresh(capture: false);
+			Refresh(capture: false, animate: true);
 		};
 		menu.Items.Add(settingsIcon);
 	}
@@ -4668,57 +4696,72 @@ public class DockWindow : GlassWindow
 
 	private void CloseEntryPreview()
 	{
-		if (previewWinTimer != null)
+		if (previewClosing)
 		{
-			previewWinTimer.Stop();
+			return;
 		}
-		if (previewWinCloseTimer != null)
+		previewClosing = true;
+		try
 		{
-			previewWinCloseTimer.Stop();
-		}
-		previewWinKeep = false;
-		System.Collections.Generic.List<IntPtr> thumbs = new System.Collections.Generic.List<IntPtr>(previewWinThumbs);
-		previewWinThumbs.Clear();
-		if (thumbs.Count > 0)
-		{
-			Task.Run(delegate
+			if (previewWinTimer != null)
+			{
+				previewWinTimer.Stop();
+			}
+			if (previewWinCloseTimer != null)
+			{
+				previewWinCloseTimer.Stop();
+			}
+			previewWinKeep = false;
+			System.Collections.Generic.List<IntPtr> thumbs = new System.Collections.Generic.List<IntPtr>(previewWinThumbs);
+			previewWinThumbs.Clear();
+			if (thumbs.Count > 0)
+			{
+				Task.Run(delegate
+				{
+					try
+					{
+						foreach (IntPtr thumb in thumbs)
+						{
+							DwmUnregisterThumbnail(thumb);
+						}
+					}
+					catch
+					{
+					}
+				});
+			}
+			// 先把列表摘到局部变量再逐个销毁：宿主窗口销毁期间任何回调（钩子/事件）
+			// 即使重入 CloseEntryPreview，看到的也是已清空的字段，不会修改正在枚举的集合。
+			System.Collections.Generic.List<System.Windows.Interop.HwndSource> hosts = new System.Collections.Generic.List<System.Windows.Interop.HwndSource>(previewWinHosts);
+			previewWinHosts.Clear();
+			foreach (System.Windows.Interop.HwndSource host in hosts)
 			{
 				try
 				{
-					foreach (IntPtr thumb in thumbs)
-					{
-						DwmUnregisterThumbnail(thumb);
-					}
+					host.Dispose();
 				}
 				catch
 				{
 				}
-			});
+			}
+			if (previewWin != null)
+			{
+				try
+				{
+					previewWin.Close();
+				}
+				catch (Exception)
+				{
+				}
+				previewWin = null;
+				previewRows = null;
+			}
+			previewWinAnchor = null;
 		}
-		foreach (System.Windows.Interop.HwndSource host in previewWinHosts)
+		finally
 		{
-			try
-			{
-				host.Dispose();
-			}
-			catch
-			{
-			}
+			previewClosing = false;
 		}
-		previewWinHosts.Clear();
-		if (previewWin != null)
-		{
-			try
-			{
-				previewWin.Close();
-			}
-			catch (Exception)
-			{
-			}
-			previewWin = null;
-			previewRows = null;
-		}
-		previewWinAnchor = null;
 	}
 
 	/// <summary>按钮左上角的屏幕坐标换算成 DIP（Window.Left/Top 坐标系）。</summary>

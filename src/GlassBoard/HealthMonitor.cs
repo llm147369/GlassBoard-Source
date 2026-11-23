@@ -20,9 +20,12 @@ public static class HealthMonitor
 	private static readonly Dictionary<string, DateTime> LastReport = new Dictionary<string, DateTime>();
 	private static Timer timer;
 	private static Dispatcher ui;
+	private static DispatcherTimer beatInput;
 	private static bool started;
 	private static int hangTicks;
 	private static int markerTicks;
+	private static int tickCounter;
+	private static volatile int uiBeatInput;
 	private static long lastWorkingSet = -1L;
 	private static string markerPath;
 
@@ -37,10 +40,17 @@ public static class HealthMonitor
 		}
 		started = true;
 		ui = Dispatcher.CurrentDispatcher;
+		// 高频心跳：UI 线程每 500ms 打 Input 优先级心跳，后台每秒检查一次延迟，
+		// 能在 1 秒级定位"时不时卡一下"的长任务，而不必等 5 秒一轮的旧心跳。
+		// 用 Input 优先级：Background 心跳会被 WPF 渲染管线的 input/render 队列
+		// 持续占先（bg 饿是 Dispatcher 正常语义，不代表输入卡顿）。
+		beatInput = new DispatcherTimer(DispatcherPriority.Input) { Interval = TimeSpan.FromMilliseconds(500) };
+		beatInput.Tick += delegate { uiBeatInput = Environment.TickCount; };
+		beatInput.Start();
 		AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
 		TaskScheduler.UnobservedTaskException += OnTaskException;
 		CheckPreviousRun();
-		timer = new Timer(Tick, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(5));
+		timer = new Timer(Tick, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(1));
 	}
 
 	/// <summary>程序内手动上报（如 DispatcherUnhandledException）。</summary>
@@ -80,12 +90,22 @@ public static class HealthMonitor
 	{
 		try
 		{
-			CheckUiHeartbeat();
-			CheckOwnResources();
-			CheckHungWindows();
-			CheckBridgeProcesses();
+			tickCounter++;
+			CheckUiJitter();
+			if (tickCounter % 5 == 0)
+			{
+				CheckUiHeartbeat();
+				CheckOwnResources();
+				CheckBridgeProcesses();
+			}
+			// 未响应窗口扫描降频到 15 秒：IsHungAppWindow 对每个可见窗口同步发消息等待，
+			// 5 秒一轮对忙碌中的窗口（Electron 冷启动等）造成无谓的消息压力。
+			if (tickCounter % 15 == 0)
+			{
+				CheckHungWindows();
+			}
 			// 存活标记每 60 秒刷新一次，避免频繁写盘
-			if (++markerTicks % 12 == 0)
+			if (++markerTicks % 60 == 0)
 			{
 				TouchMarker();
 			}
@@ -93,6 +113,38 @@ public static class HealthMonitor
 		catch
 		{
 		}
+	}
+
+	/// <summary>
+	/// 高频 UI 心跳：UI 线程 500ms 打 Input 优先级心跳，后台每秒测延迟；同时读全局
+	/// 输入空闲时间，用户正在操作（idle &lt; 1s）而 Input 心跳滞后 1.5 秒以上时，
+	/// 说明界面线程确有影响输入的长任务，记入 failures.log。
+	/// </summary>
+	private static void CheckUiJitter()
+	{
+		if (ui == null || uiBeatInput == 0)
+		{
+			return;
+		}
+		int uiAge = Environment.TickCount - uiBeatInput;
+		if (uiAge <= 1500)
+		{
+			return;
+		}
+		int idleMs = 0;
+		try
+		{
+			LASTINPUTINFO lii = default;
+			lii.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+			if (GetLastInputInfo(ref lii))
+			{
+				idleMs = Environment.TickCount - (int)lii.dwTime;
+			}
+		}
+		catch
+		{
+		}
+		Write("卡顿", "UI 线程响应延迟约 " + uiAge + " ms（高频探针；用户空闲 " + idleMs + " ms）", 5.0);
 	}
 
 	/// <summary>
@@ -331,6 +383,16 @@ public static class HealthMonitor
 	}
 
 	private delegate bool EnumProc(IntPtr h, IntPtr l);
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct LASTINPUTINFO
+	{
+		public uint cbSize;
+		public uint dwTime;
+	}
+
+	[DllImport("user32.dll")]
+	private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
 
 	[DllImport("user32.dll")]
 	private static extern bool EnumWindows(EnumProc callback, IntPtr lParam);

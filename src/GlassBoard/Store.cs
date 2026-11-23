@@ -22,17 +22,40 @@ public static class Store
 
 	private static DateTime lastSnapshot;
 
+	// Trace 高频路径优化：目录存在与日志长度检查都是文件系统调用，高频日志（每秒数条）
+	// 时每次 Trace 做 3 次 IO 会放大成 UI 线程的持续小卡。目录只确认一次，长度每 30 秒
+	// 才复查一次（轮转检查不要求即时）。
+	private static bool folderEnsured;
+
+	private static int lastSizeCheckTick;
+
+	private static bool logIsLarge;
+
 	public static string RecoveryMessage { get; private set; }
 
 	public static void Trace(string message)
 	{
 		try
 		{
-			Directory.CreateDirectory(Folder);
-			string text = Path.Combine(Folder, "session.log");
-			if (File.Exists(text) && new FileInfo(text).Length > 1048576)
+			if (!folderEnsured)
 			{
-				File.Move(text, text + "." + DateTime.Now.Ticks);
+				Directory.CreateDirectory(Folder);
+				folderEnsured = true;
+			}
+			string text = Path.Combine(Folder, "session.log");
+			int now = Environment.TickCount;
+			if (now - lastSizeCheckTick > 30000)
+			{
+				lastSizeCheckTick = now;
+				logIsLarge = File.Exists(text) && new FileInfo(text).Length > 1048576;
+			}
+			if (logIsLarge)
+			{
+				if (File.Exists(text) && new FileInfo(text).Length > 1048576)
+				{
+					File.Move(text, text + "." + DateTime.Now.Ticks);
+				}
+				logIsLarge = false;
 			}
 			File.AppendAllText(text, DateTime.Now.ToString("s") + " [" + Assembly.GetExecutingAssembly().GetName().Version?.ToString() + "] " + message + Environment.NewLine);
 		}

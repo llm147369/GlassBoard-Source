@@ -566,18 +566,30 @@ public sealed class WidgetWindow : GlassWindow
 	private int lastClockSecond = -1;
 	private void HookClockFrame()
 	{
-		if (clockFrameHooked)
+		if (clockFrameHooked || clockSeconds == null)
 		{
 			return;
 		}
 		clockFrameHooked = true;
 		CompositionTarget.Rendering += ClockFrame;
 	}
+	private void UnhookClockFrame()
+	{
+		if (!clockFrameHooked)
+		{
+			return;
+		}
+		clockFrameHooked = false;
+		CompositionTarget.Rendering -= ClockFrame;
+		lastClockSecond = -1;
+		Store.Trace("CLOCK frame unhooked");
+	}
 	private void ClockFrame(object sender, EventArgs e)
 	{
 		if (!IsVisible || clock == null)
 		{
-			lastClockSecond = -1;
+			// 双保险：窗口隐藏后帧钩必须摘掉（渲染循环空闲=无 WM_TIMER 空转）
+			UnhookClockFrame();
 			return;
 		}
 		DateTime now = TimeZones.Now(M.C.Prefs.Widgets.TimeZoneId);
@@ -685,6 +697,19 @@ public sealed class WidgetWindow : GlassWindow
 		M = manager;
 		PanelId = id;
 		InitializeBareDragging();
+		// 时钟帧钩生命周期跟随可见性：隐藏即脱钩（Rendering 订阅存在会让 WPF 渲染时钟
+		// 每帧 tick，消息泵每秒空转几十圈）；可见时按需重挂（仅时钟面板有秒针变化）。
+		IsVisibleChanged += delegate
+		{
+			if (IsVisible)
+			{
+				HookClockFrame();
+			}
+			else
+			{
+				UnhookClockFrame();
+			}
+		};
 		Title = "GlassBoard 组件面板 " + (char)(65 + id);
 		ShowActivated = false;
 		DesktopCoverGuard.Track(this, (bool r) =>
