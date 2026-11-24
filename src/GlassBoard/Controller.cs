@@ -4014,6 +4014,7 @@ public class Controller
 				urow.Children.Add(cancelBtn);
 				usp.Children.Add(urow);
 				uw.Content = usp;
+				uw.Show();
 			};
 			uninstallRow.Children.Add(uninstallBtn);
 			stackPanel6.Children.Add(uninstallRow);

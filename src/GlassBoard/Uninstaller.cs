@@ -72,12 +72,17 @@ public static class Uninstaller
 		{
 			string script = Path.Combine(Path.GetTempPath(), "gb-uninstall-" + Environment.TickCount + ".cmd");
 			string body = "@echo off\r\n" +
-				"ping 127.0.0.1 -n 2 > nul\r\n" +
+				"ping 127.0.0.1 -n 5 > nul\r\n" +
 				"taskkill /f /im GlassBoard.exe > nul 2>&1\r\n" +
+				"ping 127.0.0.1 -n 2 > nul\r\n" +
 				"reg delete \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\" /v GlassBoard /f > nul 2>&1\r\n" +
 				"if not \"%GB_STARTUP%\"==\" \" del \"%GB_STARTUP%\" > nul 2>&1\r\n" +
-				"if \"%GB_DELDATA%\"==\"1\" rd /s /q \"%GB_DATA%\"\r\n" +
-				"if \"%GB_DELINSTALL%\"==\"1\" rd /s /q \"%GB_INSTALL%\"\r\n" +
+				"if \"%GB_DELDATA%\"==\"1\" rd /s /q \"%GB_DATA%\" > nul 2>&1\r\n" +
+				"if \"%GB_DELINSTALL%\"==\"1\" (\r\n" +
+				"  rd /s /q \"%GB_INSTALL%\" > nul 2>&1\r\n" +
+				"  ping 127.0.0.1 -n 3 > nul\r\n" +
+				"  if exist \"%GB_INSTALL%\" rd /s /q \"%GB_INSTALL%\" > nul 2>&1\r\n" +
+				")\r\n" +
 				"del \"%~f0\"\r\n";
 			File.WriteAllText(script, body, System.Text.Encoding.ASCII);
 			System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c \"" + script + "\"")
