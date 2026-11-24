@@ -1090,6 +1090,8 @@ public sealed class WidgetWindow : GlassWindow
 		building = true;
 		try
 		{
+			// 重建场景前先停旧律动帧循环：否则旧 vizTimer 继续引用已清空的画布字段。
+			DetachViz();
 			musicLayoutSignature = "";
 			shownArtwork = null;
 			shownPlaying = null;
@@ -3401,6 +3403,11 @@ public sealed class WidgetWindow : GlassWindow
 		string[] kinds = WidgetRules.Kinds;
 		foreach (string text in kinds)
 		{
+			// 律动组件是独立无框装饰（无卡片/文字/编辑控件），不适用本组外观检查。
+			if (text == "visualizer")
+			{
+				continue;
+			}
 			WidgetStyle widgetStyle = M.C.Prefs.Widgets.Style(text);
 			widgetStyle.Frameless = true;
 			widgetStyle.TextColor = "#33CCFF";

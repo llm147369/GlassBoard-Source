@@ -46,6 +46,10 @@ public sealed class WidgetManager : IDisposable
 
 	public string LastError = "";
 
+	// 面板打开失败冷却：同一面板 60s 内不反复重试（防止 error.log/弹窗风暴），
+	// 用户点"重新打开组件"（Reopen）时清空强制重试。
+	private readonly Dictionary<int, DateTime> failedPanels = new Dictionary<int, DateTime>();
+
 	private readonly List<Window> reminderWindows = new List<Window>();
 
 	internal List<WidgetWindow> SnapshotWindows => windows.Values.ToList();
@@ -248,6 +252,7 @@ public sealed class WidgetManager : IDisposable
 	public void Reopen()
 	{
 		recreate = true;
+		failedPanels.Clear();
 		Sync();
 	}
 
@@ -322,6 +327,10 @@ public sealed class WidgetManager : IDisposable
 		{
 			if (!windows.TryGetValue(item.Key, out var value3))
 			{
+				if (failedPanels.TryGetValue(item.Key, out DateTime coolUntil) && DateTime.UtcNow < coolUntil)
+				{
+					continue;
+				}
 				value3 = new WidgetWindow(this, item.Key);
 				windows.Add(item.Key, value3);
 			}
@@ -336,6 +345,7 @@ public sealed class WidgetManager : IDisposable
 				{
 					value3.Show();
 				}
+				failedPanels.Remove(item.Key);
 				Store.Trace("WIDGET SHOW panel=" + item.Key + " kinds=" + string.Join(",", item.Value) + " visible=" + value3.IsVisible + " loaded=" + value3.IsLoaded + " rect=" + value3.Left + "," + value3.Top + "," + value3.Width + "," + value3.Height);
 			}
 			catch (Exception ex2)
@@ -344,7 +354,10 @@ public sealed class WidgetManager : IDisposable
 				TryStop(value3);
 				Store.Log(ex2);
 				Store.Trace("WIDGET FAILED panel=" + item.Key + " error=" + ex2);
-				LastError = "面板 " + (char)(65 + item.Key) + " 打开失败：" + ex2.Message;
+				failedPanels[item.Key] = DateTime.UtcNow.AddSeconds(60.0);
+				string firstFrame = (ex2.StackTrace ?? "").Split('\n').FirstOrDefault((string l) => l.Trim().StartsWith("在 GlassBoard") || l.Trim().StartsWith("at GlassBoard")) ?? "";
+				firstFrame = firstFrame.Trim();
+				LastError = "面板 " + (char)(65 + item.Key) + " 打开失败：" + ex2.GetType().Name + "：" + ex2.Message + (string.IsNullOrEmpty(firstFrame) ? "" : (" @" + firstFrame));
 			}
 		}
 		timer.Interval = TimeSpan.FromSeconds((dictionary.Count != 0 || o.Clock || !o.Alarms.All((ClockAlarm a) => !a.Enabled) || o.TimerDueUtc.HasValue) ? 1 : 30);
