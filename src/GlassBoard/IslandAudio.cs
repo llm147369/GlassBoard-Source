@@ -13,6 +13,27 @@ public static class IslandAudio
 {
 	// 24 档能量 0..1（低→高），采集线程触发；数组为快照拷贝，可安全跨线程持有。
 	public const int BandCount = 24;
+
+	// 24 个频段的起始 bin 边界（对数等分 + 严格递增），类型初始化时一次算好。
+	// 旧公式 (int)(24*Log(i/2)/Log(127.5)) 在低频 bin 稀疏处会跳频段：
+	// bin2→band0、bin3→band2，band1 永远无 bin 落入 → 柱状条第 2/3 根柱子恒死。
+	private static readonly int[] bandStart = BuildBandStart();
+
+	private static int[] BuildBandStart()
+	{
+		int[] start = new int[BandCount + 1];
+		for (int b = 0; b <= BandCount; b++)
+		{
+			int v = (int)Math.Ceiling(2.0 * Math.Pow(128.0, b / (double)BandCount));
+			if (b > 0 && v <= start[b - 1])
+			{
+				v = start[b - 1] + 1;
+			}
+			start[b] = Math.Min(v, 256);
+		}
+		return start;
+	}
+
 	public static event Action<double[]> AudioLevels;
 
 	private static WasapiLoopbackCapture capture;
@@ -288,21 +309,19 @@ public static class IslandAudio
 			}
 			FastFourierTransform.FFT(true, 10, fftBuf);
 
-			// 24 个对数间隔频段（bin 2..255 → 指数映射，低音分辨细、高音平滑）
+			// 24 个对数间隔频段：bin 落入 [bandStart[b], bandStart[b+1])，边界表保证每个频段
+			// 至少覆盖 1 个 bin（低音分辨细、高音平滑）。
 			Array.Clear(sums, 0, BandCount);
 			Array.Clear(counts, 0, BandCount);
 			int half = n / 2;
-			for (int i = 2; i < 256 && i < half; i++)
+			int hi = Math.Min(bandStart[BandCount], half);
+			for (int i = bandStart[0]; i < hi; i++)
 			{
 				double mag = Math.Sqrt(fftBuf[i].X * fftBuf[i].X + fftBuf[i].Y * fftBuf[i].Y);
-				int b = (int)(BandCount * Math.Log(i / 2.0) / Math.Log(127.5));
-				if (b < 0)
+				int b = 0;
+				while (b < BandCount - 1 && i >= bandStart[b + 1])
 				{
-					b = 0;
-				}
-				else if (b >= BandCount)
-				{
-					b = BandCount - 1;
+					b++;
 				}
 				sums[b] += mag;
 				counts[b]++;

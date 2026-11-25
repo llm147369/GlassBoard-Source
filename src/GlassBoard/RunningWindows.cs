@@ -330,6 +330,173 @@ public static class RunningWindows
 		pressForegroundTick = Environment.TickCount;
 	}
 
+	// ==================== 托盘溢出区事件监听（被动刷新） ====================
+	// 溢出岛（TopLevelWindowForOverflowXamlIsland / NotifyIconOverflowWindow）只在用户
+	// 展开托盘时创建。WinEvent 监听 EVENT_OBJECT_CREATE/SHOW：溢出区一创建立即触发
+	// 托盘名读取——不用轮询、不用主动开合托盘，也消灭"机器重启后托盘从未展开读不到"。
+	// 回调装在专用泵线程（OUTOFCONTEXT），只入队 hwnd；GetClassName/UIA 全在后台做，UI 线程零参与。
+	[DllImport("user32.dll")]
+	private static extern bool UnhookWinEvent(IntPtr hook);
+
+	[DllImport("user32.dll")]
+	private static extern bool PeekMessage(out MSG msg, IntPtr window, uint min, uint max, uint remove);
+
+	[DllImport("user32.dll")]
+	private static extern bool TranslateMessage(ref MSG msg);
+
+	[DllImport("user32.dll")]
+	private static extern IntPtr DispatchMessage(ref MSG msg);
+
+	private struct MSG
+	{
+		public IntPtr hwnd;
+		public uint message;
+		public IntPtr wParam;
+		public IntPtr lParam;
+		public uint time;
+		public int ptX;
+		public int ptY;
+	}
+
+	private const uint EVENT_OBJECT_CREATE = 0x8000;
+	private const uint EVENT_OBJECT_SHOW = 0x8002;
+	private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+	private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
+
+	private static IntPtr trayEventHook = IntPtr.Zero;
+	private static bool trayEventQuit;
+	private static Thread trayEventThread;
+	private static readonly object trayEventGate = new object();
+	private static readonly List<IntPtr> trayEventQueue = new List<IntPtr>(512);
+	private static readonly HashSet<IntPtr> trayEventSeen = new HashSet<IntPtr>();
+	private static int trayEventLastDrain = 0;
+
+	private static readonly WinEventDelegate TrayCreateProc = OnTrayCreateEvent;
+
+	// 只收窗口级事件（idObject==0），回调越轻越好——事件在泵线程消息循环里派发。
+	private static void OnTrayCreateEvent(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
+	{
+		if (idObject != 0 || hwnd == IntPtr.Zero)
+		{
+			return;
+		}
+		lock (trayEventGate)
+		{
+			if (trayEventQueue.Count < 2048)
+			{
+				trayEventQueue.Add(hwnd);
+			}
+		}
+	}
+
+	// 泵线程启动：装钩子 + 消息泵 + 每 300ms 排一次队列。只启动一次（幂等）。
+	public static void StartTrayEventListener()
+	{
+		lock (trayEventGate)
+		{
+			if (trayEventThread != null || trayEventHook != IntPtr.Zero)
+			{
+				return;
+			}
+		}
+		Thread thread = new Thread(() =>
+		{
+			try
+			{
+				trayEventHook = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, IntPtr.Zero, TrayCreateProc, 0u, 0u, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+				Store.Trace("TRAY event hook=" + trayEventHook.ToInt64());
+				while (!trayEventQuit)
+				{
+					MSG m;
+					while (PeekMessage(out m, IntPtr.Zero, 0u, 0u, 1u))
+					{
+						TranslateMessage(ref m);
+						DispatchMessage(ref m);
+					}
+					DrainTrayEvents();
+					Thread.Sleep(300);
+				}
+				if (trayEventHook != IntPtr.Zero)
+				{
+					UnhookWinEvent(trayEventHook);
+					trayEventHook = IntPtr.Zero;
+				}
+			}
+			catch (Exception ex)
+			{
+				Store.Trace("TRAY event thread error " + ex.Message);
+			}
+		});
+		thread.IsBackground = true;
+		thread.Name = "glassboard-trayevents";
+		lock (trayEventGate)
+		{
+			trayEventThread = thread;
+		}
+		thread.Start();
+	}
+
+	// 后台检查队列里的 hwnd：类名命中溢出区窗口 → 触发一次托盘名读取（3 秒节流）。
+	private static void DrainTrayEvents()
+	{
+		List<IntPtr> batch = null;
+		lock (trayEventGate)
+		{
+			if (trayEventQueue.Count == 0)
+			{
+				return;
+			}
+			batch = new List<IntPtr>(trayEventQueue);
+			trayEventQueue.Clear();
+		}
+		int tick = Environment.TickCount;
+		foreach (IntPtr handle in batch)
+		{
+			lock (trayEventGate)
+			{
+				if (!trayEventSeen.Add(handle))
+				{
+					continue;
+				}
+			}
+			try
+			{
+				StringBuilder cls = new StringBuilder(128);
+				GetClassName(handle, cls, cls.Capacity);
+				string c = cls.ToString();
+				if (c.Equals("TopLevelWindowForOverflowXamlIsland", StringComparison.OrdinalIgnoreCase) || c.Equals("NotifyIconOverflowWindow", StringComparison.OrdinalIgnoreCase) || c.Equals("ToolbarWindow32", StringComparison.Ordinal))
+				{
+					if (tick - trayEventLastDrain >= 3000)
+					{
+						trayEventLastDrain = tick;
+						ThreadPool.QueueUserWorkItem(delegate
+						{
+							try
+							{
+								List<string> names = TrayNamesQuick();
+								if (names.Count > 0)
+								{
+									lock (scanGate)
+									{
+										trayNameCache = names;
+										trayNameCacheTick = Environment.TickCount;
+									}
+									Store.Trace("TRAY overflow event refresh names=" + names.Count);
+								}
+							}
+							catch
+							{
+							}
+						});
+					}
+				}
+			}
+			catch
+			{
+			}
+		}
+	}
+
 	// 社区标准方案（taskbar/dock 类程序通用做法）：
 	// 用 SetWinEventHook(EVENT_SYSTEM_FOREGROUND) 持续跟踪"最后一个真实前台窗口"，
 	// 点击时不再依赖实时 GetForegroundWindow()（点击瞬间它可能已是 0）。
@@ -689,6 +856,8 @@ public static class RunningWindows
 		thread.IsBackground = true;
 		thread.Name = "glassboard-windowindex";
 		thread.Start();
+		// 托盘溢出区事件监听（专用泵线程）：用户展开托盘瞬间被动刷新托盘名，UI 线程零参与。
+		StartTrayEventListener();
 	}
 
 	// 异步刷新窗口索引（onDone 在后台线程回调，调用方自行 marshal 回 UI）。
@@ -1295,6 +1464,9 @@ public static class RunningWindows
 	// 系统托盘图标名：优先 UIA（Win10/11 通用，覆盖 XAML 岛），失败退回经典 ToolbarWindow32 文本。
 	private static List<string> trayNameCache = new List<string>();
 	private static int trayNameCacheTick = 0;
+	private static int trayExpandTick = 0;
+	private static int trayExpandAttempts = 0;
+	private static int trayExpandInFlight = 0;
 
 	private static List<string> TrayNames()
 	{
@@ -1307,15 +1479,127 @@ public static class RunningWindows
 		}
 		trayNameCacheTick = tick;
 		List<string> names = TrayNamesQuick();
+		// 进程级兜底（④⑤）：UIA 读不到按钮名时，用托盘宿主窗口进程的 exe 文件名补充——
+		// 纯托盘程序（无窗口无文本）也有名字，绝不出现"有图标没名字"。
+		if (names.Count == 0)
+		{
+			foreach (uint pid in TrayHostPids())
+			{
+				try
+				{
+					string exe = Process.GetProcessById((int)pid).ProcessName;
+					if (!string.IsNullOrWhiteSpace(exe) && !SubprocessExeNames.Contains(exe) && !names.Contains(exe))
+					{
+						names.Add(exe);
+					}
+				}
+				catch
+				{
+				}
+			}
+		}
 		if (names.Count > 0)
 		{
 			trayNameCache = names;
+			trayExpandAttempts = 0;
 		}
-		// 读不到时沿用旧缓存（60 秒内）：运行圆点不闪。
-		// 超过 60 秒仍读不到说明托盘从未展开/系统无溢出岛，缓存保留旧值，
-		// 圆点兜底主要靠 TrayHostPids 的进程路径匹配。
+		else
+		{
+			// 读不到且距上次尝试 ≥30 分钟、生命周期内失败 <3 次 → 低频主动展开托盘读一次：
+			// 点击"显示隐藏的图标"→ 读溢出岛 → 收起。消灭"机器重启后托盘从未展开读不到"，
+			// 全程在后台线程、30 分钟才可能发生一次，与旧版 90s 开合完全不同量级。
+			if (tick - trayExpandTick >= 1800000 && trayExpandAttempts < 3)
+			{
+				lock (scanGate)
+				{
+					if (trayExpandInFlight == 0 && tick - trayExpandTick >= 1800000)
+					{
+						trayExpandInFlight++;
+						trayExpandTick = tick;
+					}
+					else
+					{
+						return trayNameCache;
+					}
+				}
+				trayExpandAttempts++;
+				ThreadPool.QueueUserWorkItem(delegate
+				{
+					try
+					{
+						TryExpandOverflow();
+					}
+					finally
+					{
+						lock (scanGate)
+						{
+							trayExpandInFlight--;
+						}
+					}
+				});
+			}
+		}
+		// 读不到时沿用旧缓存：运行圆点不闪；兜底判定由 TrayMatches 的宿主进程路径匹配补位。
 		return trayNameCache;
 	}
+
+	// 低频主动展开溢出区读托盘名（后台线程；只点托盘自己的 chevron 按钮，不做全桌面树遍历）。
+	private static void TryExpandOverflow()
+	{
+		try
+		{
+			IntPtr shell = FindWindow("Shell_TrayWnd", null);
+			if (shell == IntPtr.Zero)
+			{
+				return;
+			}
+			AutomationElement shellEl = AutomationElement.FromHandle(shell);
+			AutomationElementCollection buttons = shellEl.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+			AutomationElement chevron = null;
+			foreach (AutomationElement b in buttons)
+			{
+				string n = b.Current.Name;
+				if (n != null && (n.Contains("显示隐藏的图标") || n.Contains("Show hidden icons")))
+				{
+					chevron = b;
+					break;
+				}
+			}
+			if (chevron == null)
+			{
+				return;
+			}
+			chevron.GetCurrentPattern(InvokePattern.Pattern);
+			((InvokePattern)chevron.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+			Thread.Sleep(400);
+			List<string> names = TrayNamesQuick();
+			// 读后收起（无论读没读到都收，绝不把托盘开着留给用户）
+			try
+			{
+				((InvokePattern)chevron.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+			}
+			catch
+			{
+			}
+			if (names.Count > 0)
+			{
+				lock (scanGate)
+				{
+					trayNameCache = names;
+					trayNameCacheTick = Environment.TickCount;
+				}
+				Store.Trace("TRAY overflow expand names=" + names.Count);
+			}
+		}
+		catch
+		{
+		}
+	}
+
+
+	// 系统图标/系统 UI 名黑名单（③）：溢出区里也可能混入系统图标，名字带这些特征的一律跳过，
+	// 绝不显示空白项或系统项。真实应用图标名不受影响。
+	private static readonly string[] TraySystemNamePrefixes = new string[4] { "显示隐藏的图标", "Show hidden icons", "输入指示", "触摸键盘" };
 
 	private static List<string> TrayNamesQuick()
 	{
@@ -1333,10 +1617,30 @@ public static class RunningWindows
 					AutomationElementCollection buttons = island.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
 					foreach (AutomationElement button in buttons)
 					{
-						string name = button.Current.Name;
-						if (!string.IsNullOrWhiteSpace(name))
+						// ③ 过滤：可见区系统图标（SystemTray.NormalButton 且 AutomationId=SystemTrayIcon，
+						// 输入法/时钟/音量/网络等）绝不混入；Name 空跳过；系统名前缀跳过。
+						if (button.Current.ClassName == "SystemTray.NormalButton" && button.Current.AutomationId == "SystemTrayIcon")
 						{
-							names.Add(name.Trim());
+							continue;
+						}
+						string name = button.Current.Name;
+						if (string.IsNullOrWhiteSpace(name))
+						{
+							continue;
+						}
+						name = name.Trim();
+						bool systemName = false;
+						foreach (string prefix in TraySystemNamePrefixes)
+						{
+							if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+							{
+								systemName = true;
+								break;
+							}
+						}
+						if (!systemName)
+						{
+							names.Add(name);
 						}
 					}
 				}
@@ -1491,7 +1795,19 @@ public static class RunningWindows
 				string name = builder.ToString().Trim();
 				if (name.Length > 0)
 				{
-					names.Add(name);
+					bool systemName = false;
+					foreach (string prefix in TraySystemNamePrefixes)
+					{
+						if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+						{
+							systemName = true;
+							break;
+						}
+					}
+					if (!systemName)
+					{
+						names.Add(name);
+					}
 				}
 			}
 		}

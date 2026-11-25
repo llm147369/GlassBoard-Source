@@ -5332,14 +5332,14 @@ public class Controller
 			return false;
 		}
 		BoardEditState before = BeginBoardEdit();
-		foreach (Entry item in sliceNow)
-		{
-			Prefs.Apps.Remove(item);
-		}
+		// 一次性重建（同 ReorderView：先构建局部新列表再整体替换，杜绝中途异常删空列表）
+		List<Entry> fresh = Prefs.Apps.Where((Entry a) => !sliceNow.Contains(a)).ToList();
+		int offset = Math.Min(sliceOffset, fresh.Count);
 		for (int i = 0; i < target.Count; i++)
 		{
-			Prefs.Apps.Insert(sliceOffset + i, target[i]);
+			fresh.Insert(offset + i, target[i]);
 		}
+		Prefs.Apps = fresh;
 		EndBoardEdit(before, "调整图标顺序");
 		Refresh();
 		return true;
@@ -5385,15 +5385,17 @@ public class Controller
 			return false;
 		}
 		BoardEditState before = BeginBoardEdit();
-		int insertAt = Prefs.Apps.IndexOf(ordered[0]);
-		foreach (Entry item in targets)
-		{
-			Prefs.Apps.Remove(item);
-		}
+		// 一次性重建（先构建局部新列表，成功后整体替换 Prefs.Apps）：
+		// 旧实现"先 Remove 全部再逐个 Insert"在插入下标越界时会把列表删空后中断，
+		// 用户拖"第一行前两个图标互换"即触发——图标全部消失（Bug 反馈 2026-11-24）。
+		int insertAt = Math.Max(0, targets.Min((Entry a) => Prefs.Apps.IndexOf(a)));
+		List<Entry> fresh = Prefs.Apps.Where((Entry a) => !seqSet.Contains(a.Path)).ToList();
+		insertAt = Math.Min(insertAt, fresh.Count);
 		for (int i = 0; i < ordered.Count; i++)
 		{
-			Prefs.Apps.Insert(insertAt + i, ordered[i]);
+			fresh.Insert(insertAt + i, ordered[i]);
 		}
+		Prefs.Apps = fresh;
 		EndBoardEdit(before, "调整图标顺序");
 		Refresh();
 		return true;

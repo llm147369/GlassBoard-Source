@@ -241,17 +241,9 @@ public static class Program
 				{
 					HealthMonitor.Report("界面异常", e.Exception?.ToString() ?? "未知");
 					Store.Log(e.Exception);
-					if (controller != null)
-					{
-						try
-						{
-							Store.Save(controller.Prefs);
-						}
-						catch (Exception ex6)
-						{
-							Store.Log(ex6);
-						}
-					}
+					// 不在此处自动保存配置：异常瞬间的内存态可能已被破坏（如排序越界把 Apps 删空），
+					// 保存损坏态 = 永久丢图标（Bug 反馈 2026-11-24 面板图标全部消失即此路径）。
+					// 正常编辑每次都会即时保存；崩溃前最多丢最后一次编辑，有 .previous/.last-good/snapshots 兜底。
 					MessageBox.Show("操作失败，详情已记录在配置文件夹 error.log。\n" + e.Exception.Message, "GlassBoard-Source");
 					e.Handled = true;
 				};

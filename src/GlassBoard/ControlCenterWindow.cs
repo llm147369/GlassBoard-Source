@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.Threading.Tasks;
@@ -854,6 +855,36 @@ public class ControlCenterWindow : GlassWindow
 	}
 
 	// ==================== 显示与状态 ====================
+
+	// 控制中心在 Dock 上方展开：从正下方（Dock 方向）升入归位 + 淡入，
+	// 语义贴合"从 Dock 弹出"，与启动台的对角遮罩揭示、基类左上滑入区分开。
+	protected override void AnimateOpen()
+	{
+		BeginAnimation(UIElement.OpacityProperty, null);
+		Root.RenderTransform = Transform.Identity;
+		if (!MotionEnabled)
+		{
+			Opacity = 1.0;
+			return;
+		}
+		double level = Math.Max(0.15, MotionLevel);
+		TranslateTransform translateTransform = new TranslateTransform(0.0, 24.0 * level);
+		Root.RenderTransform = translateTransform;
+		TimeSpan duration = TimeSpan.FromMilliseconds(240.0);
+		CubicEase easing = new CubicEase
+		{
+			EasingMode = EasingMode.EaseOut
+		};
+		Opacity = 0.0;
+		BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.0, 1.0, duration)
+		{
+			EasingFunction = easing
+		});
+		translateTransform.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(0.0, duration)
+		{
+			EasingFunction = easing
+		});
+	}
 
 	public void Toggle()
 	{
