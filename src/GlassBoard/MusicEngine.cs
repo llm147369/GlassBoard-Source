@@ -790,7 +790,7 @@ public sealed class MusicEngine : IDisposable
 
 	private async void Poll()
 	{
-		if (polling || stopped || Local)
+		if (polling || stopped || Local || Program.Exiting)
 		{
 			return;
 		}

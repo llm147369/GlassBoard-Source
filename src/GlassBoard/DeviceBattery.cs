@@ -94,7 +94,7 @@ public sealed class DeviceBattery : IDisposable
 
 	private void OnTick(object state)
 	{
-		if (closed || timer == null)
+		if (closed || timer == null || Program.Exiting)
 		{
 			return;
 		}

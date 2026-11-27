@@ -427,6 +427,10 @@ public class DockWindow : GlassWindow
 		};
 		runningTimer.Tick += (object s, EventArgs e) =>
 		{
+			if (Program.Exiting)
+			{
+				return; // 关机/注销：不再触发窗口扫描/重建（COM/RPC 已被拆）
+			}
 			ReleaseCancelledExternalDrag();
 			C.CheckGameMode();
 			RunningWindows.SampleForeground();

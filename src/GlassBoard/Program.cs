@@ -15,6 +15,28 @@ public static class Program
 	// 开机自启（Run 键带 --startup）：非关键服务错峰缓冲，让 Dock 首帧与交互先就绪。
 	internal static bool StartupMode;
 
+	// 会话结束（关机/注销）：系统开始拆 RPC/COM 后，任何 COM 调用都会抛 c0020001 之类的
+	// 未处理异常导致进程崩溃（.NET Runtime 事件 1026）。所有后台轮询循环以此标志自查退出。
+	internal static volatile bool Exiting;
+
+	// 会话结束期间捕获的最后一次未处理异常（仅记录一次，避免关机瞬间刷写盘）。
+	private static volatile Exception shutdownException;
+
+	private static void LogShutdownException(Exception ex)
+	{
+		if (System.Threading.Interlocked.CompareExchange(ref shutdownException, ex, null) != null)
+		{
+			return;
+		}
+		try
+		{
+			Store.Log(ex);
+		}
+		catch
+		{
+		}
+	}
+
 	private static void CleanLegacyUpdater()
 	{
 		try
@@ -217,7 +239,16 @@ public static class Program
 				Controller controller = null;
 				application.Exit += (object s, ExitEventArgs e) =>
 				{
+					Exiting = true;
 					HealthMonitor.Shutdown();
+					try
+					{
+						controller?.ShutdownEngines();
+					}
+					catch (Exception ex0)
+					{
+						Store.Log(ex0);
+					}
 					try
 					{
 						// 隐藏桌面图标是持久偏好：退出时保留隐藏状态，下次启动免广播、
@@ -246,6 +277,24 @@ public static class Program
 					// 正常编辑每次都会即时保存；崩溃前最多丢最后一次编辑，有 .previous/.last-good/snapshots 兜底。
 					MessageBox.Show("操作失败，详情已记录在配置文件夹 error.log。\n" + e.Exception.Message, "GlassBoard-Source");
 					e.Handled = true;
+				};
+				// 关机/注销时系统拆 RPC 会让 UIA/GSMTC/WASAPI 等调用抛 c0020001 之类的未处理异常。
+				// HealthMonitor 已注册全局 UnhandledException/UnobservedTaskException 记录；
+				// 这里在 Exiting 期间额外静默记录一次（关机瞬间写盘要轻），杜绝 .NET Runtime 1026 崩溃弹窗。
+				AppDomain.CurrentDomain.UnhandledException += delegate (object s, UnhandledExceptionEventArgs e)
+				{
+					if (Exiting)
+					{
+						LogShutdownException(e.ExceptionObject as Exception);
+					}
+				};
+				System.Threading.Tasks.TaskScheduler.UnobservedTaskException += delegate (object s, System.Threading.Tasks.UnobservedTaskExceptionEventArgs e)
+				{
+					e.SetObserved();
+					if (Exiting)
+					{
+						LogShutdownException(e.Exception);
+					}
 				};
 				controller = new Controller();
 				Store.Trace("START phase=controller ms=" + (Environment.TickCount - ProcessStartTick));

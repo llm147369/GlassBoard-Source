@@ -39,6 +39,34 @@ public static class PanelDismissGuard
 
 	private static volatile bool hookThreadQuit;
 
+	// 泵线程的 OS 线程 id（GetCurrentThreadId 在泵线程内采集），Shutdown 用 PostThreadMessage 唤醒。
+	private static volatile int hookOsThreadId;
+
+	// 会话结束（关机/注销）停机：唤醒阻塞在 GetMessage 的泵线程，让其摘钩退出。
+	// 关机时系统拆全局钩子链，钩子若仍常驻回调会被系统强行切断（LowLevelHooksTimeout），
+	// 主动摘钩干净得多。
+	public static void Shutdown()
+	{
+		hookThreadQuit = true;
+		try
+		{
+			int osId = hookOsThreadId;
+			if (osId != 0)
+			{
+				PostThreadMessage((uint)osId, 0x0012u, UIntPtr.Zero, IntPtr.Zero);
+			}
+		}
+		catch
+		{
+		}
+	}
+
+	[DllImport("user32.dll", SetLastError = true)]
+	private static extern bool PostThreadMessage(uint threadId, uint msg, UIntPtr wParam, IntPtr lParam);
+
+	[DllImport("kernel32.dll")]
+	private static extern uint GetCurrentThreadId();
+
 	private static readonly object hookGate = new object();
 
 	// 最近一次有鼠标事件经过本钩子的时刻：钩子活着时事件流不会断。
@@ -69,6 +97,7 @@ public static class PanelDismissGuard
 	{
 		try
 		{
+			hookOsThreadId = (int)GetCurrentThreadId();
 			hook = SetWindowsHookEx(14, Callback, GetModuleHandle(null), 0u);
 			if (hook == IntPtr.Zero)
 			{
@@ -79,7 +108,7 @@ public static class PanelDismissGuard
 			Store.Trace("PDG hook thread started");
 			IntPtr wakeTimer = SetTimer(IntPtr.Zero, (IntPtr)1, 10000u, IntPtr.Zero);
 			MSG msg;
-			while (!hookThreadQuit && GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
+			while (!hookThreadQuit && !Program.Exiting && GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
 			{
 				if (msg.message == 0x0113 && msg.wParam == (IntPtr)1)
 				{
@@ -112,6 +141,7 @@ public static class PanelDismissGuard
 		}
 		finally
 		{
+			hookOsThreadId = 0;
 			if (hook != IntPtr.Zero)
 			{
 				UnhookWindowsHookEx(hook);

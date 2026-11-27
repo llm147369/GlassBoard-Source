@@ -364,12 +364,19 @@ public static class RunningWindows
 	private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
 
 	private static IntPtr trayEventHook = IntPtr.Zero;
-	private static bool trayEventQuit;
+	private static volatile bool trayEventQuit;
 	private static Thread trayEventThread;
 	private static readonly object trayEventGate = new object();
 	private static readonly List<IntPtr> trayEventQueue = new List<IntPtr>(512);
 	private static readonly HashSet<IntPtr> trayEventSeen = new HashSet<IntPtr>();
 	private static int trayEventLastDrain = 0;
+
+	// 会话结束（关机/注销）停机：置退出标志，泵线程 ≤300ms 内自行摘钩退出。
+	// 系统拆 RPC 后 UIA 调用会抛未处理异常，必须让事件线程在关机前停下。
+	public static void ShutdownTrayListener()
+	{
+		trayEventQuit = true;
+	}
 
 	private static readonly WinEventDelegate TrayCreateProc = OnTrayCreateEvent;
 
@@ -405,7 +412,7 @@ public static class RunningWindows
 			{
 				trayEventHook = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, IntPtr.Zero, TrayCreateProc, 0u, 0u, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 				Store.Trace("TRAY event hook=" + trayEventHook.ToInt64());
-				while (!trayEventQuit)
+				while (!trayEventQuit && !Program.Exiting)
 				{
 					MSG m;
 					while (PeekMessage(out m, IntPtr.Zero, 0u, 0u, 1u))
@@ -841,11 +848,15 @@ public static class RunningWindows
 		}
 		Thread thread = new Thread(() =>
 		{
-			while (true)
+			while (!Program.Exiting)
 			{
 				try
 				{
 					Thread.Sleep(2500);
+					if (Program.Exiting)
+					{
+						return;
+					}
 					RefreshCore();
 				}
 				catch

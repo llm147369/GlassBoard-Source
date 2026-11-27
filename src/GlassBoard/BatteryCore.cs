@@ -119,24 +119,32 @@ public static class BatteryCore
 
 	private static void Loop(Dispatcher dispatcher)
 	{
-		while (running)
+		while (running && !Program.Exiting)
 		{
-			BatteryState next = ReadAll();
-			BatteryState prev = Current;
-			if (!next.EqualsState(prev))
+			try
 			{
-				Current = next;
-				try
+				BatteryState next = ReadAll();
+				BatteryState prev = Current;
+				if (!next.EqualsState(prev))
 				{
-					dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+					Current = next;
+					try
 					{
-						Changed?.Invoke();
-					}));
+						dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+						{
+							Changed?.Invoke();
+						}));
+					}
+					catch
+					{
+						// 窗口已关闭时静默。
+					}
 				}
-				catch
-				{
-					// 窗口已关闭时静默。
-				}
+			}
+			catch (Exception ex)
+			{
+				// 关机瞬间 HID/SetupAPI 调用可能失败；单拍失败不影响下一拍。
+				Store.Trace("BATTERY read error " + ex.Message);
 			}
 			WakeSignal.Wait(TimeSpan.FromSeconds(60));
 			WakeSignal.Reset();

@@ -236,7 +236,7 @@ namespace GlassBoard
 				Store.Trace("CHAT uia create failed " + ex.Message);
 				automation = null;
 			}
-			while (true)
+			while (!Program.Exiting)
 			{
 				IntPtr hwnd = IntPtr.Zero;
 				lock (gate)

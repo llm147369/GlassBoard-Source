@@ -57,7 +57,7 @@ public sealed class WeatherEngine
 
 	private async void Fetch()
 	{
-		if (busy || closed)
+		if (busy || closed || Program.Exiting)
 		{
 			return;
 		}

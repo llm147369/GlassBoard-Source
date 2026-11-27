@@ -255,7 +255,7 @@ public static class VideoWallpaper
 		{
 			try
 			{
-				if (window == null)
+				if (window == null || Program.Exiting)
 				{
 					return;
 				}

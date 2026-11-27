@@ -235,7 +235,16 @@ public class Controller
 		// 关机/注销时窗口被系统销毁会触发 Closed 事件；标记正在退出，防止组件被误判为"用户关闭"而全部禁用
 		SystemEvents.SessionEnding += (object s, SessionEndingEventArgs e) =>
 		{
+			Program.Exiting = true;
 			ShuttingDown = true;
+			// 本回调跑在 SystemEvents 的广播线程上（.NET-BroadcastEventWindow 消息泵）。
+			// 关机阶段系统已开始拆 RPC/COM：此线程上任何 COM/SystemEvents 订阅操作都可能
+			// 抛 c0020001 且无法兜底（未处理异常弹窗 = 用户看到的崩溃）。
+			// 因此这里只做零 COM 的两件事：置退出标志（各轮询循环自检退出）+ 唤醒阻塞的泵线程。
+			try { RunningWindows.ShutdownTrayListener(); } catch { }
+			try { PanelDismissGuard.Shutdown(); } catch { }
+			// 其余引擎停机全部转投 UI 线程执行（Dispatcher 处理器有完整 try/catch 兜底）。
+			try { System.Windows.Application.Current?.Dispatcher?.BeginInvoke((Action)ShutdownEngines); } catch { }
 		};
 		if (!string.IsNullOrEmpty(Store.RecoveryMessage))
 		{
@@ -4854,6 +4863,20 @@ public class Controller
 		Board.Render();
 		Board.SetStatus((dockPinResult.Paths.Count == 0) ? "未添加入口" : ("已放入 Dock " + dockPinResult.Paths.Count + " 个 · Ctrl+Z 撤销" + ((dockPinResult.Skipped > 0) ? ("；已达 20 个上限，跳过 " + dockPinResult.Skipped + " 个") : "")));
 		return dockPinResult;
+	}
+
+	/// <summary>关机/注销引擎停机（必须在 UI 线程执行；SessionEnding 广播线程只投递不执行）。</summary>
+	internal void ShutdownEngines()
+	{
+		try { HealthMonitor.Shutdown(); } catch { }
+		try { NotificationCenter.Shutdown(); } catch { }
+		try { BatteryCore.Stop(); } catch { }
+		try { IslandClipboard.Stop(); } catch { }
+		try { IslandAudio.Stop(); } catch { }
+		try { ChatPopupReader.Stop(); } catch { }
+		try { widgets?.Dispose(); } catch { }
+		try { islandHub?.Dispose(); } catch { }
+		try { VideoWallpaper.Stop(); } catch { }
 	}
 
 	private void MigrateRemovalIdentities()

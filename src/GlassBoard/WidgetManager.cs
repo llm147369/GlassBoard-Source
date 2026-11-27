@@ -74,7 +74,7 @@ public sealed class WidgetManager : IDisposable
 		Battery.Changed += RefreshBattery;
 		timer.Tick += (object s, EventArgs e) =>
 		{
-			if (closed)
+			if (closed || Program.Exiting)
 			{
 				return;
 			}

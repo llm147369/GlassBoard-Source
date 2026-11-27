@@ -224,6 +224,31 @@ public static class NotificationCenter
 		}
 	}
 
+	// 会话结束（关机/注销）停机：停后台对账轮询、关 STA 消息泵。
+	// 关机时系统拆 RPC，WinRT 通知查询（UserNotificationListener）会抛未处理异常崩溃进程。
+	public static void Shutdown()
+	{
+		started = false;
+		System.Threading.Timer t = resyncTimer;
+		resyncTimer = null;
+		try
+		{
+			t?.Dispose();
+		}
+		catch
+		{
+		}
+		Dispatcher d = staDispatcher;
+		staDispatcher = null;
+		try
+		{
+			d?.BeginInvokeShutdown(DispatcherPriority.Background);
+		}
+		catch
+		{
+		}
+	}
+
 	// 事件入口（通知中心回调线程）：只入队，尽快返回
 	private static void OnNotificationChanged(UserNotificationListener sender, UserNotificationChangedEventArgs args)
 	{
@@ -496,6 +521,10 @@ if (idToApp.TryGetValue(item.Id, out string aumid))
 	// 慢查询（Shell 通知服务 RPC 2-6 秒）因此绝不阻塞 UI 线程。
 	private static void SyncSnapshot(bool pulse)
 	{
+		if (Program.Exiting)
+		{
+			return; // 关机/注销：RPC 已被拆，任何 WinRT 通知查询都会抛未处理异常
+		}
 		lock (gate)
 		{
 			if (syncInFlight)

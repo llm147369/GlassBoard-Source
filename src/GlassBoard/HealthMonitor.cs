@@ -90,6 +90,10 @@ public static class HealthMonitor
 	{
 		try
 		{
+			if (Program.Exiting)
+			{
+				return; // 关机/注销：健康探针已无意义，且 IsHungAppWindow 等系统调用会失败
+			}
 			tickCounter++;
 			CheckUiJitter();
 			if (tickCounter % 5 == 0)

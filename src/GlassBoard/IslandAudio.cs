@@ -85,6 +85,10 @@ public static class IslandAudio
 	// 每 2s 检查一次，数据断流 >2.5s 且仍有使用者时强制重建采集。
 	private static void OnStallCheck(object state)
 	{
+		if (Program.Exiting)
+		{
+			return; // 关机/注销：不再重启 WASAPI（COM 已被拆）
+		}
 		bool needRestart = false;
 		lock (gate)
 		{
