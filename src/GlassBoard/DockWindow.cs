@@ -131,7 +131,9 @@ public class DockWindow : GlassWindow
 
 	// —— Dock 右键菜单管理（点任意地方即关闭）——
 	private System.Windows.Controls.ContextMenu dockOpenMenu;
-	private bool dockMenuJustClosed;
+	// 用时间戳而不是布尔量：菜单关掉后如果那一击落在 Dock 背景上（没有按钮接收），
+	// 布尔标记会一直留着，把下一次点图标的点击也吞掉，表现就是"点了一下没反应"。
+	private int dockMenuClosedTick = int.MinValue;
 
 	private StackPanel Items = new StackPanel
 	{
@@ -293,8 +295,6 @@ public class DockWindow : GlassWindow
 	private DockPointerGesture dockPointer;
 
 	private FrameworkElement dockPointerOwner;
-
-	private bool dockPointerFromMenu;
 
 	private readonly DispatcherTimer dockPointerWatch = new DispatcherTimer(DispatcherPriority.Input)
 	{
@@ -572,17 +572,13 @@ public class DockWindow : GlassWindow
 			if (e.ChangedButton == MouseButton.Right)
 			{
 				CloseDockMenu();
-				dockMenuJustClosed = false;
+				dockMenuClosedTick = int.MinValue;
 				return;
 			}
 			if (CloseDockMenu())
 			{
-				dockMenuJustClosed = true;
+				dockMenuClosedTick = Environment.TickCount;
 				e.Handled = true;
-			}
-			else if (dockMenuJustClosed)
-			{
-				dockMenuJustClosed = false;
 			}
 		};
 		SystemEvents.DisplaySettingsChanged += DisplayChanged;
@@ -1581,6 +1577,47 @@ public class DockWindow : GlassWindow
 		catch
 		{
 			// 动画失败只影响视觉效果，通知徽标本身已点亮
+		}
+	}
+
+	// 点击后应用还在启动（多进程 / 启动器类应用拉起慢）时给一次轻微弹跳：
+	// 让用户知道这一下点击已经生效，而不是"点了没反应"。只动图标自身，不影响命中区域。
+	public void BounceIcon(string path)
+	{
+		try
+		{
+			if (!MotionEnabled || string.IsNullOrEmpty(path) || !notifyIcons.TryGetValue(path, out FrameworkElement icon) || icon == null)
+			{
+				return;
+			}
+			Transform previous = icon.RenderTransform;
+			TranslateTransform bounce = new TranslateTransform();
+			icon.RenderTransform = bounce;
+			DoubleAnimationUsingKeyFrames y = new DoubleAnimationUsingKeyFrames
+			{
+				Duration = TimeSpan.FromMilliseconds(420.0)
+			};
+			y.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(0.0)));
+			y.KeyFrames.Add(new EasingDoubleKeyFrame(-6.0, KeyTime.FromPercent(0.35), new CubicEase
+			{
+				EasingMode = EasingMode.EaseOut
+			}));
+			y.KeyFrames.Add(new EasingDoubleKeyFrame(0.0, KeyTime.FromPercent(1.0), new CubicEase
+			{
+				EasingMode = EasingMode.EaseIn
+			}));
+			y.Completed += (object s, EventArgs e) =>
+			{
+				if (ReferenceEquals(icon.RenderTransform, bounce))
+				{
+					icon.RenderTransform = previous;
+				}
+			};
+			bounce.BeginAnimation(TranslateTransform.YProperty, y);
+		}
+		catch
+		{
+			// 反馈动画失败不影响启动流程
 		}
 	}
 
@@ -4973,9 +5010,12 @@ public class DockWindow : GlassWindow
 			{
 				return;
 			}
-			if (dockMenuJustClosed)
+			// 关闭菜单的那一击不触发图标动作；只认 300ms 内的同一次按下，
+			// 避免标记残留把之后真正的点击吞掉。
+			int menuAge = Environment.TickCount - dockMenuClosedTick;
+			if (menuAge >= 0 && menuAge < 300)
 			{
-				dockMenuJustClosed = false;
+				dockMenuClosedTick = int.MinValue;
 				e.Handled = true; // 关闭菜单的那一击不触发点击动作
 				return;
 			}
@@ -5051,10 +5091,12 @@ public class DockWindow : GlassWindow
 			return false;
 		}
 		StopDockLayoutMotion();
-		dockPointer = new DockPointerGesture(key, point.X, point.Y, SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance);
+		// 拖拽判定用屏幕坐标：Dock 会做缩放/贴边动画，窗口自身在动时窗口坐标会变，
+		// 鼠标明明没动也会被判成"拖拽"，点击随即被丢掉（用户看到的就是点了没反应）。
+		System.Windows.Point start = ScreenPoint(point);
+		dockPointer = new DockPointerGesture(key, start.X, start.Y, SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance);
 		dockPointerClick = click;
 		dockPointerOwner = owner;
-		dockPointerFromMenu = owner is System.Windows.Controls.MenuItem;
 		owner.SetValue(DragSuppressed, true);
 		dockPointerPreviousBusy = (C.Board != null && C.Board.ModalBusy);
 		if (C.Board != null) { C.Board.ModalBusy = true; }
@@ -5064,6 +5106,20 @@ public class DockWindow : GlassWindow
 		return true;
 	}
 
+	// 客户端坐标 → 屏幕坐标。拖拽判定只看鼠标在屏幕上的绝对位移，
+	// Dock 自身的缩放/贴边动画不应该被算成"用户拖动了图标"。
+	private System.Windows.Point ScreenPoint(System.Windows.Point client)
+	{
+		try
+		{
+			return PointToScreen(client);
+		}
+		catch
+		{
+			return client;
+		}
+	}
+
 	private void MoveDockPointer(System.Windows.Point point)
 	{
 		if (dockPointer == null)
@@ -5071,7 +5127,8 @@ public class DockWindow : GlassWindow
 			return;
 		}
 		bool flag = dockPointer.Dragging;
-		dockPointer.Move(point.X, point.Y);
+		System.Windows.Point screen = ScreenPoint(point);
+		dockPointer.Move(screen.X, screen.Y);
 		if (!dockPointer.Dragging)
 		{
 			return;
@@ -5109,7 +5166,11 @@ public class DockWindow : GlassWindow
 			MoveDockPointer(point);
 			DockPointerGesture dockPointerGesture = dockPointer;
 			bool flag = InsideDock(point);
-			DockPointerResult dockPointerResult = dockPointerGesture.Release(point.X, point.Y, flag, flag ? ResolveDockDrop(dockPointerGesture.Source, TranslatePoint(point, Items).X) : null, dockPointerFromMenu | flag);
+			// 只要没有拖动就应该算一次点击：松手瞬间窗口正好在滑动/贴边动画里，
+			// 或菜单项在 Dock 外面弹开时，鼠标坐标可能落到 Dock 矩形之外，
+			// 之前会因此把整次点击丢掉（"点了没反应"）。
+			System.Windows.Point released = ScreenPoint(point);
+			DockPointerResult dockPointerResult = dockPointerGesture.Release(released.X, released.Y, flag, flag ? ResolveDockDrop(dockPointerGesture.Source, TranslatePoint(point, Items).X) : null, true);
 			Action action = dockPointerClick;
 			ClearDockPointer();
 			bool flag2 = false;

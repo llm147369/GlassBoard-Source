@@ -977,11 +977,30 @@ public class Controller
 				// 激活判定失败但 12 秒内刚启动过且进程仍在 → 不再重复拉起。
 				if (RunningWindows.RecentlyLaunched(entry.Path) && RunningWindows.ActiveLaunchPids(entry.Path).Count > 0)
 				{
-					Store.Trace("LAUNCH cooldown path=" + entry.Path);
+					// 之前这里直接 return：进程还活着但窗口还没进索引时（多进程 / 启动器 /
+					// Electron 应用启动慢），用户连点图标看到的就是"点了没反应"。
+					// 先强制刷新窗口索引，把已经出现的窗口提到前台。
+					if (RunningWindows.RaiseRecent(entry.Path))
+					{
+						Store.Trace("LAUNCH cooldown raised path=" + entry.Path);
+						Board.CollapseSmooth();
+						return;
+					}
+					// MSIX 应用可以直接用激活器把已有窗口提上来，不用重启进程。
+					if (!string.IsNullOrWhiteSpace(entry.Aumid) && Native.ActivateApplication(entry.Aumid) > 0)
+					{
+						Store.Trace("LAUNCH cooldown aumid path=" + entry.Path);
+						Board.CollapseSmooth();
+						return;
+					}
+					// 确实还在启动：给一次图标弹跳反馈，别让整下点击毫无回应。
+					Store.Trace("LAUNCH cooldown still-starting path=" + entry.Path);
+					Dock.BounceIcon(entry.Path);
 					Board.CollapseSmooth();
 					return;
 				}
 				Process process = null;
+				Store.Trace("LAUNCH start path=" + launchPath + " aumid=" + (entry.Aumid ?? ""));
 				if (!string.IsNullOrWhiteSpace(entry.Aumid))
 				{
 					int aumidPid = Native.ActivateApplication(entry.Aumid);
@@ -1027,9 +1046,27 @@ public class Controller
 			}
 			Board.CollapseSmooth();
 		}
-		catch (Exception)
+		catch (Exception ex)
 		{
-			AskRemoveEntry(entry);
+			// 只有入口确实不存在时才提示"是否移除"；启动失败（权限、关联失效等）
+			// 以前也会弹这个框，看起来就像点了没反应或者莫名要求删图标。
+			Store.Log(ex);
+			bool gone = string.IsNullOrEmpty(entry?.Path) || (!File.Exists(entry.Path) && !Directory.Exists(entry.Path) && (string.IsNullOrWhiteSpace(entry.LaunchTarget) || (!File.Exists(entry.LaunchTarget) && !Directory.Exists(entry.LaunchTarget))));
+			if (gone)
+			{
+				AskRemoveEntry(entry);
+				return;
+			}
+			try
+			{
+				if (Tray != null)
+				{
+					Tray.ShowBalloonTip(4000, "GlassBoard-Source", "无法启动「" + ((entry == null) ? "" : entry.Name) + "」：" + ex.Message, ToolTipIcon.Warning);
+				}
+			}
+			catch
+			{
+			}
 		}
 	}
 

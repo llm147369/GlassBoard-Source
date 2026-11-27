@@ -693,16 +693,20 @@ public static class RunningWindows
 				return true;
 			}
 			long area = 0L;
+			// 最小化窗口的 GetWindowRect 返回 (-32000,-32000) 的图标占位矩形（例如 160×28），
+			// 按尺寸过滤会把它整条丢掉 → 最小化的应用从运行列表消失、点 Dock 图标也没反应。
+			// 最小化只影响位置尺寸，窗口本身仍然是"这个程序的窗口"，必须保留。
+			bool iconic = IsIconic(handle);
 			if (GetWindowRect(handle, out RECT windowRect))
 			{
 				int width = windowRect.Right - windowRect.Left;
 				int height = windowRect.Bottom - windowRect.Top;
 				// 细长标题栏（如 Qt 的 _q_titlebar）和不可见小浮窗不是用户程序窗口。
-				if (width < 80 || height < 50)
+				if (!iconic && (width < 80 || height < 50))
 				{
 					return true;
 				}
-				area = (long)width * (long)height;
+				area = iconic ? 0L : (long)width * (long)height;
 			}
 			// AMD 显卡驱动组件（RadeonSoftware 面板等）：驱动后台/设置界面不算用户程序。
 			if (!string.IsNullOrEmpty(value3))
@@ -1283,6 +1287,7 @@ public static class RunningWindows
 		Resolve(entry);
 		string[] paths = WindowActivationRules.Executables(entry);
 		string aumid = entry.Aumid ?? "";
+		HashSet<string> roots = InstallRoots(entry);
 		HashSet<string> fallbackNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		string[] array = paths;
 		foreach (string text in array)
@@ -1294,9 +1299,116 @@ public static class RunningWindows
 			}
 		}
 		return (from w in SnapshotWithBackground()
-			where !string.IsNullOrEmpty(w.Path) && (paths.Contains(w.Path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(w.Path)) || (!string.IsNullOrEmpty(aumid) && string.Equals(w.AppUserModelId, aumid, StringComparison.OrdinalIgnoreCase)))
+			where !string.IsNullOrEmpty(w.Path) && (paths.Contains(w.Path, StringComparer.OrdinalIgnoreCase) || fallbackNames.Contains(Path.GetFileNameWithoutExtension(w.Path)) || UnderRoot(w.Path, roots) || (!string.IsNullOrEmpty(aumid) && string.Equals(w.AppUserModelId, aumid, StringComparison.OrdinalIgnoreCase)))
 			orderby w.Handle.ToInt64()
 			select w).ToList();
+	}
+
+	// 同一安装目录下的辅助进程，主窗口同样是"这个入口的窗口"：
+	// Steam 的客户端窗口属于 steamwebhelper.exe，Electron / Chrome 系的多进程应用、
+	// 各类启动器也一样。只按 exe 名匹配时这些入口永远 matches=0，点图标没有任何反应。
+	// 为避免误判，目录过于宽泛（系统目录、Program Files 根、用户目录等）时直接不收。
+	private static HashSet<string> InstallRoots(Entry entry)
+	{
+		HashSet<string> roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		foreach (string path in WindowActivationRules.Executables(entry))
+		{
+			if (string.IsNullOrEmpty(path))
+			{
+				continue;
+			}
+			string dir;
+			try
+			{
+				dir = Path.GetDirectoryName(path);
+			}
+			catch
+			{
+				continue;
+			}
+			if (!string.IsNullOrEmpty(dir) && !RootTooBroad(dir))
+			{
+				roots.Add(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+			}
+		}
+		return roots;
+	}
+
+	private static bool RootTooBroad(string dir)
+	{
+		string root = dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+		// "D:\" 这种盘符根目录不参与匹配
+		if (root.Length <= 3)
+		{
+			return true;
+		}
+		string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd('\\');
+		string programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData).TrimEnd('\\');
+		string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\');
+		if (string.IsNullOrEmpty(windows) || string.IsNullOrEmpty(profile))
+		{
+			return true;
+		}
+		if (root.Equals(windows, StringComparison.OrdinalIgnoreCase) || root.StartsWith(windows + "\\", StringComparison.OrdinalIgnoreCase))
+		{
+			return true;
+		}
+		if (!string.IsNullOrEmpty(programData) && (root.Equals(programData, StringComparison.OrdinalIgnoreCase) || root.StartsWith(programData + "\\", StringComparison.OrdinalIgnoreCase)))
+		{
+			return true;
+		}
+		string[] profileRoots = new string[11]
+		{
+			profile,
+			profile + "\\Desktop",
+			profile + "\\Downloads",
+			profile + "\\Documents",
+			profile + "\\Pictures",
+			profile + "\\Videos",
+			profile + "\\Music",
+			profile + "\\OneDrive",
+			profile + "\\AppData",
+			profile + "\\AppData\\Local",
+			profile + "\\AppData\\Roaming"
+		};
+		foreach (string text in profileRoots)
+		{
+			if (root.Equals(text, StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+		}
+		string[] programFiles = new string[4]
+		{
+			Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles).TrimEnd('\\'),
+			Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86).TrimEnd('\\'),
+			Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles).TrimEnd('\\') + "\\Common Files",
+			Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86).TrimEnd('\\') + "\\Common Files"
+		};
+		foreach (string text2 in programFiles)
+		{
+			if (root.Equals(text2, StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static bool UnderRoot(string windowPath, HashSet<string> roots)
+	{
+		if (string.IsNullOrEmpty(windowPath) || roots.Count == 0)
+		{
+			return false;
+		}
+		foreach (string root in roots)
+		{
+			if (windowPath.Length > root.Length + 1 && windowPath.StartsWith(root, StringComparison.OrdinalIgnoreCase) && (windowPath[root.Length] == '\\' || windowPath[root.Length] == '/'))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// 前台窗口 → 进程路径（走 pidMeta 缓存，无枚举无扫描，UI 线程可安全调用）。
@@ -1327,6 +1439,10 @@ public static class RunningWindows
 		Resolve(entry);
 		string[] paths = WindowActivationRules.Executables(entry);
 		if (paths.Contains(windowPath, StringComparer.OrdinalIgnoreCase))
+		{
+			return true;
+		}
+		if (UnderRoot(windowPath, InstallRoots(entry)))
 		{
 			return true;
 		}
@@ -1507,6 +1623,14 @@ public static class RunningWindows
 			{
 				Store.Trace("ACTIVATE raise below hwnd=" + below.ToInt64());
 				return ActivateHandle(below);
+			}
+			// 前台记录可能指向一个已经最小化的窗口（刚被我们最小化，前台事件还没切走；
+			// 或用户用任务栏最小化后前台仍停在该窗口上）。这时再点应该是"恢复"，
+			// 原来会走 minimize 分支对已最小化的窗口再最小化一次，看起来就是点了没反应。
+			if (IsWindow(foregroundWindow) && IsIconic(foregroundWindow))
+			{
+				Store.Trace("ACTIVATE restore iconic hwnd=" + foregroundWindow.ToInt64());
+				return ActivateHandle(foregroundWindow);
 			}
 			Store.Trace("ACTIVATE minimize branch");
 			Minimize(foregroundWindow);
@@ -1746,6 +1870,26 @@ public static class RunningWindows
 			where pids.Contains((int)w.ProcessId)
 			orderby w.Handle.ToInt64()
 			select w).ToList();
+	}
+
+	// 刚启动、窗口索引还没刷到（多进程 / 启动器 / Electron 应用启动慢）时，用启动记录
+	// 把已经出现的窗口直接提到前台。与 Activate 的区别：只"提窗口"，不执行"再点最小化"，
+	// 避免用户连点找窗口时反而把刚出现的窗口最小化。
+	public static bool RaiseRecent(string path)
+	{
+		if (string.IsNullOrEmpty(path))
+		{
+			return false;
+		}
+		Scan(force: true);
+		List<RunningWindow> list = LaunchedWindows(path).Where((RunningWindow w) => IsWindowVisible(w.Handle)).ToList();
+		if (list.Count == 0)
+		{
+			return false;
+		}
+		RunningWindow target = list.OrderByDescending((RunningWindow w) => w.Area).ThenBy((RunningWindow w) => w.Handle.ToInt64()).First();
+		Store.Trace("ACTIVATE raise recent hwnd=" + target.Handle.ToInt64() + " area=" + target.Area);
+		return ActivateHandle(target.Handle);
 	}
 
 	// 最近一次从该入口启动是否发生在冷却期内（避免 launcher 应用被反复拉起）。
