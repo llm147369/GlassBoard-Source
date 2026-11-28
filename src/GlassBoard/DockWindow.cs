@@ -2259,8 +2259,9 @@ public class DockWindow : GlassWindow
 				RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
 				return image;
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("DockWindow.SystemGlyph: " + ex);
 			}
 		}
 		if (C.Prefs.SystemIconGlyphs != null && C.Prefs.SystemIconGlyphs.TryGetValue(kind, out string replaced) && SystemIconActions.IsValid(replaced))
@@ -3231,8 +3232,9 @@ public class DockWindow : GlassWindow
 			{
 				Process.Start(target.Path);
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("DockWindow.OpenTask.Start: " + ex);
 			}
 			ShowTaskHint("正在启动 " + group.Name);
 			return;
@@ -3691,8 +3693,9 @@ public class DockWindow : GlassWindow
 				{
 					rowIcon.Source = RunningWindows.Icon(selected.Windows[0]);
 				}
-				catch
+				catch (Exception ex)
 				{
+					Store.LogError("DockWindow.IconLoad: " + ex);
 				}
 			}));
 			row.MouseEnter += (object ss, System.Windows.Input.MouseEventArgs ee) =>
@@ -4598,8 +4601,9 @@ public class DockWindow : GlassWindow
 					previewWinHosts.Add(host);
 				}
 			}
-			catch (Exception)
+			catch (Exception ex)
 			{
+				Store.LogError("DockWindow.SetupPreviewThumbs.Host: " + ex);
 			}
 			if (previewWin != null)
 			{
@@ -4729,8 +4733,9 @@ public class DockWindow : GlassWindow
 							DwmUnregisterThumbnail(thumb);
 						}
 					}
-					catch
+					catch (Exception ex)
 					{
+						Store.LogError("DockWindow.CloseEntryPreview.DwmUnregister: " + ex);
 					}
 				});
 			}
@@ -4744,8 +4749,9 @@ public class DockWindow : GlassWindow
 				{
 					host.Dispose();
 				}
-				catch
+				catch (Exception ex)
 				{
+					Store.LogError("DockWindow.CloseEntryPreview.HostDispose: " + ex);
 				}
 			}
 			if (previewWin != null)
@@ -4754,8 +4760,9 @@ public class DockWindow : GlassWindow
 				{
 					previewWin.Close();
 				}
-				catch (Exception)
+				catch (Exception ex)
 				{
+					Store.LogError("DockWindow.CloseEntryPreview.Close: " + ex);
 				}
 				previewWin = null;
 				previewRows = null;
@@ -5197,8 +5204,9 @@ public class DockWindow : GlassWindow
 				DeleteObject(bmp);
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("DockWindow.CaptureThumb: " + ex);
 			return null;
 		}
 	}
@@ -5331,8 +5339,9 @@ public class DockWindow : GlassWindow
 							DwmUnregisterThumbnail(thumb);
 						}
 					}
-					catch
+					catch (Exception ex)
 					{
+						Store.LogError("DockWindow.ClosePreview.DwmUnregister: " + ex);
 					}
 				});
 			}
