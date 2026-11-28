@@ -1068,8 +1068,9 @@ public class Controller
 							return;
 						}
 					}
-					catch (Exception)
+					catch (Exception ex)
 					{
+						Store.LogError("Controller.Launch.WaitWindow: " + ex);
 					}
 				});
 			}
@@ -1099,8 +1100,9 @@ public class Controller
 				Board.SetStatus("已移除入口「" + entry.Name + "」");
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("Controller.AskRemoveEntry: " + ex);
 		}
 	}
 
@@ -1583,8 +1585,9 @@ public class Controller
 				files = Directory.GetFiles(path);
 				dirs = Directory.GetDirectories(path);
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("Controller.Shortcuts.GetFiles: " + ex);
 				continue;
 			}
 			string[] array = files;
@@ -1613,8 +1616,9 @@ public class Controller
 						pending.Push(text2);
 					}
 				}
-				catch
+				catch (Exception ex)
 				{
+					Store.LogError("Controller.Shortcuts.GetAttributes: " + ex);
 				}
 			}
 		}
@@ -1757,8 +1761,9 @@ public class Controller
 								collected.Add(child);
 							}
 						}
-						catch
+						catch (Exception ex)
 						{
+							Store.LogError("Controller.SyncDesktop.Enumerate: " + ex);
 						}
 					}
 				}
@@ -3823,8 +3828,9 @@ public class Controller
 					{
 						startupCheck.IsChecked = StartupService.Enabled;
 					}
-					catch
+					catch (Exception ex3)
 					{
+						Store.LogError("Controller.Settings.ReadStartupState: " + ex3);
 						startupCheck.IsChecked = false;
 					}
 					startupSync = false;
@@ -4165,8 +4171,9 @@ public class Controller
 		{
 			ControlCenter?.Close();
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("Controller.Quit.CloseControlCenter: " + ex);
 		}
 		try
 		{
@@ -4892,8 +4899,9 @@ public class Controller
 			{
 				LaunchInfoService.Enrich(item);
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("Controller.MigrateRemovalIdentities.Enrich: " + ex);
 			}
 		}
 		foreach (string path in Prefs.Removed.ToList())
@@ -4910,8 +4918,9 @@ public class Controller
 					RemovalRules.Remember(Prefs, removed);
 				}
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("Controller.MigrateRemovalIdentities.Read: " + ex);
 			}
 		}
 		RemovalRules.ReconcileActive(Prefs);
@@ -5544,8 +5553,9 @@ public class Controller
 				return bitmapImage;
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("Controller.CreatorImage: " + ex);
 			return null;
 		}
 	}
@@ -6061,8 +6071,9 @@ public class Controller
 					});
 				}
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("Controller.LaunchWorkspace.Start: " + ex);
 				failures.Add(Path.GetFileName(path));
 			}
 			await Task.Delay(150);
@@ -6115,8 +6126,9 @@ public class Controller
 						AppearanceScheme key = SchemeStore.Load(text);
 						files[key] = text;
 					}
-					catch
+					catch (Exception ex)
 					{
+						Store.LogError("Controller.ManageSchemes.Reload: " + ex);
 					}
 				}
 				list.ItemsSource = null;
