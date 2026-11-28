@@ -1286,8 +1286,9 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 					O.FocusEndAlert = alertSel[0];
 					IslandSettings.Set(O);
 				}
-				catch
+				catch (Exception ex)
 				{
+					Store.LogError("IslandWindow.OpenFocusPanel: " + ex);
 				}
 				if (focusPanel != null)
 				{
@@ -1346,8 +1347,9 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 			O.FocusMode = true;
 			IslandSettings.Set(O);
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.ToggleFocus: " + ex);
 		}
 		UpdateFocusTile();
 	}
@@ -1366,11 +1368,14 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 			O.FocusMode = false;
 			IslandSettings.Set(O);
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.StopFocus: " + ex);
 		}
 		UpdateFocusTile();
 	}
+
+	private static int focusSaveFailures;
 
 	private void FocusTick()
 	{
@@ -1401,8 +1406,17 @@ Expand(1); // 点击事件卡→跳到该应用的筛选通知�?
 					O.FocusMode = false;
 					IslandSettings.Set(O);
 				}
-				catch
+				catch (Exception ex)
 				{
+					// 1s tick 高频路径：只记首次 + 计数，防写盘风暴
+					if (focusSaveFailures++ == 0)
+					{
+						Store.LogError("IslandWindow.FocusTick: " + ex);
+					}
+					if (focusSaveFailures > 100000)
+					{
+						focusSaveFailures = 1;
+					}
 				}
 			}
 		}
@@ -1707,8 +1721,9 @@ default: // 0 霓虹辉光：强调色纵向渐变（由深到浅）+ 强辉�?
 				IslandAudio.Acquire();
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.StartEqualizer: " + ex);
 		}
 	}
 
@@ -1722,8 +1737,9 @@ default: // 0 霓虹辉光：强调色纵向渐变（由深到浅）+ 强辉�?
 				IslandAudio.Release();
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.StopEqualizer: " + ex);
 		}
 	}
 
@@ -2021,8 +2037,9 @@ private void UpdateSpectrumPath(double[] levels)
 				M?.Mode(!M.Local);
 				RefreshMusicPage();
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("IslandWindow.SourceSwitch: " + ex);
 			}
 		};
 		side.Children.Add(sourceSwitchBtn);
@@ -2834,8 +2851,9 @@ private Style BuildProgressSliderStyle()
 						homeBtStatus.Text = bt ? "已开启" : "已关闭";
 					}));
 				}
-				catch
+				catch (Exception ex)
 				{
+					Store.LogError("IslandWindow.RefreshHomePage.WifiBt: " + ex);
 				}
 			});
 			// 通知预览（最多 3 条）
@@ -2889,8 +2907,9 @@ private Style BuildProgressSliderStyle()
 				}
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.RefreshHomePage: " + ex);
 		}
 	}
 	// —— 展开态聚合首页（完）——
@@ -3276,6 +3295,7 @@ private Style BuildProgressSliderStyle()
 		}
 		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.ExportCurrentNote: " + ex);
 			if (editStatus != null)
 			{
 				editStatus.Text = "导出失败：" + ex.Message;
@@ -3527,8 +3547,9 @@ private Style BuildProgressSliderStyle()
 				Collapse();
 				Native.Lock();
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("IslandWindow.BuildControlPage.Lock: " + ex);
 			}
 		});
 		Border settingsTile = SmallTile("设置", b => new TextBlock { Text = "⚙", FontSize = 16, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center }, out pst3, out pnm3, (object s, MouseButtonEventArgs e) =>
@@ -3538,8 +3559,9 @@ private Style BuildProgressSliderStyle()
 				Collapse();
 				C.Settings();
 			}
-			catch
+			catch (Exception ex)
 			{
+				Store.LogError("IslandWindow.BuildControlPage.Settings: " + ex);
 			}
 		});
 		Grid.SetColumn(powerTile, 0);
@@ -4367,6 +4389,8 @@ expandEntrance = true;
 private string lastFgProc;
 	private int lastFgTicks;
 
+	private static int fgCleanupFailures;
+
 	private void CheckForegroundCleanup()
 	{
 		try
@@ -4384,8 +4408,17 @@ private string lastFgProc;
 			{
 				proc = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
 			}
-			catch
+			catch (Exception ex)
 			{
+				// 2s tick 高频路径：只记首次 + 计数，防写盘风暴
+				if (fgCleanupFailures++ == 0)
+				{
+					Store.LogError("IslandWindow.CheckForegroundCleanup.ProcessName: " + ex);
+				}
+				if (fgCleanupFailures > 100000)
+				{
+					fgCleanupFailures = 1;
+				}
 			}
 			if (proc.Length == 0)
 			{
@@ -4432,8 +4465,17 @@ private string lastFgProc;
 				}
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			// 2s tick 高频路径：只记首次 + 计数，防写盘风暴
+			if (fgCleanupFailures++ == 0)
+			{
+				Store.LogError("IslandWindow.CheckForegroundCleanup: " + ex);
+			}
+			if (fgCleanupFailures > 100000)
+			{
+				fgCleanupFailures = 1;
+			}
 		}
 	}
 
@@ -4524,8 +4566,9 @@ private string lastFgProc;
 			SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
 			ApplyTopmost();
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.SetNoActivate: " + ex);
 		}
 	}
 
@@ -4799,8 +4842,9 @@ foreach (Border b in tabBar.Children.OfType<Border>())
 				}
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.LoadMusicFavs: " + ex);
 		}
 	}
 
@@ -5669,8 +5713,9 @@ card.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
 				}
 			}
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.LoadClipPins: " + ex);
 		}
 	}
 
@@ -5701,8 +5746,9 @@ card.MouseLeftButtonUp += (object s, MouseButtonEventArgs e) =>
 			string file = System.IO.Path.Combine(Store.Folder, "island-clip-pins.json");
 			System.IO.File.WriteAllText(file, string.Join(",", pinnedClips.ToArray()), new System.Text.UTF8Encoding(false));
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.SaveClipPins: " + ex);
 		}
 	}
 
@@ -6843,8 +6889,9 @@ if (!Root.Children.OfType<Border>().Any((Border b) => b.Tag as string == "backdr
 							}
 						}
 					}
-					catch
+					catch (Exception ex)
 					{
+						Store.LogError("IslandWindow.PrepareStartup.BackdropRetry: " + ex);
 					}
 				};
 				backdropRetryTimer.Start();
@@ -6920,8 +6967,9 @@ private bool CaptureExpandedBackdrop(Rect wa, double top)
 			};
 			return CaptureBackdropAllowDark(er);
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.CaptureExpandedBackdrop: " + ex);
 			return false;
 		}
 	}
@@ -7216,8 +7264,9 @@ if ((game || !O.ShowOnFullscreen) && mode != Mode.Hidden && (game || mode != Mod
 			IntPtr hwnd = new WindowInteropHelper(this).Handle;
 			actual = (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.ApplyTopmost: " + ex);
 		}
 		if (Topmost != on || actual != on)
 		{
@@ -7852,8 +7901,9 @@ public void RefreshWeather()
 		{
 			bridge?.Dispose();
 		}
-		catch
+		catch (Exception ex)
 		{
+			Store.LogError("IslandWindow.DisposeBridge: " + ex);
 		}
 		bridge = null;
 	}
